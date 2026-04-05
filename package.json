@@ -1,0 +1,33 @@
+{
+  "name": "slicex",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "eslint . --ext .ts,.tsx --fix",
+    "typecheck": "tsc -b",
+    "test": "pnpm -w test:unit",
+    "test:unit": "vitest",
+    "test:e2e": "playwright test",
+    "check": "pnpm -w -C . typecheck && pnpm -w -C . lint && pnpm -w -C . test:unit",
+    "check:arch": "node scripts/check-imports.mjs",
+    "check:env": "node scripts/sync-env.mjs",
+    "check:fast": "pnpm -w -s run check:arch && pnpm -w -s run check:env",
+    "pre:commit": "pnpm -w -s run check:fast",
+    "db:generate": "pnpm -w --filter @slicex/db prisma generate",
+    "db:migrate": "pnpm -w --filter @slicex/db prisma migrate dev"
+  },
+  "devDependencies": {
+    "turbo": "^1.10.5",
+    "typescript": "^5.2.0",
+    "vitest": "^1.0.0",
+    "eslint": "^8.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0"
+  }
+}
