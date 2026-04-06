@@ -14,6 +14,7 @@
     "test": "pnpm -w test:unit",
     "test:unit": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:static": "node scripts/e2e-static-server.js",
     "check": "pnpm -w -C . typecheck && pnpm -w -C . lint && pnpm -w -C . test:unit",
     "check:arch": "node scripts/check-imports.mjs",
     "check:env": "node scripts/sync-env.mjs",
@@ -23,11 +24,19 @@
     "db:migrate": "pnpm -w --filter @slicex/db prisma migrate dev"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^25.5.2",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
     "turbo": "^1.10.5",
     "typescript": "^5.2.0",
-    "vitest": "^1.0.0",
-    "eslint": "^8.0.0",
-    "@typescript-eslint/parser": "^6.0.0",
-    "@typescript-eslint/eslint-plugin": "^6.0.0"
+    "vitest": "^1.0.0"
+  },
+  "dependencies": {
+    "pixi.js": "^8.17.1",
+    "zod": "^3.25.76"
   }
 }

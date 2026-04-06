@@ -5,7 +5,8 @@
   "types": "src/index.ts",
   "license": "MIT",
   "scripts": {
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "migrate:dev": "prisma migrate dev --name init"
   },
   "dependencies": {
     "@prisma/client": "^7.6.0"

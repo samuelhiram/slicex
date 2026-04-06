@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id String @id @default(cuid())
+  email String? @unique
+  memberships TenantMembership[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Tenant {
+  id String @id @default(cuid())
+  type String
+  name String?
+  memberships TenantMembership[]
+  timelines Timeline[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TenantMembership {
+  id String @id @default(cuid())
+  userId String
+  tenantId String
+  role String
+  user User @relation(fields: [userId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+}
+
+model Timeline {
+  id String @id @default(cuid())
+  tenantId String
+  title String
+  headRevisionId String?
+  revisions TimelineRevision[]
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TimelineRevision {
+  id String @id @default(cuid())
+  timelineId String
+  documentJson Json
+  createdAt DateTime @default(now())
+  timeline Timeline @relation(fields: [timelineId], references: [id])
+}
+
+model AuditLog {
+  id String @id @default(cuid())
+  tenantId String
+  actorId String?
+  action String
+  payload Json?
+  createdAt DateTime @default(now())
+}

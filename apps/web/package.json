@@ -1,0 +1,25 @@
+{
+  "name": "apps-web",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "next": "^16.0.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "zustand": "^4.0.0",
+    "pino": "^8.0.0",
+    "@sentry/nextjs": "^7.0.0",
+    "@supabase/supabase-js": "^2.0.0",
+    "@slicex/core": "workspace:^",
+    "@slicex/contracts": "workspace:^",
+    "@slicex/db": "workspace:^",
+    "@slicex/canvas": "workspace:^"
+  }
+}
