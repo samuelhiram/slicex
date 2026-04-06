@@ -1,18 +1,20 @@
-import './globals.css';
+import "./globals.css";
 
 export const metadata = {
-  title: 'SliceX'
+  title: "SliceX",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="en">
       <head>
         <title>SliceX</title>
       </head>
-      <body>
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

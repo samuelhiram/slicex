@@ -1,4 +1,4 @@
-export type TenantType = 'PERSONAL' | 'ORGANIZATION';
+export type TenantType = "PERSONAL" | "ORGANIZATION";
 
 export interface Tenant {
   id: string;
@@ -10,7 +10,7 @@ export interface Tenant {
 export type ID = string;
 
 export interface RecurrenceRule {
-  frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+  frequency: "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
   interval?: number; // default 1
   count?: number;
   until?: string; // ISO date

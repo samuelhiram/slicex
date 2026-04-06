@@ -1,18 +1,18 @@
-import * as PIXI from 'pixi.js';
-import type { StoreAdapter } from './types';
+import * as PIXI from "pixi.js";
+import type { StoreAdapter } from "./types";
 
 export function createRenderer(container: any, store: StoreAdapter) {
   // Detect non-browser (test) environments and avoid creating a real PIXI.Application
   const canUseDom =
-    typeof window !== 'undefined' &&
-    typeof document !== 'undefined' &&
+    typeof window !== "undefined" &&
+    typeof document !== "undefined" &&
     container &&
-    typeof container.appendChild === 'function' &&
+    typeof container.appendChild === "function" &&
     (() => {
       try {
         // Ensure canvas API is available (JSDOM often lacks canvas)
-        const c = document.createElement('canvas');
-        return typeof (c as any).getContext === 'function';
+        const c = document.createElement("canvas");
+        return typeof (c as any).getContext === "function";
       } catch (e) {
         return false;
       }
@@ -28,7 +28,7 @@ export function createRenderer(container: any, store: StoreAdapter) {
       view: {} as any,
       stage: { removeChildren: () => {}, addChild: () => {} },
       renderer: { width: 0, height: 0 },
-      destroy: (opts?: any) => {}
+      destroy: (opts?: any) => {},
     };
   }
 
@@ -38,7 +38,7 @@ export function createRenderer(container: any, store: StoreAdapter) {
     currentDoc = doc;
     try {
       // minimal update trigger: clear and redraw simple layers when PIXI is available
-      if (app && app.stage && typeof app.stage.removeChildren === 'function') {
+      if (app && app.stage && typeof app.stage.removeChildren === "function") {
         app.stage.removeChildren();
         if (PIXI && PIXI.Graphics) {
           const g = new PIXI.Graphics();
@@ -66,6 +66,6 @@ export function createRenderer(container: any, store: StoreAdapter) {
       try {
         app.destroy(true);
       } catch (e) {}
-    }
+    },
   };
 }

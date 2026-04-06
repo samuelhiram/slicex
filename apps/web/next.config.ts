@@ -1,4 +1,4 @@
-import { NextConfig } from 'next';
+import { NextConfig } from "next";
 
 const config: NextConfig = {
   reactStrictMode: true,
@@ -7,8 +7,8 @@ const config: NextConfig = {
   experimental: {
     // Disable ESM externalization so the bundler treats dependencies like React
     // as CommonJS for compatibility with the dev server/runtime.
-    esmExternals: false
-  }
+    esmExternals: false,
+  },
 };
 
 export default config;

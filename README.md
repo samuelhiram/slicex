@@ -1,11 +1,11 @@
 # SliceX — Editor monorepo
 
-Resumen rápido
-----------------
+## Resumen rápido
+
 SliceX es un monorepo modular para construir un editor financiero con fronteras claras entre dominio, persistencia y render. Este repositorio contiene paquetes reutilizables (`@slicex/*`) y una aplicación Next.js en `apps/web`.
 
-Rápido inicio (desarrollo)
----------------------------
+## Rápido inicio (desarrollo)
+
 1. Instala dependencias:
 
 ```powershell
@@ -30,29 +30,30 @@ pnpm -w --filter @slicex/db prisma generate
 pnpm dev
 ```
 
-Comandos importantes
---------------------
+## Comandos importantes
+
 - `pnpm -w run typecheck` — TypeScript build.
 - `pnpm -w run test:unit` — Ejecuta tests unitarios (Vitest).
 - `pnpm -w run test:e2e` — Ejecuta E2E Playwright.
 - `pnpm -w run check:arch` — Revisa imports profundos y ownership.
 - `pnpm -w run check:env` — Crea/valida `.env.local`.
 
-Estructura relevante
---------------------
+## Estructura relevante
+
 - `packages/core` — Lógica de dominio y cálculos (sin IO).
 - `packages/canvas` — Motor Pixi y adaptadores gráficos.
 - `packages/contracts` — DTOs, validaciones y `ErrorEnvelope`.
 - `packages/db` — Prisma schema y acceso a base de datos.
 - `apps/web` — Next.js (App Router), route handlers y UI.
 
-Documentación y decisiones (ADRs)
---------------------------------
+## Documentación y decisiones (ADRs)
+
 Los ADRs se encuentran en `docs/adr/` y documentan decisiones de arquitectura clave (monorepo, ownership, Prisma, renderer).
 
-Contribuir
-----------
+## Contribuir
+
 Lee `CONTRIBUTING.md` para el flujo de trabajo de ramas, PRs y comprobaciones locales antes de solicitar revisión.
+
 # SliceX — Monorepo bootstrap
 
 Instalación rápida:
@@ -62,6 +63,7 @@ Instalación rápida:
 3. Levantar en dev: `pnpm dev`
 
 Principales scripts:
+
 - `pnpm dev` — dev (turbo)
 - `pnpm build` — build
 - `pnpm test` — tests unitarios

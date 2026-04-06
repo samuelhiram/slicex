@@ -13,7 +13,9 @@ node scripts/check-imports.mjs
 ```powershell
 node scripts/sync-env.mjs
 ```
+
 Helpers para tareas comunes.
 
 Usage:
+
 - `pnpm db:generate` — genera prisma client (desde root script delega a package)

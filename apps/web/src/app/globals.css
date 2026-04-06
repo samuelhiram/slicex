@@ -1,2 +1,9 @@
-html,body,#__next { height: 100%; }
-body { margin: 0; font-family: Inter, system-ui, sans-serif; }
+html,
+body,
+#__next {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: Inter, system-ui, sans-serif;
+}

@@ -8,5 +8,5 @@ source of truth for domain models and financial calculations.
 Usage:
 
 ```ts
-import { calculateBalanceAt } from '@slicex/core';
+import { calculateBalanceAt } from "@slicex/core";
 ```

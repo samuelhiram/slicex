@@ -8,5 +8,5 @@ It should not perform network IO; IO belongs to `apps/web` or adapters.
 Usage:
 
 ```tsx
-import { CanvasRenderer } from '@slicex/canvas';
+import { CanvasRenderer } from "@slicex/canvas";
 ```

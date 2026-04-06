@@ -1,5 +1,5 @@
-import type { StoreAdapter } from '@slicex/canvas';
-import { useEditorStore } from '../store/editorStore';
+import type { StoreAdapter } from "@slicex/canvas";
+import { useEditorStore } from "../store/editorStore";
 
 export const storeAdapter: StoreAdapter = {
   subscribe(cb) {
@@ -8,5 +8,5 @@ export const storeAdapter: StoreAdapter = {
   },
   getDocument() {
     return useEditorStore.getState().document as any;
-  }
+  },
 };

@@ -1,7 +1,7 @@
-import { TimelineDocument, FinancialObject } from './types';
+import { TimelineDocument, FinancialObject } from "./types";
 
 function toDateOnly(d: string | Date) {
-  const dt = typeof d === 'string' ? new Date(d) : new Date(d);
+  const dt = typeof d === "string" ? new Date(d) : new Date(d);
   // normalize to start of day to avoid timezone drifts
   return new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
 }
@@ -36,7 +36,9 @@ function occurrencesUpTo(item: FinancialObject, atDateStr: string): number {
     const newYear = y + Math.floor(m / 12);
     const newMonth = ((m % 12) + 12) % 12;
     const day = d.getUTCDate();
-    const daysInTarget = new Date(Date.UTC(newYear, newMonth + 1, 0)).getUTCDate();
+    const daysInTarget = new Date(
+      Date.UTC(newYear, newMonth + 1, 0),
+    ).getUTCDate();
     const newDay = Math.min(day, daysInTarget);
     return new Date(Date.UTC(newYear, newMonth, newDay));
   }
@@ -47,16 +49,16 @@ function occurrencesUpTo(item: FinancialObject, atDateStr: string): number {
   while (cur <= last && count < maxCount) {
     count += 1;
     switch (rule.frequency) {
-      case 'DAILY':
+      case "DAILY":
         cur = addDays(cur, interval);
         break;
-      case 'WEEKLY':
+      case "WEEKLY":
         cur = addDays(cur, 7 * interval);
         break;
-      case 'MONTHLY':
+      case "MONTHLY":
         cur = addMonths(cur, interval);
         break;
-      case 'YEARLY':
+      case "YEARLY":
         cur = addYears(cur, interval);
         break;
       default:
@@ -68,7 +70,10 @@ function occurrencesUpTo(item: FinancialObject, atDateStr: string): number {
   return count;
 }
 
-export function calculateBalanceAt(doc: TimelineDocument, atDateStr: string): number {
+export function calculateBalanceAt(
+  doc: TimelineDocument,
+  atDateStr: string,
+): number {
   const total = doc.items.reduce((acc, item) => {
     const occ = occurrencesUpTo(item, atDateStr);
     return acc + item.amount * occ;

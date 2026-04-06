@@ -1,1 +1,1 @@
-export * from './src/instrumentation-client';
+export * from "./src/instrumentation-client";

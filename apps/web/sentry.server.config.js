@@ -1,7 +1,7 @@
 // Minimal Sentry server config
-import * as Sentry from '@sentry/nextjs';
+import * as Sentry from "@sentry/nextjs";
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN || undefined,
-  tracesSampleRate: 0.1
+  tracesSampleRate: 0.1,
 });

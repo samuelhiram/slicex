@@ -1,9 +1,9 @@
-import pino from 'pino';
-import * as Sentry from '@sentry/nextjs';
+import pino from "pino";
+import * as Sentry from "@sentry/nextjs";
 
 export const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  base: { service: 'slicex-web' }
+  level: process.env.LOG_LEVEL || "info",
+  base: { service: "slicex-web" },
 });
 
 export function initServerSentry() {
@@ -12,9 +12,14 @@ export function initServerSentry() {
   try {
     Sentry.init({
       dsn,
-      environment: process.env.NODE_ENV || 'development',
-      tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE || process.env.NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE || 0) || 0.0,
-      release: process.env.SENTRY_RELEASE
+      environment: process.env.NODE_ENV || "development",
+      tracesSampleRate:
+        Number(
+          process.env.SENTRY_TRACES_SAMPLE_RATE ||
+            process.env.NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE ||
+            0,
+        ) || 0.0,
+      release: process.env.SENTRY_RELEASE,
     });
   } catch (e) {
     // ignore Sentry init errors in local dev
@@ -24,7 +29,7 @@ export function initServerSentry() {
 export function withRequestId(requestId?: string) {
   if (requestId && process.env.SENTRY_DSN) {
     try {
-      Sentry.configureScope((scope) => scope.setTag('requestId', requestId));
+      Sentry.configureScope((scope) => scope.setTag("requestId", requestId));
     } catch (e) {
       // noop
     }
@@ -38,5 +43,5 @@ export function captureException(err: any, ctx?: any) {
   } catch (e) {
     // noop
   }
-  logger.error({ err, ...ctx }, 'captured exception');
+  logger.error({ err, ...ctx }, "captured exception");
 }

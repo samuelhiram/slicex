@@ -1,5 +1,5 @@
-import create from 'zustand';
-import type { TimelineDocument } from '@slicex/core';
+import create from "zustand";
+import type { TimelineDocument } from "@slicex/core";
 
 export type EditorState = {
   document: TimelineDocument | null;
@@ -19,6 +19,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   playheadAt: null,
   dirty: false,
   history: [],
-  setDocument(doc) { set({ document: doc }); },
-  markDirty(v) { set({ dirty: v }); }
+  setDocument(doc) {
+    set({ document: doc });
+  },
+  markDirty(v) {
+    set({ dirty: v });
+  },
 }));

@@ -1,9 +1,9 @@
 export default {
   root: true,
-  parser: '@typescript-eslint/parser',
-  plugins: ['@typescript-eslint'],
-  extends: ['plugin:@typescript-eslint/recommended'],
+  parser: "@typescript-eslint/parser",
+  plugins: ["@typescript-eslint"],
+  extends: ["plugin:@typescript-eslint/recommended"],
   rules: {
-    'no-unused-vars': 'off'
-  }
+    "no-unused-vars": "off",
+  },
 };

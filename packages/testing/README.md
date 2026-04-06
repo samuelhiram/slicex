@@ -7,5 +7,5 @@ Expose lightweight factories and common mocks used by package tests.
 Usage:
 
 ```ts
-import { makeTimelineFixture } from '@slicex/testing';
+import { makeTimelineFixture } from "@slicex/testing";
 ```

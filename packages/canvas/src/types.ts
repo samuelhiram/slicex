@@ -1,4 +1,4 @@
-import type { TimelineDocument } from '@slicex/core';
+import type { TimelineDocument } from "@slicex/core";
 
 export type StoreSubscriber = (doc: TimelineDocument | null) => void;
 
