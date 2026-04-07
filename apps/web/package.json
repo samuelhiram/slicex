@@ -15,7 +15,7 @@
     "react-dom": "^18.0.0",
     "zustand": "^4.0.0",
     "pino": "^8.0.0",
-    "@sentry/nextjs": "^7.0.0",
+    "@sentry/nextjs": "^10.47.0",
     "@supabase/supabase-js": "^2.0.0",
     "@slicex/core": "workspace:^",
     "@slicex/contracts": "workspace:^",

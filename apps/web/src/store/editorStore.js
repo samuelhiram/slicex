@@ -1,4 +1,4 @@
-import create from 'zustand';
+import create from "zustand";
 export const useEditorStore = create((set, get) => ({
     document: null,
     selection: [],
@@ -6,6 +6,10 @@ export const useEditorStore = create((set, get) => ({
     playheadAt: null,
     dirty: false,
     history: [],
-    setDocument(doc) { set({ document: doc }); },
-    markDirty(v) { set({ dirty: v }); }
+    setDocument(doc) {
+        set({ document: doc });
+    },
+    markDirty(v) {
+        set({ dirty: v });
+    },
 }));

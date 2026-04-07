@@ -29,7 +29,7 @@ export function initServerSentry() {
 export function withRequestId(requestId?: string) {
   if (requestId && process.env.SENTRY_DSN) {
     try {
-      Sentry.configureScope((scope) => scope.setTag("requestId", requestId));
+      Sentry.setTag("requestId", requestId);
     } catch (e) {
       // noop
     }

@@ -1,10 +1,18 @@
 #!/usr/bin/env node
-import fs from 'fs/promises';
-import path from 'path';
+import fs from "fs/promises";
+import path from "path";
 
 const root = process.cwd();
-const startDirs = ['apps', 'packages', 'src'];
-const IGNORES = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage']);
+const startDirs = ["apps", "packages", "src"];
+const IGNORES = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  "out",
+  ".next",
+  "coverage",
+]);
 const FILE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/i;
 const DEEP_IMPORT_RE = /^@slicex\/[^\/]+\/.+/;
 
@@ -56,7 +64,7 @@ async function main() {
 
   for (const file of files) {
     try {
-      const content = await fs.readFile(file, 'utf8');
+      const content = await fs.readFile(file, "utf8");
       const imports = findImports(content);
       for (const imp of imports) {
         const spec = imp.spec;
@@ -71,11 +79,13 @@ async function main() {
   }
 
   if (violations.length === 0) {
-    console.log('✅ check-imports: 0 violaciones arquitectónicas');
+    console.log("✅ check-imports: 0 violaciones arquitectónicas");
     process.exit(0);
   }
 
-  console.error(`❌ check-imports: ${violations.length} violaciones arquitectónicas`);
+  console.error(
+    `❌ check-imports: ${violations.length} violaciones arquitectónicas`,
+  );
   for (const v of violations) {
     console.error(`${path.relative(root, v.file)}:${v.line} → ${v.spec}`);
   }
@@ -83,6 +93,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('check-imports error:', err);
+  console.error("check-imports error:", err);
   process.exit(3);
 });

@@ -1,4 +1,4 @@
-import { getTimelineById as dbGetTimelineById, createTimelineRevision } from '@slicex/db';
+import { getTimelineById as dbGetTimelineById, createTimelineRevision, } from "@slicex/db";
 export async function getTimelineById(timelineId) {
     return dbGetTimelineById(timelineId);
 }
