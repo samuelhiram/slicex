@@ -1,4 +1,4 @@
-import create from "zustand";
+import { create } from "zustand";
 import type { TimelineDocument } from "@slicex/core";
 
 export type EditorState = {

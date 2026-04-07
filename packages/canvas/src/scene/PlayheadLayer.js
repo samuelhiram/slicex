@@ -35,7 +35,11 @@ export class PlayheadLayer extends Container {
     renderPlayhead() {
         const state = this.state;
         this.graphics.clear();
-        if (!state || !(state.zoom > 0) || state.width <= 0 || state.height <= 0 || state.playheadAt == null) {
+        if (!state ||
+            !(state.zoom > 0) ||
+            state.width <= 0 ||
+            state.height <= 0 ||
+            state.playheadAt == null) {
             return;
         }
         const playheadDate = new Date(state.playheadAt);

@@ -1,4 +1,4 @@
-import { Container, Graphics, Text } from "pixi.js";
+import { Container, Graphics } from "pixi.js";
 import { DAY_WIDTH_PX, dateToPixel, pixelToDate } from "../coordinate-system";
 import { RULER_HEIGHT_PX, type SceneViewportState } from "./types";
 
@@ -7,21 +7,6 @@ type RulerGranularity = "day" | "week" | "month";
 const BACKGROUND_COLOR = 0xf8fafc;
 const BORDER_COLOR = 0xcbd5e1;
 const TICK_COLOR = 0x94a3b8;
-const LABEL_COLOR = 0x334155;
-const LABEL_FONT_SIZE = 11;
-
-const dayFormatter = new Intl.DateTimeFormat("en-US", {
-  day: "numeric",
-  month: "short",
-  timeZone: "UTC",
-});
-
-const monthFormatter = new Intl.DateTimeFormat("en-US", {
-  month: "short",
-  year: "numeric",
-  timeZone: "UTC",
-});
-
 function toUtcMidnight(date: Date): Date {
   return new Date(
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
@@ -75,22 +60,6 @@ function advance(date: Date, granularity: RulerGranularity): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
 }
 
-function formatTickLabel(date: Date, granularity: RulerGranularity): string {
-  if (granularity === "month") {
-    return monthFormatter.format(date);
-  }
-
-  return dayFormatter.format(date);
-}
-
-function createTickLabel(text: string): Text {
-  return new Text(text, {
-    fill: LABEL_COLOR,
-    fontFamily: "Arial",
-    fontSize: LABEL_FONT_SIZE,
-  });
-}
-
 function sameViewportState(
   left: SceneViewportState,
   right: SceneViewportState,
@@ -109,15 +78,13 @@ export class RulerLayer extends Container {
 
   private readonly ticks = new Graphics();
 
-  private readonly labels = new Container();
-
   private state: SceneViewportState | null = null;
 
   constructor() {
     super();
 
     this.eventMode = "none";
-    this.addChild(this.background, this.ticks, this.labels);
+    this.addChild(this.background, this.ticks);
   }
 
   setViewportState(state: SceneViewportState): void {
@@ -139,7 +106,6 @@ export class RulerLayer extends Container {
 
     this.background.clear();
     this.ticks.clear();
-    this.labels.removeChildren();
 
     if (!state || !(state.zoom > 0) || state.width <= 0 || state.height <= 0) {
       return;
@@ -180,10 +146,6 @@ export class RulerLayer extends Container {
           .moveTo(tickX, RULER_HEIGHT_PX - 1)
           .lineTo(tickX, RULER_HEIGHT_PX - tickHeight)
           .stroke({ color: TICK_COLOR, width: 1 });
-
-        const label = createTickLabel(formatTickLabel(tickDate, granularity));
-        label.position.set(Math.round(x) + 4, 3);
-        this.labels.addChild(label);
       }
 
       tickDate = advance(tickDate, granularity);

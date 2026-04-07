@@ -1,4 +1,19 @@
 import { useEditorStore } from "../store/editorStore";
+let lastEditorState = null;
+let lastSnapshot = null;
+function snapshotFromState(state) {
+    if (state === lastEditorState && lastSnapshot) {
+        return lastSnapshot;
+    }
+    lastEditorState = state;
+    lastSnapshot = {
+        document: state.document,
+        viewport: state.viewport,
+        playheadAt: state.playheadAt,
+        selection: [...state.selection],
+    };
+    return lastSnapshot;
+}
 export const storeAdapter = {
     subscribe(cb) {
         const unsub = useEditorStore.subscribe((state) => cb(state.document));
@@ -8,22 +23,11 @@ export const storeAdapter = {
         return useEditorStore.getState().document;
     },
     getState() {
-        const state = useEditorStore.getState();
-        return {
-            document: state.document,
-            viewport: state.viewport,
-            playheadAt: state.playheadAt,
-            selection: [...state.selection],
-        };
+        return snapshotFromState(useEditorStore.getState());
     },
     subscribeState(cb) {
         const unsub = useEditorStore.subscribe((state) => {
-            cb({
-                document: state.document,
-                viewport: state.viewport,
-                playheadAt: state.playheadAt,
-                selection: [...state.selection],
-            });
+            cb(snapshotFromState(state));
         });
         return { unsubscribe: unsub };
     },

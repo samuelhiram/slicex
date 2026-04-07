@@ -1,8 +1,27 @@
 "use client";
 import { jsx as _jsx } from "react/jsx-runtime";
-import dynamic from "next/dynamic";
+import React from "react";
 import { storeAdapter } from "../lib/storeAdapter";
-const CanvasRenderer = dynamic(() => import("@slicex/canvas").then((m) => m.CanvasRenderer), { ssr: false });
 export function CanvasShell() {
-    return (_jsx("div", { style: { width: "100%", height: "100%" }, children: _jsx(CanvasRenderer, { store: storeAdapter }) }));
+    const containerRef = React.useRef(null);
+    React.useEffect(() => {
+        let destroyed = false;
+        let renderer = null;
+        async function mountRenderer() {
+            if (!containerRef.current) {
+                return;
+            }
+            const { createRenderer } = await import("@slicex/canvas");
+            if (destroyed || !containerRef.current) {
+                return;
+            }
+            renderer = createRenderer(containerRef.current, storeAdapter);
+        }
+        void mountRenderer();
+        return () => {
+            destroyed = true;
+            renderer?.destroy();
+        };
+    }, []);
+    return (_jsx("div", { ref: containerRef, style: { width: "100%", height: "100%", minHeight: 0 } }));
 }

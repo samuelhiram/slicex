@@ -74,5 +74,7 @@ it("projects a timeline document into scene state", () => {
     expect(projection.viewport.scrollX).toBe(160);
     expect(projection.viewport.zoom).toBe(1.5);
     expect(projection.viewport.height).toBe(688);
-    expect(projection.playhead.playheadAt?.toISOString()).toBe("2026-01-04T00:00:00.000Z");
+    expect((projection.playhead.playheadAt instanceof Date
+        ? projection.playhead.playheadAt
+        : new Date(projection.playhead.playheadAt ?? "")).toISOString()).toBe("2026-01-04T00:00:00.000Z");
 });

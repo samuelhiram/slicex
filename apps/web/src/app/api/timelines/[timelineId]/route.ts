@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { makeErrorEnvelope, TimelineDocumentSchema } from "@slicex/contracts";
 import { getTimelineById as dbGetTimelineById, prisma } from "@slicex/db";
+import type { Prisma } from "@slicex/db";
 import { z } from "zod";
 import { withRequestId } from "../../../../instrumentation";
 
@@ -137,7 +138,7 @@ export async function PUT(
       );
     }
 
-    const revision = await prisma.$transaction(async (tx) => {
+    const revision = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const createdRevision = await tx.timelineRevision.create({
         data: {
           timelineId: parsedParams.data.timelineId,

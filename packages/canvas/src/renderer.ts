@@ -21,6 +21,11 @@ export interface CanvasSceneProjection {
   playhead: ScenePlayheadState;
 }
 
+export interface RendererLifecycleCallbacks {
+  onReady?: () => void;
+  onError?: (error: unknown) => void;
+}
+
 interface CanvasScene {
   root: PIXI.Container;
   rulerLayer: RulerLayer;
@@ -200,50 +205,150 @@ export function projectCanvasScene(
   };
 }
 
-export function createRenderer(container: any, store: StoreAdapter) {
+export function createRenderer(
+  container: any,
+  store: StoreAdapter,
+  callbacks: RendererLifecycleCallbacks = {},
+) {
   const useDom = canUseCanvas(container);
 
-  let app: any;
-  if (useDom) {
-    app = new PIXI.Application({ resizeTo: container, backgroundAlpha: 0 });
-    container.appendChild(app.view as HTMLCanvasElement);
-  } else {
-    app = {
-      view: {} as any,
-      stage: { removeChildren: () => {}, addChild: () => {} },
-      renderer: { width: 0, height: 0 },
-      destroy: (_opts?: any) => {},
-    };
+  const stage = new PIXI.Container();
+  const canvasElement = useDom ? document.createElement("canvas") : null;
+  if (canvasElement) {
+    canvasElement.width = Math.max(Number(container?.clientWidth) || 0, 1);
+    canvasElement.height = Math.max(Number(container?.clientHeight) || 0, 1);
+    canvasElement.style.display = "block";
+    canvasElement.style.width = "100%";
+    canvasElement.style.height = "100%";
   }
 
-  const scene = useDom ? createScene(app) : null;
-  const initialSnapshot = resolveSnapshot(store);
+  const app: any = {
+    stage,
+    renderer: {
+      width: 0,
+      height: 0,
+      canvas: null as HTMLCanvasElement | null,
+      resize: (_width: number, _height: number) => {},
+      render: (_options?: { container: PIXI.Container }) => {},
+      destroy: (_options?: any) => {},
+    },
+    render() {
+      app.renderer.render({ container: stage });
+    },
+    destroy(rendererDestroyOptions = true) {
+      stage.removeChildren();
 
-  if (scene) {
-    applyProjection(
-      scene,
-      projectCanvasScene(initialSnapshot, resolveDimensions(app, container)),
-    );
-  }
+      try {
+        app.renderer.destroy(rendererDestroyOptions);
+      } catch {
+        // noop
+      }
+    },
+  };
 
-  const subscription = subscribeToSnapshot(store, (snapshot) => {
+  let scene: CanvasScene | null = null;
+  let subscription: { unsubscribe: () => void } | null = null;
+  let destroyed = false;
+  let initComplete = false;
+  const resizeObserver =
+    useDom && typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(() => {
+          if (destroyed || !scene) {
+            return;
+          }
+
+          refreshScene(resolveSnapshot(store));
+        })
+      : null;
+
+  function refreshScene(snapshot: CanvasStoreSnapshot): void {
     if (!scene) {
       return;
     }
 
-    applyProjection(
-      scene,
-      projectCanvasScene(snapshot, resolveDimensions(app, container)),
-    );
+    const dimensions = resolveDimensions(app, container);
+    const nextDimensions = {
+      width: Math.max(dimensions.width, 1),
+      height: Math.max(dimensions.height, 1),
+    };
+
+    try {
+      app.renderer.resize(nextDimensions.width, nextDimensions.height);
+    } catch {
+      // noop
+    }
+
+    applyProjection(scene, projectCanvasScene(snapshot, nextDimensions));
+    app.render();
+  }
+
+  subscription = subscribeToSnapshot(store, (snapshot) => {
+    if (!scene) {
+      return;
+    }
+
+    refreshScene(snapshot);
   });
+
+  if (useDom) {
+    const initPromise = PIXI.autoDetectRenderer({
+      canvas: canvasElement ?? undefined,
+      backgroundAlpha: 0,
+    })
+      .then((renderer: any) => {
+        initComplete = true;
+
+        if (destroyed) {
+          try {
+            renderer.destroy(true);
+          } catch {
+            // noop
+          }
+
+          return;
+        }
+
+        app.renderer = renderer;
+        container.appendChild(canvasElement as HTMLCanvasElement);
+        scene = createScene(app);
+
+        if (resizeObserver) {
+          resizeObserver.observe(container);
+        }
+
+        const initialSnapshot = resolveSnapshot(store);
+        refreshScene(initialSnapshot);
+        callbacks.onReady?.();
+      })
+      .catch((error) => {
+        callbacks.onError?.(error);
+        console.error("[SliceX] Failed to initialize canvas renderer", error);
+      });
+
+    void initPromise;
+  } else {
+    callbacks.onReady?.();
+  }
 
   return {
     app,
     destroy() {
+      destroyed = true;
+
       try {
-        subscription.unsubscribe();
+        subscription?.unsubscribe();
       } catch {
         // noop
+      }
+
+      try {
+        resizeObserver?.disconnect();
+      } catch {
+        // noop
+      }
+
+      if (!initComplete) {
+        return;
       }
 
       try {

@@ -126,3 +126,31 @@ Este archivo es el resumen operativo del repo; mantenerlo breve y actualizado. P
 - Audit de TODOs en `packages/canvas/src` y `apps/web/src`: sin matches.
 - Gate completado: `node scripts/check-imports.mjs`, `pnpm -w run typecheck` y `pnpm -w run test:unit --run` pasan.
 - Pendiente de confirmacion del usuario antes de iniciar BLOQUE 4.
+
+## Actualizacion 2026-04-07 - Bloque 4 Canvas
+
+- `packages/canvas/src/adapters/store-subscriber.ts` expone `createBalanceStoreSubscriber()` y `BalanceChangeCallback`, conecta `calculateBalanceAt()` con snapshots de Zustand y limpia la suscripcion en `destroy()`.
+- `packages/canvas/package.json` ahora declara `@slicex/core` como dependencia de workspace para resolver el import runtime desde canvas.
+- `packages/canvas/tests/balance-calculation.spec.ts` cubre los 3 escenarios pedidos: balance inicial antes de objetos, aumento tras ingreso y disminucion tras egreso.
+- `packages/canvas/src/index.ts` reexporta el subscriber y su tipo publico.
+- `apps/web/src/components/BalanceSummary.tsx` consume el subscriber desde React y `CanvasShell` lo muestra sobre el canvas.
+- `apps/web/tests/balance-summary.unit.spec.tsx` verifica que el balance cambia al mover el playhead y que el unsubscribe se ejecuta al desmontar.
+- `apps/web/src/store/editorStore.ts` sigue siendo compatible con `TimelineDocument` de `@slicex/core`; solo se actualizo el import de Zustand a la API con nombre.
+- `vitest.config.ts` y `vitest.setup.ts` incluyen el unit test de apps/web y preparan el entorno jsdom para el wiring de React.
+- Gates validados en esta fase: `node scripts/check-imports.mjs` ✅, `pnpm test:unit -- --run` ✅, `pnpm typecheck` ✅.
+- Pendiente: confirmacion explicita del usuario antes de avanzar a BLOQUE 5.
+
+## Actualizacion 2026-04-07 - Bloque 5 Canvas / UI
+
+- `packages/canvas/src/renderer.ts` y `packages/canvas/src/renderer.js` ahora usan `autoDetectRenderer()` con un stage wrapper propio y evitan el path de `Application.view`.
+- `packages/canvas/src/scene/RulerLayer.ts/js` y `TrackLayer.ts/js` ya no construyen `Text` de Pixi; la escena queda en modo grafico puro para evitar el crash de texto en navegador.
+- El parser pass sobre los mirrors JS sigue limpio y `pnpm test:unit -- --run` pasa completo con 17 archivos y 41 tests aprobados.
+- El siguiente paso es revalidar en navegador con el servidor limpio y, si se mantiene estable, retirar la instrumentacion temporal restante si apareciera algun ruido nuevo.
+
+## Actualizacion 2026-04-07 - Limpieza visual / React
+
+- `apps/web/src/app/layout.tsx` ya no define `<head>` manual; la metadata vive en `metadata` y el body usa `IBM Plex Sans` via `next/font/google`.
+- `apps/web/src/app/page.tsx`, `apps/web/src/components/BalanceSummary.tsx` y `apps/web/src/components/CanvasShell.tsx` pasaron de estilos inline sueltos a una composicion con rail lateral, metric chips y overlay de carga/error.
+- `apps/web/src/lib/storeAdapter.ts` ahora cachea snapshots por identidad de estado para evitar devolver objetos nuevos en cada lectura.
+- `apps/web/src/lib/useStoreSnapshot.ts` usa una suscripcion simple con `useEffect` + `useState`; `useSyncExternalStore` generaba un loop con snapshots no estables.
+- Para validar el bundle real, se limpio `apps/web/.next` y se re-lanzo `pnpm dev:web` antes de revisar los logs.

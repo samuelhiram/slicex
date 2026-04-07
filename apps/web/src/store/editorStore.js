@@ -1,4 +1,4 @@
-import create from "zustand";
+import { create } from "zustand";
 export const useEditorStore = create((set, get) => ({
     document: null,
     selection: [],
