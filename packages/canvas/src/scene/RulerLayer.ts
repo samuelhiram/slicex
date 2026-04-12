@@ -1,12 +1,21 @@
 import { Container, Graphics } from "pixi.js";
 import { DAY_WIDTH_PX, dateToPixel, pixelToDate } from "../coordinate-system";
-import { RULER_HEIGHT_PX, type SceneViewportState } from "./types";
+import {
+  RULER_HEIGHT_PX,
+  type SceneThemePalette,
+  type SceneViewportState,
+} from "./types";
 
 type RulerGranularity = "day" | "week" | "month";
 
-const BACKGROUND_COLOR = 0xf8fafc;
-const BORDER_COLOR = 0xcbd5e1;
-const TICK_COLOR = 0x94a3b8;
+const DEFAULT_THEME: SceneThemePalette = {
+  rulerBackground: 0xf8fafc,
+  rulerBorder: 0xcbd5e1,
+  gridLine: 0xdbe2ea,
+  trackRowEven: 0xf8fafc,
+  trackRowOdd: 0xffffff,
+  trackRowDivider: 0xe2e8f0,
+};
 function toUtcMidnight(date: Date): Date {
   return new Date(
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
@@ -74,9 +83,13 @@ function sameViewportState(
 }
 
 export class RulerLayer extends Container {
+  private readonly gridLines = new Graphics();
+
   private readonly background = new Graphics();
 
   private readonly ticks = new Graphics();
+
+  private theme: SceneThemePalette = DEFAULT_THEME;
 
   private state: SceneViewportState | null = null;
 
@@ -84,7 +97,12 @@ export class RulerLayer extends Container {
     super();
 
     this.eventMode = "none";
-    this.addChild(this.background, this.ticks);
+    this.addChild(this.gridLines, this.background, this.ticks);
+  }
+
+  setTheme(theme: SceneThemePalette): void {
+    this.theme = theme;
+    this.renderRuler();
   }
 
   setViewportState(state: SceneViewportState): void {
@@ -104,6 +122,7 @@ export class RulerLayer extends Container {
   private renderRuler(): void {
     const state = this.state;
 
+    this.gridLines.clear();
     this.background.clear();
     this.ticks.clear();
 
@@ -113,12 +132,12 @@ export class RulerLayer extends Container {
 
     this.background
       .rect(0, 0, state.width, RULER_HEIGHT_PX)
-      .fill({ color: BACKGROUND_COLOR });
+      .fill({ color: this.theme.rulerBackground });
 
     this.background
       .moveTo(0, RULER_HEIGHT_PX - 1)
       .lineTo(state.width, RULER_HEIGHT_PX - 1)
-      .stroke({ color: BORDER_COLOR, width: 1 });
+      .stroke({ color: this.theme.rulerBorder, width: 1 });
 
     const granularity = getGranularity(state.zoom);
     const visibleStartDate = pixelToDate(
@@ -142,10 +161,15 @@ export class RulerLayer extends Container {
       if (x >= -overscan) {
         const tickX = Math.round(x) + 0.5;
 
+        this.gridLines
+          .moveTo(tickX, RULER_HEIGHT_PX)
+          .lineTo(tickX, state.height)
+          .stroke({ alpha: 0.45, color: this.theme.gridLine, width: 1 });
+
         this.ticks
           .moveTo(tickX, RULER_HEIGHT_PX - 1)
           .lineTo(tickX, RULER_HEIGHT_PX - tickHeight)
-          .stroke({ color: TICK_COLOR, width: 1 });
+          .stroke({ color: this.theme.gridLine, width: 1 });
       }
 
       tickDate = advance(tickDate, granularity);

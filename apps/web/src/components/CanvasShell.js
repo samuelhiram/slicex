@@ -1,21 +1,45 @@
 "use client";
-import { jsx as _jsx } from "react/jsx-runtime";
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import React from "react";
 import { storeAdapter } from "../lib/storeAdapter";
 export function CanvasShell() {
     const containerRef = React.useRef(null);
+    const [status, setStatus] = React.useState("loading");
+    const [errorMessage, setErrorMessage] = React.useState(null);
     React.useEffect(() => {
         let destroyed = false;
         let renderer = null;
         async function mountRenderer() {
-            if (!containerRef.current) {
-                return;
+            try {
+                if (!containerRef.current) {
+                    return;
+                }
+                const { createRenderer } = await import("@slicex/canvas");
+                if (destroyed || !containerRef.current) {
+                    return;
+                }
+                renderer = createRenderer(containerRef.current, storeAdapter, {
+                    onReady: () => {
+                        if (!destroyed) {
+                            setStatus("ready");
+                        }
+                    },
+                    onError: (error) => {
+                        if (destroyed) {
+                            return;
+                        }
+                        setStatus("error");
+                        setErrorMessage(error instanceof Error ? error.message : "Canvas renderer failed to start.");
+                    },
+                });
             }
-            const { createRenderer } = await import("@slicex/canvas");
-            if (destroyed || !containerRef.current) {
-                return;
+            catch (error) {
+                if (destroyed) {
+                    return;
+                }
+                setStatus("error");
+                setErrorMessage(error instanceof Error ? error.message : "Canvas renderer failed to start.");
             }
-            renderer = createRenderer(containerRef.current, storeAdapter);
         }
         void mountRenderer();
         return () => {
@@ -23,5 +47,10 @@ export function CanvasShell() {
             renderer?.destroy();
         };
     }, []);
-    return (_jsx("div", { ref: containerRef, style: { width: "100%", height: "100%", minHeight: 0 } }));
+    const isReady = status === "ready";
+    return (_jsxs("div", { className: "canvas-shell", "data-state": status, children: [_jsx("div", { ref: containerRef, className: "canvas-shell__surface" }), !isReady ? (_jsxs("div", { "aria-live": status === "error" ? undefined : "polite", className: "canvas-shell__state", role: status === "error" ? "alert" : "status", children: [_jsx("div", { className: "canvas-shell__eyebrow", children: status === "error" ? "Renderer error" : "Loading canvas" }), _jsx("div", { className: "canvas-shell__title", children: status === "error"
+                            ? "SliceX could not start the canvas"
+                            : "Booting the Pixi scene" }), _jsx("p", { className: "canvas-shell__body", children: status === "error"
+                            ? errorMessage ?? "Try reloading the page."
+                            : "Initializing the viewport, layers, and store subscriptions." })] })) : null] }));
 }

@@ -2,6 +2,9 @@ import { Container, Graphics } from "pixi.js";
 import { dateToPixel } from "../coordinate-system";
 import { PLAYHEAD_WIDTH_PX } from "./types";
 const PLAYHEAD_COLOR = 0xef4444;
+const PLAYHEAD_CAP_HEIGHT_PX = 16;
+const PLAYHEAD_CAP_WIDTH_PX = 10;
+const PLAYHEAD_IDLE_OFFSET_PX = 24;
 function samePlayheadState(left, right) {
     const leftPlayhead = left.playheadAt == null ? null : new Date(left.playheadAt).getTime();
     const rightPlayhead = right.playheadAt == null ? null : new Date(right.playheadAt).getTime();
@@ -38,16 +41,19 @@ export class PlayheadLayer extends Container {
         if (!state ||
             !(state.zoom > 0) ||
             state.width <= 0 ||
-            state.height <= 0 ||
-            state.playheadAt == null) {
+            state.height <= 0) {
             return;
         }
-        const playheadDate = new Date(state.playheadAt);
-        const x = dateToPixel(playheadDate, state.originDate, state.zoom) - state.scrollX;
+        const x = state.playheadAt == null
+            ? PLAYHEAD_IDLE_OFFSET_PX
+            : dateToPixel(new Date(state.playheadAt), state.originDate, state.zoom) - state.scrollX;
         if (x < -PLAYHEAD_WIDTH_PX || x > state.width + PLAYHEAD_WIDTH_PX) {
             return;
         }
         const lineX = Math.round(x) + 0.5;
+        this.graphics
+            .rect(Math.round(lineX - PLAYHEAD_CAP_WIDTH_PX / 2), 0, PLAYHEAD_CAP_WIDTH_PX, PLAYHEAD_CAP_HEIGHT_PX)
+            .fill({ color: PLAYHEAD_COLOR });
         this.graphics
             .moveTo(lineX, 0)
             .lineTo(lineX, state.height)

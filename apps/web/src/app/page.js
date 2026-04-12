@@ -1,73 +1,55 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import React from "react";
-import dynamic from "next/dynamic";
-import { createBalanceStoreSubscriber } from "@slicex/canvas";
-import { calculateBalanceAt } from "@slicex/core";
+import { BalanceSummary } from "../components/BalanceSummary";
+import { CanvasShell } from "../components/CanvasShell";
+import { formatPlayheadLabel } from "../lib/editorFormatters";
 import { storeAdapter } from "../lib/storeAdapter";
-const snapshotStoreAdapter = storeAdapter;
-const DynamicCanvasShell = dynamic(() => import("../components/CanvasShell").then((module) => module.CanvasShell), { ssr: false });
-function formatPlayhead(playheadAt) {
-    if (playheadAt == null) {
-        return "No playhead";
+import { useStoreSnapshot } from "../lib/useStoreSnapshot";
+const trackPalette = [
+    "#0f766e",
+    "#2563eb",
+    "#7c3aed",
+    "#d97706",
+    "#0891b2",
+    "#4f46e5",
+];
+const amountFormatter = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 0,
+});
+const dateFormatter = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+});
+function formatAmount(amount) {
+    const formatted = amountFormatter.format(Math.abs(amount));
+    if (amount > 0) {
+        return `+${formatted}`;
     }
-    const date = playheadAt instanceof Date ? new Date(playheadAt) : new Date(playheadAt);
-    if (Number.isNaN(date.getTime())) {
-        return "No playhead";
+    if (amount < 0) {
+        return `-${formatted}`;
     }
-    return new Intl.DateTimeFormat("en-US", {
-        dateStyle: "medium",
-        timeStyle: "short",
-    }).format(date);
+    return formatted;
 }
-function resolveBalanceLabel() {
-    const snapshot = snapshotStoreAdapter.getState();
-    if (!snapshot.document || snapshot.playheadAt == null) {
-        return 0;
+function formatItemDate(value) {
+    if (value == null) {
+        return "No date";
     }
-    const playheadDate = snapshot.playheadAt instanceof Date
-        ? new Date(snapshot.playheadAt)
-        : new Date(snapshot.playheadAt);
-    if (Number.isNaN(playheadDate.getTime())) {
-        return 0;
+    const parsedDate = value instanceof Date ? new Date(value) : new Date(value);
+    if (Number.isNaN(parsedDate.getTime())) {
+        return "No date";
     }
-    return calculateBalanceAt(snapshot.document, playheadDate.toISOString());
-}
-function resolvePlayheadLabel() {
-    return formatPlayhead(snapshotStoreAdapter.getState().playheadAt);
+    return dateFormatter.format(parsedDate);
 }
 export default function Page() {
-    const [balance, setBalance] = React.useState(() => resolveBalanceLabel());
-    const [playheadLabel, setPlayheadLabel] = React.useState(() => resolvePlayheadLabel());
-    React.useEffect(() => {
-        const balanceSubscription = createBalanceStoreSubscriber(snapshotStoreAdapter, setBalance);
-        const playheadSubscription = snapshotStoreAdapter.subscribeState((snapshot) => {
-            setPlayheadLabel(formatPlayhead(snapshot.playheadAt));
-        });
-        return () => {
-            balanceSubscription.destroy();
-            playheadSubscription.unsubscribe();
-        };
-    }, []);
-    return (_jsxs("main", { style: {
-            height: "100vh",
-            display: "flex",
-            flexDirection: "column",
-            background: "#f8fafc",
-            color: "#0f172a",
-        }, children: [_jsxs("header", { style: {
-                    height: 48,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 16,
-                    padding: "0 16px",
-                    borderBottom: "1px solid #cbd5e1",
-                    background: "#ffffff",
-                    flex: "0 0 48px",
-                }, children: [_jsx("div", { children: "SliceX" }), _jsxs("div", { children: ["Balance: ", balance] }), _jsxs("div", { children: ["Playhead: ", playheadLabel] })] }), _jsx("section", { id: "editor-root", style: { flex: 1, minHeight: 0 }, children: _jsx("div", { style: {
-                        width: "100%",
-                        height: "100%",
-                        overflow: "hidden",
-                    }, children: _jsx(DynamicCanvasShell, {}) }) })] }));
+    const snapshot = useStoreSnapshot(storeAdapter);
+    const document = snapshot.document;
+    const items = document?.items ?? [];
+    const playheadLabel = formatPlayheadLabel(snapshot.playheadAt);
+    return (_jsxs("main", { className: "editor-page", children: [_jsxs("header", { className: "editor-topbar", children: [_jsxs("div", { className: "editor-brand", children: [_jsx("span", { className: "editor-brand__eyebrow", children: "Timeline workspace" }), _jsx("div", { className: "editor-brand__title", children: "SliceX" })] }), _jsxs("div", { className: "editor-metrics", children: [_jsx(BalanceSummary, { store: storeAdapter }), _jsxs("div", { className: "editor-metric", children: [_jsx("span", { className: "editor-metric__label", children: "Playhead: " }), _jsx("strong", { className: "editor-metric__value", children: playheadLabel })] })] })] }), _jsxs("section", { className: "editor-body", children: [_jsxs("aside", { className: "editor-sidebar", children: [_jsxs("div", { className: "editor-panel", children: [_jsx("div", { className: "editor-panel__label", children: "Active timeline" }), _jsx("h1", { className: "editor-panel__title", children: document?.title ?? "Untitled timeline" }), _jsx("p", { className: "editor-panel__body", children: items.length > 0
+                                            ? `${items.length} entries are projected into the canvas.`
+                                            : "No timeline items are loaded yet." })] }), _jsx("ul", { className: "editor-track-list", "aria-label": "Timeline items", children: items.length > 0 ? (items.map((item, index) => {
+                                    const trackColor = trackPalette[index % trackPalette.length];
+                                    const tone = item.amount < 0 ? "negative" : item.amount > 0 ? "positive" : "neutral";
+                                    return (_jsxs("li", { className: "editor-track", "data-tone": tone, children: [_jsx("span", { "aria-hidden": "true", className: "editor-track__swatch", style: { backgroundColor: trackColor } }), _jsxs("div", { className: "editor-track__meta", children: [_jsx("span", { className: "editor-track__name", children: item.name }), _jsx("span", { className: "editor-track__detail", children: formatItemDate(item.date) })] }), _jsx("strong", { className: "editor-track__amount", children: formatAmount(item.amount) })] }, item.id));
+                                })) : (_jsxs("li", { className: "editor-track editor-track--empty", children: [_jsx("strong", { children: "No timeline entries yet." }), "Add an item to see it projected onto the canvas."] })) })] }), _jsx("div", { className: "editor-canvas-shell", id: "editor-root", children: _jsx(CanvasShell, {}) })] })] }));
 }

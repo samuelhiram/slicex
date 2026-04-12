@@ -13,6 +13,8 @@ export default defineConfig({
     baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000",
     headless: true,
     trace: "on-first-retry",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
   },
   // Intentionally omit `webServer` so tests run against an already-running server
   projects: [

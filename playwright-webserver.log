@@ -2,23 +2,11 @@
 > apps-web@0.1.0 dev C:\Users\user\dev\slicex\apps\web
 > next dev
 
-[33m[1m⚠[22m[39m Port 3000 is in use by process 6584, using available port 3001 instead.
-[1m[38;2;173;127;168m▲ Next.js 16.2.2[39m[22m (Turbopack)
-- Local:         http://localhost:3001
-- Network:       http://192.168.1.100:3001
-[32m[1m✓[22m[39m Ready in 665ms
-[33m[1m⚠[22m[39m Invalid next.config.ts options detected: 
-[33m[1m⚠[22m[39m     Unrecognized key(s) in object: 'appDir' at "experimental"
-[33m[1m⚠[22m[39m See more info here: https://nextjs.org/docs/messages/invalid-next-config
-[31m[1m⨯[22m[39m Another [36mnext dev[39m server is already running.
+[1m[38;2;173;127;168m▲ Next.js 16.2.3[39m[22m (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.100:3000
+[32m[1m✓[22m[39m Ready in 618ms
 
-- Local:        [36mhttp://localhost:3000[39m
-- PID:          6584
-- Dir:          C:\Users\user\dev\slicex\apps\web
-- Log:          .next\dev\logs\next-development.log
-
-Run [36mtaskkill /PID 6584 /F[39m to stop it.
-[?25h
-C:\Users\user\dev\slicex\apps\web:
-[41m[30m ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL [39m[49m [31mapps-web@0.1.0 dev: `next dev`[39m
-[31mExit status 1[39m
+ GET / [32m200[39m in 374ms[2m (next.js: 188ms, application-code: 186ms)[22m
+ GET / [32m200[39m in 74ms[2m (next.js: 5ms, application-code: 69ms)[22m
+ GET / [32m200[39m in 46ms[2m (next.js: 5ms, application-code: 40ms)[22m

@@ -154,3 +154,19 @@ Este archivo es el resumen operativo del repo; mantenerlo breve y actualizado. P
 - `apps/web/src/lib/storeAdapter.ts` ahora cachea snapshots por identidad de estado para evitar devolver objetos nuevos en cada lectura.
 - `apps/web/src/lib/useStoreSnapshot.ts` usa una suscripcion simple con `useEffect` + `useState`; `useSyncExternalStore` generaba un loop con snapshots no estables.
 - Para validar el bundle real, se limpio `apps/web/.next` y se re-lanzo `pnpm dev:web` antes de revisar los logs.
+
+## Actualizacion 2026-04-12 - Canon frontend
+
+- Se definio un canon visual nuevo en [docs/frontend-canon.md](docs/frontend-canon.md): shell full-bleed, sin cards/sombras, separacion por lineas y padding minimo.
+- `apps/web/src/app/globals.css` ahora usa variables de tema para light/dark automatico y elimina los patrones de card del editor.
+- El canvas ya dibuja rejilla de pistas aunque el timeline este vacio, para evitar el panel plano y dar escala visual desde el arranque.
+
+## Actualizacion 2026-04-12 - Observabilidad e2e
+
+- `apps/web/tests/playwright.ts` agrega un fixture compartido que captura `console.error`, `pageerror`, `requestfailed` y respuestas `5xx`.
+- Playwright ahora guarda screenshot y video solo cuando falla un test, para facilitar triage sin ensuciar corridas felices.
+
+## Actualizacion 2026-04-12 - Verificacion timeline
+
+- La barra slice/playhead ya cruza el canvas completo en estado `ready` y se renderiza como linea vertical de 1px con cap superior.
+- Para capturas visuales confiables, esperar `.canvas-shell[data-state="ready"]` antes de tomar screenshot; el estado de carga puede ocultar la linea aunque el renderer este funcionando.

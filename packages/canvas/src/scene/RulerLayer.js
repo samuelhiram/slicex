@@ -1,9 +1,14 @@
 import { Container, Graphics } from "pixi.js";
 import { DAY_WIDTH_PX, dateToPixel, pixelToDate } from "../coordinate-system";
-import { RULER_HEIGHT_PX } from "./types";
-const BACKGROUND_COLOR = 0xf8fafc;
-const BORDER_COLOR = 0xcbd5e1;
-const TICK_COLOR = 0x94a3b8;
+import { RULER_HEIGHT_PX, } from "./types";
+const DEFAULT_THEME = {
+    rulerBackground: 0xf8fafc,
+    rulerBorder: 0xcbd5e1,
+    gridLine: 0xdbe2ea,
+    trackRowEven: 0xf8fafc,
+    trackRowOdd: 0xffffff,
+    trackRowDivider: 0xe2e8f0,
+};
 function toUtcMidnight(date) {
     return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
@@ -49,13 +54,19 @@ function sameViewportState(left, right) {
         left.zoom === right.zoom);
 }
 export class RulerLayer extends Container {
+    gridLines = new Graphics();
     background = new Graphics();
     ticks = new Graphics();
+    theme = DEFAULT_THEME;
     state = null;
     constructor() {
         super();
         this.eventMode = "none";
-        this.addChild(this.background, this.ticks);
+        this.addChild(this.gridLines, this.background, this.ticks);
+    }
+    setTheme(theme) {
+        this.theme = theme;
+        this.renderRuler();
     }
     setViewportState(state) {
         const nextState = {
@@ -70,6 +81,7 @@ export class RulerLayer extends Container {
     }
     renderRuler() {
         const state = this.state;
+        this.gridLines.clear();
         this.background.clear();
         this.ticks.clear();
         if (!state || !(state.zoom > 0) || state.width <= 0 || state.height <= 0) {
@@ -77,11 +89,11 @@ export class RulerLayer extends Container {
         }
         this.background
             .rect(0, 0, state.width, RULER_HEIGHT_PX)
-            .fill({ color: BACKGROUND_COLOR });
+            .fill({ color: this.theme.rulerBackground });
         this.background
             .moveTo(0, RULER_HEIGHT_PX - 1)
             .lineTo(state.width, RULER_HEIGHT_PX - 1)
-            .stroke({ color: BORDER_COLOR, width: 1 });
+            .stroke({ color: this.theme.rulerBorder, width: 1 });
         const granularity = getGranularity(state.zoom);
         const visibleStartDate = pixelToDate(state.scrollX, state.originDate, state.zoom);
         let tickDate = alignToGranularity(visibleStartDate, granularity);
@@ -94,10 +106,14 @@ export class RulerLayer extends Container {
             }
             if (x >= -overscan) {
                 const tickX = Math.round(x) + 0.5;
+                this.gridLines
+                    .moveTo(tickX, RULER_HEIGHT_PX)
+                    .lineTo(tickX, state.height)
+                    .stroke({ alpha: 0.45, color: this.theme.gridLine, width: 1 });
                 this.ticks
                     .moveTo(tickX, RULER_HEIGHT_PX - 1)
                     .lineTo(tickX, RULER_HEIGHT_PX - tickHeight)
-                    .stroke({ color: TICK_COLOR, width: 1 });
+                    .stroke({ color: this.theme.gridLine, width: 1 });
             }
             tickDate = advance(tickDate, granularity);
         }

@@ -4,7 +4,9 @@ import { storeAdapter } from "../lib/storeAdapter";
 
 export function CanvasShell() {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
-  const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
+  const [status, setStatus] = React.useState<"loading" | "ready" | "error">(
+    "loading",
+  );
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -36,7 +38,9 @@ export function CanvasShell() {
 
             setStatus("error");
             setErrorMessage(
-              error instanceof Error ? error.message : "Canvas renderer failed to start.",
+              error instanceof Error
+                ? error.message
+                : "Canvas renderer failed to start.",
             );
           },
         });
@@ -47,7 +51,9 @@ export function CanvasShell() {
 
         setStatus("error");
         setErrorMessage(
-          error instanceof Error ? error.message : "Canvas renderer failed to start.",
+          error instanceof Error
+            ? error.message
+            : "Canvas renderer failed to start.",
         );
       }
     }
@@ -71,21 +77,19 @@ export function CanvasShell() {
           className="canvas-shell__state"
           role={status === "error" ? "alert" : "status"}
         >
-          <div className="canvas-shell__panel">
-            <div className="canvas-shell__eyebrow">
-              {status === "error" ? "Renderer error" : "Loading canvas"}
-            </div>
-            <div className="canvas-shell__title">
-              {status === "error"
-                ? "SliceX could not start the canvas"
-                : "Booting the Pixi scene"}
-            </div>
-            <p className="canvas-shell__body">
-              {status === "error"
-                ? errorMessage ?? "Try reloading the page."
-                : "Initializing the viewport, layers, and store subscriptions."}
-            </p>
+          <div className="canvas-shell__eyebrow">
+            {status === "error" ? "Renderer error" : "Loading canvas"}
           </div>
+          <div className="canvas-shell__title">
+            {status === "error"
+              ? "SliceX could not start the canvas"
+              : "Booting the Pixi scene"}
+          </div>
+          <p className="canvas-shell__body">
+            {status === "error"
+              ? (errorMessage ?? "Try reloading the page.")
+              : "Initializing the viewport, layers, and store subscriptions."}
+          </p>
         </div>
       ) : null}
     </div>

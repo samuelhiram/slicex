@@ -8,6 +8,7 @@ import type {
   StoreAdapter,
 } from "./types";
 import type {
+  SceneThemePalette,
   SceneObjectPlacement,
   ScenePlayheadState,
   SceneTrack,
@@ -34,6 +35,15 @@ interface CanvasScene {
   playheadLayer: PlayheadLayer;
 }
 
+const FALLBACK_THEME: SceneThemePalette = {
+  rulerBackground: 0xf8fafc,
+  rulerBorder: 0xcbd5e1,
+  gridLine: 0xdbe2ea,
+  trackRowEven: 0xf8fafc,
+  trackRowOdd: 0xffffff,
+  trackRowDivider: 0xe2e8f0,
+};
+
 const TRACK_COLORS = [
   0x0f766e, 0x2563eb, 0x7c3aed, 0xd97706, 0x0891b2, 0x4f46e5,
 ];
@@ -53,6 +63,77 @@ function canUseCanvas(container: any): boolean {
       }
     })()
   );
+}
+
+function parseCssHexColor(
+  value: string | null | undefined,
+  fallback: number,
+): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const normalized = value.trim();
+
+  if (!normalized.startsWith("#")) {
+    return fallback;
+  }
+
+  const hex = normalized.slice(1);
+
+  if (hex.length === 3) {
+    return Number.parseInt(
+      hex
+        .split("")
+        .map((character) => character + character)
+        .join(""),
+      16,
+    );
+  }
+
+  if (hex.length === 6) {
+    return Number.parseInt(hex, 16);
+  }
+
+  return fallback;
+}
+
+function resolveCanvasTheme(): SceneThemePalette {
+  if (
+    typeof document === "undefined" ||
+    typeof getComputedStyle !== "function"
+  ) {
+    return FALLBACK_THEME;
+  }
+
+  const styles = getComputedStyle(document.documentElement);
+
+  return {
+    rulerBackground: parseCssHexColor(
+      styles.getPropertyValue("--canvas-ruler-bg"),
+      FALLBACK_THEME.rulerBackground,
+    ),
+    rulerBorder: parseCssHexColor(
+      styles.getPropertyValue("--canvas-ruler-border"),
+      FALLBACK_THEME.rulerBorder,
+    ),
+    gridLine: parseCssHexColor(
+      styles.getPropertyValue("--canvas-grid-line"),
+      FALLBACK_THEME.gridLine,
+    ),
+    trackRowEven: parseCssHexColor(
+      styles.getPropertyValue("--canvas-track-even"),
+      FALLBACK_THEME.trackRowEven,
+    ),
+    trackRowOdd: parseCssHexColor(
+      styles.getPropertyValue("--canvas-track-odd"),
+      FALLBACK_THEME.trackRowOdd,
+    ),
+    trackRowDivider: parseCssHexColor(
+      styles.getPropertyValue("--canvas-track-divider"),
+      FALLBACK_THEME.trackRowDivider,
+    ),
+  };
 }
 
 function toUtcMidnight(date: Date): Date {
@@ -135,16 +216,19 @@ function subscribeToSnapshot(
   });
 }
 
-function createScene(app: any): CanvasScene {
+function createScene(app: any, theme: SceneThemePalette): CanvasScene {
   const root = new PIXI.Container();
   const rulerLayer = new RulerLayer();
   const trackLayer = new TrackLayer();
   const objectLayer = new ObjectLayer();
   const playheadLayer = new PlayheadLayer();
 
+  rulerLayer.setTheme(theme);
+  trackLayer.setTheme(theme);
+
   trackLayer.position.set(0, RULER_HEIGHT_PX);
   objectLayer.position.set(0, RULER_HEIGHT_PX);
-  playheadLayer.position.set(0, RULER_HEIGHT_PX);
+  playheadLayer.position.set(0, 0);
 
   root.addChild(rulerLayer, trackLayer, objectLayer, playheadLayer);
   app.stage.addChild(root);
@@ -157,7 +241,11 @@ function applyProjection(
   projection: CanvasSceneProjection,
 ): void {
   scene.rulerLayer.setViewportState(projection.viewport);
-  scene.trackLayer.setTracks(projection.tracks, projection.viewport.width);
+  scene.trackLayer.setTracks(
+    projection.tracks,
+    projection.viewport.width,
+    projection.viewport.height,
+  );
   scene.objectLayer.setViewportState(projection.viewport);
   scene.objectLayer.setObjects(projection.objects);
   scene.playheadLayer.setPlayheadState(projection.playhead);
@@ -199,7 +287,7 @@ export function projectCanvasScene(
       scrollX,
       zoom,
       width: Math.max(dimensions.width, 0),
-      height: trackAreaHeight,
+      height: Math.max(dimensions.height, 0),
       playheadAt: parseDate(snapshot.playheadAt),
     },
   };
@@ -211,6 +299,7 @@ export function createRenderer(
   callbacks: RendererLifecycleCallbacks = {},
 ) {
   const useDom = canUseCanvas(container);
+  let currentTheme = resolveCanvasTheme();
 
   const stage = new PIXI.Container();
   const canvasElement = useDom ? document.createElement("canvas") : null;
@@ -250,6 +339,10 @@ export function createRenderer(
   let subscription: { unsubscribe: () => void } | null = null;
   let destroyed = false;
   let initComplete = false;
+  const themeMediaQuery =
+    useDom && typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-color-scheme: dark)")
+      : null;
   const resizeObserver =
     useDom && typeof ResizeObserver !== "undefined"
       ? new ResizeObserver(() => {
@@ -260,6 +353,28 @@ export function createRenderer(
           refreshScene(resolveSnapshot(store));
         })
       : null;
+
+  const handleThemeChange = () => {
+    if (destroyed) {
+      return;
+    }
+
+    currentTheme = resolveCanvasTheme();
+
+    if (scene) {
+      scene.rulerLayer.setTheme(currentTheme);
+      scene.trackLayer.setTheme(currentTheme);
+      refreshScene(resolveSnapshot(store));
+    }
+  };
+
+  if (themeMediaQuery) {
+    if (typeof themeMediaQuery.addEventListener === "function") {
+      themeMediaQuery.addEventListener("change", handleThemeChange);
+    } else if (typeof themeMediaQuery.addListener === "function") {
+      themeMediaQuery.addListener(handleThemeChange);
+    }
+  }
 
   function refreshScene(snapshot: CanvasStoreSnapshot): void {
     if (!scene) {
@@ -310,7 +425,7 @@ export function createRenderer(
 
         app.renderer = renderer;
         container.appendChild(canvasElement as HTMLCanvasElement);
-        scene = createScene(app);
+        scene = createScene(app, currentTheme);
 
         if (resizeObserver) {
           resizeObserver.observe(container);
@@ -345,6 +460,18 @@ export function createRenderer(
         resizeObserver?.disconnect();
       } catch {
         // noop
+      }
+
+      if (themeMediaQuery) {
+        try {
+          if (typeof themeMediaQuery.removeEventListener === "function") {
+            themeMediaQuery.removeEventListener("change", handleThemeChange);
+          } else if (typeof themeMediaQuery.removeListener === "function") {
+            themeMediaQuery.removeListener(handleThemeChange);
+          }
+        } catch {
+          // noop
+        }
       }
 
       if (!initComplete) {

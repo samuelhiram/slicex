@@ -1,17 +1,28 @@
 import { Container, Graphics } from "pixi.js";
-import { TRACK_HEIGHT_PX } from "./types";
-const EVEN_ROW_COLOR = 0xf8fafc;
-const ODD_ROW_COLOR = 0xffffff;
-const ROW_DIVIDER_COLOR = 0xe2e8f0;
+import { TRACK_HEIGHT_PX, } from "./types";
 const TRACK_STRIP_WIDTH_PX = 4;
+const DEFAULT_THEME = {
+    rulerBackground: 0xf8fafc,
+    rulerBorder: 0xcbd5e1,
+    gridLine: 0xdbe2ea,
+    trackRowEven: 0xf8fafc,
+    trackRowOdd: 0xffffff,
+    trackRowDivider: 0xe2e8f0,
+};
 export class TrackLayer extends Container {
     background = new Graphics();
     tracks = [];
     trackWidth = 0;
+    trackHeight = 0;
+    theme = DEFAULT_THEME;
     constructor() {
         super();
         this.eventMode = "none";
         this.addChild(this.background);
+    }
+    setTheme(theme) {
+        this.theme = theme;
+        this.renderTracks();
     }
     setWidth(width) {
         if (this.trackWidth === width) {
@@ -20,32 +31,41 @@ export class TrackLayer extends Container {
         this.trackWidth = width;
         this.renderTracks();
     }
-    setTracks(tracks, width = this.trackWidth) {
+    setTracks(tracks, width = this.trackWidth, height = this.trackHeight) {
         this.tracks = [...tracks];
         this.trackWidth = width;
+        this.trackHeight = height;
         this.renderTracks();
     }
     renderTracks() {
         this.background.clear();
-        if (this.trackWidth <= 0 || this.tracks.length === 0) {
+        if (this.trackWidth <= 0 || this.trackHeight <= 0) {
             return;
         }
-        for (let index = 0; index < this.tracks.length; index += 1) {
+        const visibleRowCount = Math.max(Math.ceil(this.trackHeight / TRACK_HEIGHT_PX), 1);
+        const rowCount = Math.max(this.tracks.length, visibleRowCount);
+        for (let index = 0; index < rowCount; index += 1) {
             const track = this.tracks[index];
             const top = index * TRACK_HEIGHT_PX;
-            const fillColor = index % 2 === 0 ? EVEN_ROW_COLOR : ODD_ROW_COLOR;
+            const rowHeight = Math.min(TRACK_HEIGHT_PX, this.trackHeight - top);
+            if (rowHeight <= 0) {
+                break;
+            }
+            const fillColor = index % 2 === 0
+                ? this.theme.trackRowEven
+                : this.theme.trackRowOdd;
             this.background
-                .rect(0, top, this.trackWidth, TRACK_HEIGHT_PX)
+                .rect(0, top, this.trackWidth, rowHeight)
                 .fill({ color: fillColor });
-            if (track.color != null) {
+            if (track?.color != null) {
                 this.background
-                    .rect(0, top, TRACK_STRIP_WIDTH_PX, TRACK_HEIGHT_PX)
+                    .rect(0, top, TRACK_STRIP_WIDTH_PX, rowHeight)
                     .fill({ color: track.color });
             }
             this.background
-                .moveTo(0, top + TRACK_HEIGHT_PX - 1)
-                .lineTo(this.trackWidth, top + TRACK_HEIGHT_PX - 1)
-                .stroke({ color: ROW_DIVIDER_COLOR, width: 1 });
+                .moveTo(0, top + rowHeight - 1)
+                .lineTo(this.trackWidth, top + rowHeight - 1)
+                .stroke({ color: this.theme.trackRowDivider, width: 1 });
         }
     }
 }

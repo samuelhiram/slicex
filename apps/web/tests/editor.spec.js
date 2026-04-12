@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./playwright";
 test("editor page loads", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator("text=SliceX")).toBeVisible();

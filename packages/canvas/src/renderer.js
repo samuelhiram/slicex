@@ -1,6 +1,14 @@
 import * as PIXI from "pixi.js";
 import { ObjectLayer, PlayheadLayer, RulerLayer, TrackLayer } from "./scene";
 import { RULER_HEIGHT_PX, TRACK_HEIGHT_PX } from "./scene/types";
+const FALLBACK_THEME = {
+    rulerBackground: 0xf8fafc,
+    rulerBorder: 0xcbd5e1,
+    gridLine: 0xdbe2ea,
+    trackRowEven: 0xf8fafc,
+    trackRowOdd: 0xffffff,
+    trackRowDivider: 0xe2e8f0,
+};
 const TRACK_COLORS = [
     0x0f766e, 0x2563eb, 0x7c3aed, 0xd97706, 0x0891b2, 0x4f46e5,
 ];
@@ -18,6 +26,40 @@ function canUseCanvas(container) {
                 return false;
             }
         })());
+}
+function parseCssHexColor(value, fallback) {
+    if (!value) {
+        return fallback;
+    }
+    const normalized = value.trim();
+    if (!normalized.startsWith("#")) {
+        return fallback;
+    }
+    const hex = normalized.slice(1);
+    if (hex.length === 3) {
+        return Number.parseInt(hex
+            .split("")
+            .map((character) => character + character)
+            .join(""), 16);
+    }
+    if (hex.length === 6) {
+        return Number.parseInt(hex, 16);
+    }
+    return fallback;
+}
+function resolveCanvasTheme() {
+    if (typeof document === "undefined" || typeof getComputedStyle !== "function") {
+        return FALLBACK_THEME;
+    }
+    const styles = getComputedStyle(document.documentElement);
+    return {
+        rulerBackground: parseCssHexColor(styles.getPropertyValue("--canvas-ruler-bg"), FALLBACK_THEME.rulerBackground),
+        rulerBorder: parseCssHexColor(styles.getPropertyValue("--canvas-ruler-border"), FALLBACK_THEME.rulerBorder),
+        gridLine: parseCssHexColor(styles.getPropertyValue("--canvas-grid-line"), FALLBACK_THEME.gridLine),
+        trackRowEven: parseCssHexColor(styles.getPropertyValue("--canvas-track-even"), FALLBACK_THEME.trackRowEven),
+        trackRowOdd: parseCssHexColor(styles.getPropertyValue("--canvas-track-odd"), FALLBACK_THEME.trackRowOdd),
+        trackRowDivider: parseCssHexColor(styles.getPropertyValue("--canvas-track-divider"), FALLBACK_THEME.trackRowDivider),
+    };
 }
 function toUtcMidnight(date) {
     return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -59,14 +101,12 @@ function resolveDimensions(app, container) {
         height: Number(app?.renderer?.height) || Number(container?.clientHeight) || 0,
     };
 }
-
 function resolveSnapshot(store) {
     if (typeof store.getState === "function") {
         return store.getState();
     }
     return { document: store.getDocument() };
 }
-
 function subscribeToSnapshot(store, cb) {
     if (typeof store.subscribeState === "function") {
         return store.subscribeState(cb);
@@ -75,29 +115,28 @@ function subscribeToSnapshot(store, cb) {
         cb({ document });
     });
 }
-
-function createScene(app) {
+function createScene(app, theme) {
     const root = new PIXI.Container();
     const rulerLayer = new RulerLayer();
     const trackLayer = new TrackLayer();
     const objectLayer = new ObjectLayer();
     const playheadLayer = new PlayheadLayer();
+    rulerLayer.setTheme(theme);
+    trackLayer.setTheme(theme);
     trackLayer.position.set(0, RULER_HEIGHT_PX);
     objectLayer.position.set(0, RULER_HEIGHT_PX);
-    playheadLayer.position.set(0, RULER_HEIGHT_PX);
+    playheadLayer.position.set(0, 0);
     root.addChild(rulerLayer, trackLayer, objectLayer, playheadLayer);
     app.stage.addChild(root);
     return { root, rulerLayer, trackLayer, objectLayer, playheadLayer };
 }
-
 function applyProjection(scene, projection) {
     scene.rulerLayer.setViewportState(projection.viewport);
-    scene.trackLayer.setTracks(projection.tracks, projection.viewport.width);
+    scene.trackLayer.setTracks(projection.tracks, projection.viewport.width, projection.viewport.height);
     scene.objectLayer.setViewportState(projection.viewport);
     scene.objectLayer.setObjects(projection.objects);
     scene.playheadLayer.setPlayheadState(projection.playhead);
 }
-
 export function projectCanvasScene(snapshot, dimensions) {
     const items = snapshot.document?.items ?? [];
     const { scrollX, zoom } = normalizeViewport(snapshot.viewport);
@@ -127,19 +166,22 @@ export function projectCanvasScene(snapshot, dimensions) {
             scrollX,
             zoom,
             width: Math.max(dimensions.width, 0),
-            height: trackAreaHeight,
+            height: Math.max(dimensions.height, 0),
             playheadAt: parseDate(snapshot.playheadAt),
         },
     };
 }
-
-export function createRenderer(container, store) {
+export function createRenderer(container, store, callbacks = {}) {
     const useDom = canUseCanvas(container);
+    let currentTheme = resolveCanvasTheme();
     const stage = new PIXI.Container();
     const canvasElement = useDom ? document.createElement("canvas") : null;
     if (canvasElement) {
         canvasElement.width = Math.max(Number(container?.clientWidth) || 0, 1);
         canvasElement.height = Math.max(Number(container?.clientHeight) || 0, 1);
+        canvasElement.style.display = "block";
+        canvasElement.style.width = "100%";
+        canvasElement.style.height = "100%";
     }
     const app = {
         stage,
@@ -168,11 +210,59 @@ export function createRenderer(container, store) {
     let subscription = null;
     let destroyed = false;
     let initComplete = false;
+    const themeMediaQuery = useDom && typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-color-scheme: dark)")
+        : null;
+    const resizeObserver = useDom && typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            if (destroyed || !scene) {
+                return;
+            }
+            refreshScene(resolveSnapshot(store));
+        })
+        : null;
+    const handleThemeChange = () => {
+        if (destroyed) {
+            return;
+        }
+        currentTheme = resolveCanvasTheme();
+        if (scene) {
+            scene.rulerLayer.setTheme(currentTheme);
+            scene.trackLayer.setTheme(currentTheme);
+            refreshScene(resolveSnapshot(store));
+        }
+    };
+    if (themeMediaQuery) {
+        if (typeof themeMediaQuery.addEventListener === "function") {
+            themeMediaQuery.addEventListener("change", handleThemeChange);
+        }
+        else if (typeof themeMediaQuery.addListener === "function") {
+            themeMediaQuery.addListener(handleThemeChange);
+        }
+    }
+    function refreshScene(snapshot) {
+        if (!scene) {
+            return;
+        }
+        const dimensions = resolveDimensions(app, container);
+        const nextDimensions = {
+            width: Math.max(dimensions.width, 1),
+            height: Math.max(dimensions.height, 1),
+        };
+        try {
+            app.renderer.resize(nextDimensions.width, nextDimensions.height);
+        }
+        catch {
+            // noop
+        }
+        applyProjection(scene, projectCanvasScene(snapshot, nextDimensions));
+        app.render();
+    }
     subscription = subscribeToSnapshot(store, (snapshot) => {
         if (!scene) {
             return;
         }
-        applyProjection(scene, projectCanvasScene(snapshot, resolveDimensions(app, container)));
+        refreshScene(snapshot);
     });
     if (useDom) {
         const initPromise = PIXI.autoDetectRenderer({
@@ -192,15 +282,22 @@ export function createRenderer(container, store) {
             }
             app.renderer = renderer;
             container.appendChild(canvasElement);
-            scene = createScene(app);
+            scene = createScene(app, currentTheme);
+            if (resizeObserver) {
+                resizeObserver.observe(container);
+            }
             const initialSnapshot = resolveSnapshot(store);
-            applyProjection(scene, projectCanvasScene(initialSnapshot, resolveDimensions(app, container)));
-            app.render();
+            refreshScene(initialSnapshot);
+            callbacks.onReady?.();
         })
-            .catch(() => {
-            // noop
+            .catch((error) => {
+            callbacks.onError?.(error);
+            console.error("[SliceX] Failed to initialize canvas renderer", error);
         });
         void initPromise;
+    }
+    else {
+        callbacks.onReady?.();
     }
     return {
         app,
@@ -211,6 +308,25 @@ export function createRenderer(container, store) {
             }
             catch {
                 // noop
+            }
+            try {
+                resizeObserver?.disconnect();
+            }
+            catch {
+                // noop
+            }
+            if (themeMediaQuery) {
+                try {
+                    if (typeof themeMediaQuery.removeEventListener === "function") {
+                        themeMediaQuery.removeEventListener("change", handleThemeChange);
+                    }
+                    else if (typeof themeMediaQuery.removeListener === "function") {
+                        themeMediaQuery.removeListener(handleThemeChange);
+                    }
+                }
+                catch {
+                    // noop
+                }
             }
             if (!initComplete) {
                 return;
