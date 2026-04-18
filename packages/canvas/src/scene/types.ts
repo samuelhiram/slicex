@@ -24,6 +24,10 @@ export interface SceneTrack {
 export interface SceneObjectPlacement {
   object: FinancialObject;
   trackIndex: number;
+  x: number;
+  y: number;
+  widthPx: number;
+  heightPx: number;
 }
 
 export interface SceneViewportState {

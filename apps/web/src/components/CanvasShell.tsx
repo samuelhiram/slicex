@@ -1,6 +1,11 @@
 "use client";
 import React from "react";
+import { createCanvasInteractionController } from "@slicex/canvas";
 import { storeAdapter } from "../lib/storeAdapter";
+import {
+  applyCanvasCommand,
+  resolveInitialViewportOriginDate,
+} from "../lib/canvasCommandBridge";
 
 export function CanvasShell() {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -12,6 +17,30 @@ export function CanvasShell() {
   React.useEffect(() => {
     let destroyed = false;
     let renderer: { destroy(): void } | null = null;
+    let controller: { destroy(): void } | null = null;
+
+    const container = containerRef.current;
+    if (!container) {
+      return undefined;
+    }
+
+    const snapshot = storeAdapter.getState();
+    const originDate = resolveInitialViewportOriginDate(snapshot);
+
+    if (snapshot.viewport?.originDate !== originDate) {
+      storeAdapter.setViewport({
+        x: snapshot.viewport?.x ?? 0,
+        y: snapshot.viewport?.y ?? 0,
+        zoom: snapshot.viewport?.zoom ?? 1,
+        originDate,
+      });
+    }
+
+    controller = createCanvasInteractionController(container, storeAdapter, {
+      onCommand: (command) => {
+        applyCanvasCommand(command, storeAdapter);
+      },
+    });
 
     async function mountRenderer() {
       try {
@@ -62,6 +91,7 @@ export function CanvasShell() {
 
     return () => {
       destroyed = true;
+      controller?.destroy();
       renderer?.destroy();
     };
   }, []);

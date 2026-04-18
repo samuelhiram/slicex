@@ -170,3 +170,10 @@ Este archivo es el resumen operativo del repo; mantenerlo breve y actualizado. P
 
 - La barra slice/playhead ya cruza el canvas completo en estado `ready` y se renderiza como linea vertical de 1px con cap superior.
 - Para capturas visuales confiables, esperar `.canvas-shell[data-state="ready"]` antes de tomar screenshot; el estado de carga puede ocultar la linea aunque el renderer este funcionando.
+
+## Actualizacion 2026-04-12 - Motor interactivo
+
+- `packages/canvas/src/interactions/controller.ts` traduce pan, zoom, scrub, drag, resize y double-click en comandos del canvas.
+- `apps/web/src/lib/canvasCommandBridge.ts` aplica esos comandos al store de Zustand y crea documentos/items de borrador cuando hace falta.
+- `FinancialObject` ahora admite `durationDays` para que el resize sea real en la barra visual sin romper el calculo de balance.
+- El renderer ya respeta `viewport.originDate`, asi que el origen del timeline permanece estable mientras se interactua.

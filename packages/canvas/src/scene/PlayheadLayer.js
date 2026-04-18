@@ -38,10 +38,7 @@ export class PlayheadLayer extends Container {
     renderPlayhead() {
         const state = this.state;
         this.graphics.clear();
-        if (!state ||
-            !(state.zoom > 0) ||
-            state.width <= 0 ||
-            state.height <= 0) {
+        if (!state || !(state.zoom > 0) || state.width <= 0 || state.height <= 0) {
             return;
         }
         const x = state.playheadAt == null

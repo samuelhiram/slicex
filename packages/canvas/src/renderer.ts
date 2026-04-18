@@ -1,6 +1,12 @@
 import * as PIXI from "pixi.js";
 import { ObjectLayer, PlayheadLayer, RulerLayer, TrackLayer } from "./scene";
-import { RULER_HEIGHT_PX, TRACK_HEIGHT_PX } from "./scene/types";
+import {
+  OBJECT_HEIGHT_PX,
+  OBJECT_VERTICAL_PADDING_PX,
+  RULER_HEIGHT_PX,
+  TRACK_HEIGHT_PX,
+} from "./scene/types";
+import { DAY_WIDTH_PX, dateToPixel } from "./coordinate-system";
 import type { FinancialObject } from "@slicex/core";
 import type {
   CanvasStoreSnapshot,
@@ -162,6 +168,11 @@ function normalizeViewport(viewport: CanvasViewportSnapshot | undefined): {
 }
 
 function resolveOriginDate(snapshot: CanvasStoreSnapshot): Date {
+  const viewportOriginDate = parseDate(snapshot.viewport?.originDate);
+  if (viewportOriginDate) {
+    return toUtcMidnight(viewportOriginDate);
+  }
+
   const candidates: Date[] = [];
 
   for (const item of snapshot.document?.items ?? []) {
@@ -263,10 +274,22 @@ export function projectCanvasScene(
     label: item.name,
     color: TRACK_COLORS[index % TRACK_COLORS.length],
   }));
-  const objects = items.map((object: FinancialObject, trackIndex) => ({
-    object,
-    trackIndex,
-  }));
+  const objects = items.map((object: FinancialObject, trackIndex) => {
+    const objectDate = parseDate(object.date) ?? originDate;
+    const durationDays = Math.max(1, object.durationDays ?? 1);
+    const objectWidth = Math.max(4, DAY_WIDTH_PX * zoom * durationDays);
+    const x = dateToPixel(objectDate, originDate, zoom) - scrollX;
+    const y = trackIndex * TRACK_HEIGHT_PX + OBJECT_VERTICAL_PADDING_PX;
+
+    return {
+      object,
+      trackIndex,
+      x,
+      y,
+      widthPx: objectWidth,
+      heightPx: OBJECT_HEIGHT_PX,
+    };
+  });
   const trackAreaHeight = Math.max(
     dimensions.height - RULER_HEIGHT_PX,
     Math.max(tracks.length, 1) * TRACK_HEIGHT_PX,

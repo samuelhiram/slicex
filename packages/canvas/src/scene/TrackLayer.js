@@ -51,9 +51,7 @@ export class TrackLayer extends Container {
             if (rowHeight <= 0) {
                 break;
             }
-            const fillColor = index % 2 === 0
-                ? this.theme.trackRowEven
-                : this.theme.trackRowOdd;
+            const fillColor = index % 2 === 0 ? this.theme.trackRowEven : this.theme.trackRowOdd;
             this.background
                 .rect(0, top, this.trackWidth, rowHeight)
                 .fill({ color: fillColor });

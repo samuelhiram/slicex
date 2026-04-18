@@ -31,4 +31,16 @@ export const storeAdapter = {
         });
         return { unsubscribe: unsub };
     },
+    setViewport(viewport) {
+        useEditorStore.getState().setViewport(viewport);
+    },
+    setPlayheadAt(value) {
+        useEditorStore.getState().setPlayheadAt(value);
+    },
+    patchDocument(updater) {
+        useEditorStore.getState().patchDocument(updater);
+    },
+    setSelection(selection) {
+        useEditorStore.getState().setSelection(selection);
+    },
 };

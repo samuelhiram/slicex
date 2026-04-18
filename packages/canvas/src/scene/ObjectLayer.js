@@ -1,6 +1,4 @@
 import { Container, Graphics } from "pixi.js";
-import { DAY_WIDTH_PX, dateToPixel } from "../coordinate-system";
-import { OBJECT_HEIGHT_PX, OBJECT_VERTICAL_PADDING_PX, TRACK_HEIGHT_PX, } from "./types";
 const POSITIVE_OBJECT_COLOR = 0x16a34a;
 const NEGATIVE_OBJECT_COLOR = 0xdc2626;
 const ZERO_OBJECT_COLOR = 0x64748b;
@@ -41,15 +39,11 @@ export class ObjectLayer extends Container {
         if (!state || !(state.zoom > 0) || state.width <= 0 || state.height <= 0) {
             return;
         }
-        const objectWidth = Math.max(4, DAY_WIDTH_PX * state.zoom);
         for (const placement of this.objects) {
-            const top = placement.trackIndex * TRACK_HEIGHT_PX;
-            if (top + TRACK_HEIGHT_PX < 0 || top > state.height) {
-                continue;
-            }
-            const objectDate = new Date(placement.object.date);
-            const x = dateToPixel(objectDate, state.originDate, state.zoom) - state.scrollX;
-            if (x > state.width + objectWidth || x + objectWidth < -objectWidth) {
+            if (placement.y + placement.heightPx < 0 ||
+                placement.y > state.height ||
+                placement.x + placement.widthPx < 0 ||
+                placement.x > state.width) {
                 continue;
             }
             const fillColor = placement.object.amount > 0
@@ -57,9 +51,8 @@ export class ObjectLayer extends Container {
                 : placement.object.amount < 0
                     ? NEGATIVE_OBJECT_COLOR
                     : ZERO_OBJECT_COLOR;
-            const y = top + OBJECT_VERTICAL_PADDING_PX;
             this.graphics
-                .roundRect(Math.round(x), y, objectWidth, OBJECT_HEIGHT_PX, 8)
+                .roundRect(Math.round(placement.x), placement.y, placement.widthPx, placement.heightPx, 8)
                 .fill({ alpha: 0.92, color: fillColor })
                 .stroke({ alpha: 0.18, color: 0xffffff, width: 1 });
         }

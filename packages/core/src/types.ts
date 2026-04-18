@@ -22,6 +22,7 @@ export interface FinancialObject {
   name: string;
   amount: number; // positive income, negative expense
   date: string; // ISO date of first occurrence
+  durationDays?: number;
   recurrence?: RecurrenceRule | null;
 }
 

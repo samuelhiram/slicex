@@ -19,6 +19,7 @@ export const FinancialObjectSchema = z.object({
   name: z.string(),
   amount: z.number(),
   date: z.string(),
+  durationDays: z.number().int().positive().optional(),
   recurrence: RecurrenceRuleSchema.optional().nullable(),
 });
 

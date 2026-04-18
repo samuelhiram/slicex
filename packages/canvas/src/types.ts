@@ -6,6 +6,7 @@ export interface CanvasViewportSnapshot {
   x: number;
   y: number;
   zoom: number;
+  originDate?: Date | string | null;
 }
 
 export interface CanvasStoreSnapshot {
@@ -22,4 +23,10 @@ export interface StoreAdapter {
   getDocument: () => TimelineDocument | null;
   getState?: () => CanvasStoreSnapshot;
   subscribeState?: (cb: StoreSnapshotSubscriber) => { unsubscribe: () => void };
+  setViewport?: (viewport: CanvasViewportSnapshot) => void;
+  setPlayheadAt?: (value: string | Date | null) => void;
+  patchDocument?: (
+    updater: (doc: TimelineDocument | null) => TimelineDocument | null,
+  ) => void;
+  setSelection?: (selection: string[]) => void;
 }
