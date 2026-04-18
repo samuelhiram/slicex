@@ -1,0 +1,24 @@
+# Playlist Manual Test
+
+- `pnpm install`
+- `pnpm dev`
+- Abrir `http://localhost:3000`
+- Ver Playlist demo directo.
+- Arrastrar clip horizontal.
+- Arrastrar clip a otro track.
+- Resize desde borde izquierdo.
+- Resize desde borde derecho.
+- Drag en vacio: marquee selection.
+- Wheel: scroll vertical.
+- Shift + wheel: scroll horizontal.
+- Ctrl + wheel: zoom anclado al cursor.
+- Mouse medio + drag: pan.
+- Automation clip: mover punto.
+- Automation clip: Shift al mover punto bloquea vertical.
+- Automation clip: Ctrl al mover punto bloquea horizontal.
+- Automation clip: Alt ignora snap.
+- Right click en automation body: agrega punto.
+- Right click en punto: elimina punto.
+- Automation clip: resize desde title bar.
+- Zoom/pan no rompe render.
+- Pixi no almacena estado real; `playlist-core` manda.

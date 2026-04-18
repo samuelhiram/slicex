@@ -6,3 +6,6 @@ export * from "./interactions";
 export { createBalanceStoreSubscriber } from "./adapters/store-subscriber";
 export { createRenderer } from "./renderer";
 export { CanvasRenderer } from "./react-wrapper";
+export * from "./playlist-core";
+export * from "./playlist-interaction";
+export * from "./playlist-renderer-pixi";

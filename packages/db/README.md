@@ -6,5 +6,5 @@ should go through this package to keep a single source of truth for persistence.
 Usage:
 
 ```ts
-import prisma from "@slicex/db";
+import { getTimelineById } from "@slicex/db";
 ```

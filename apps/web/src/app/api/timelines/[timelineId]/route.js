@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { makeErrorEnvelope, TimelineDocumentSchema } from "@slicex/contracts";
-import { getTimelineById as dbGetTimelineById, prisma } from "@slicex/db";
+import { createTimelineRevisionAndSetHead, getTimelineById as dbGetTimelineById, } from "@slicex/db";
 import { z } from "zod";
 import { withRequestId } from "../../../../instrumentation";
 const ParamsSchema = z.object({ timelineId: z.string().min(1) });
@@ -64,22 +64,7 @@ export async function PUT(request, ctx) {
                 documentTenantId: parsedBody.data.tenantId,
             });
         }
-        const revision = await prisma.$transaction(async (tx) => {
-            const createdRevision = await tx.timelineRevision.create({
-                data: {
-                    timelineId: parsedParams.data.timelineId,
-                    documentJson: parsedBody.data,
-                },
-            });
-            await tx.timeline.update({
-                where: { id: parsedParams.data.timelineId },
-                data: {
-                    headRevisionId: createdRevision.id,
-                    title: parsedBody.data.title,
-                },
-            });
-            return createdRevision;
-        });
+        const revision = await createTimelineRevisionAndSetHead(parsedParams.data.timelineId, parsedBody.data, parsedBody.data.title);
         log.info({
             timelineId: parsedParams.data.timelineId,
             revId: revision.id,
