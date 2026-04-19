@@ -1,5 +1,9 @@
 import { createVirtualTrack } from "./geometry";
-import type { PlaylistAutomationClip, PlaylistTrack, PlaylistState } from "./types";
+import type {
+  PlaylistAutomationClip,
+  PlaylistTrack,
+  PlaylistState,
+} from "./types";
 
 // Track identity helpers are grouped here so all generated IDs live in one obvious place.
 export function materializeTracksThrough(
@@ -43,7 +47,10 @@ export function makeTrackId(tracks: PlaylistTrack[]): string {
   return id;
 }
 
-export function createInsertedTrack(tracks: PlaylistTrack[], afterIndex: number): PlaylistTrack {
+export function createInsertedTrack(
+  tracks: PlaylistTrack[],
+  afterIndex: number,
+): PlaylistTrack {
   const base = createVirtualTrack(afterIndex + 1);
 
   return {

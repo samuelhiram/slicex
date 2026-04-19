@@ -187,12 +187,7 @@ function drawTrackRows(
     const rowColor = row.index % 2 === 0 ? COLORS.rowA : COLORS.rowB;
 
     graphics
-      .rect(
-        row.rowRect.x,
-        row.rowRect.y,
-        row.rowRect.width,
-        row.rowRect.height,
-      )
+      .rect(row.rowRect.x, row.rowRect.y, row.rowRect.width, row.rowRect.height)
       .fill({ color: rowColor });
     graphics
       .rect(
@@ -251,7 +246,10 @@ function drawTrackRows(
   }
 }
 
-function drawAutomation(graphics: Graphics, clipView: PlaylistClipPresentation): void {
+function drawAutomation(
+  graphics: Graphics,
+  clipView: PlaylistClipPresentation,
+): void {
   if (clipView.automationPoints.length === 0) {
     return;
   }
@@ -289,11 +287,17 @@ function drawClipLabel(
     return;
   }
 
-  addText(textLayer, clipView.clip.label, clipView.rect.x + 12, clipView.rect.y + 4, {
-    color: COLORS.text,
-    size: 12,
-    weight: "700",
-  });
+  addText(
+    textLayer,
+    clipView.clip.label,
+    clipView.rect.x + 12,
+    clipView.rect.y + 4,
+    {
+      color: COLORS.text,
+      size: 12,
+      weight: "700",
+    },
+  );
 }
 
 function drawClip(
@@ -476,7 +480,12 @@ function drawOverlay(
 
   if (marquee) {
     graphics
-      .rect(marquee.rect.x, marquee.rect.y, marquee.rect.width, marquee.rect.height)
+      .rect(
+        marquee.rect.x,
+        marquee.rect.y,
+        marquee.rect.width,
+        marquee.rect.height,
+      )
       .fill({ color: COLORS.marquee, alpha: 0.13 })
       .stroke({ color: COLORS.marquee, width: 1.5, alpha: 0.75 });
   }

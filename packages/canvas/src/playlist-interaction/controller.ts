@@ -90,7 +90,10 @@ type ActiveGesture =
       startScrollY: number;
     };
 
-function resolvePoint(host: HTMLElement, event: MouseEvent | PointerEvent | WheelEvent): PlaylistPoint {
+function resolvePoint(
+  host: HTMLElement,
+  event: MouseEvent | PointerEvent | WheelEvent,
+): PlaylistPoint {
   const rect = host.getBoundingClientRect();
 
   return {
@@ -99,7 +102,11 @@ function resolvePoint(host: HTMLElement, event: MouseEvent | PointerEvent | Whee
   };
 }
 
-function setCursor(host: HTMLElement, hit: PlaylistHit | null, active: ActiveGesture | null): void {
+function setCursor(
+  host: HTMLElement,
+  hit: PlaylistHit | null,
+  active: ActiveGesture | null,
+): void {
   if (active?.kind === "pan" || active?.kind === "clip-drag") {
     host.style.cursor = "grabbing";
     return;
@@ -173,7 +180,10 @@ function setCursor(host: HTMLElement, hit: PlaylistHit | null, active: ActiveGes
   host.style.cursor = "default";
 }
 
-function getSelectedDragClips(core: PlaylistCore, clip: PlaylistClip): PlaylistClip[] {
+function getSelectedDragClips(
+  core: PlaylistCore,
+  clip: PlaylistClip,
+): PlaylistClip[] {
   const state = core.getState();
   const selected = new Set(state.selection.clipIds);
 
@@ -236,14 +246,20 @@ function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
   }
 
   if (hit.kind === "track-header") {
-    core.setHover({ kind: "track", trackId: getTrackIdByIndex(core.getState(), hit.trackIndex) });
+    core.setHover({
+      kind: "track",
+      trackId: getTrackIdByIndex(core.getState(), hit.trackIndex),
+    });
     return;
   }
 
   core.setHover(null);
 }
 
-function hasSelectedClipsOnTrack(core: PlaylistCore, trackIndex: number): boolean {
+function hasSelectedClipsOnTrack(
+  core: PlaylistCore,
+  trackIndex: number,
+): boolean {
   const state = core.getState();
   const trackId = getTrackIdByIndex(state, trackIndex);
   const selected = new Set(state.selection.clipIds);
@@ -292,7 +308,8 @@ function executeTrackMenuAction(
   }
 
   if (action === "rename-track") {
-    const current = core.getState().tracks[trackIndex]?.label ?? `Track ${trackIndex + 1}`;
+    const current =
+      core.getState().tracks[trackIndex]?.label ?? `Track ${trackIndex + 1}`;
     const nextLabel =
       typeof window === "undefined"
         ? current
@@ -310,7 +327,10 @@ function executeTrackMenuAction(
   if (action === "recolor-track") {
     const current = core.getState().tracks[trackIndex]?.color;
     const currentIndex = Math.max(0, TRACK_COLORS.indexOf(current ?? ""));
-    core.recolorTrack(trackIndex, TRACK_COLORS[(currentIndex + 1) % TRACK_COLORS.length]);
+    core.recolorTrack(
+      trackIndex,
+      TRACK_COLORS[(currentIndex + 1) % TRACK_COLORS.length],
+    );
     return;
   }
 
@@ -382,7 +402,11 @@ export function createPlaylistInteractionController(
 
       if (hit.kind === "automation-body") {
         const next = automationPointFromScreen(state, hit.clip, point, metrics);
-        core.addAutomationPoint(hit.clip.id, snapTime(next.time, state, event.altKey), next.value);
+        core.addAutomationPoint(
+          hit.clip.id,
+          snapTime(next.time, state, event.altKey),
+          next.value,
+        );
         event.preventDefault();
         return;
       }
@@ -552,7 +576,7 @@ export function createPlaylistInteractionController(
 
     if (gesture.kind === "marquee") {
       core.setMarquee({ start: gesture.startPoint, current: point });
-          selectClipsInMarquee(core);
+      selectClipsInMarquee(core);
       event.preventDefault();
       return;
     }
@@ -590,7 +614,11 @@ export function createPlaylistInteractionController(
     }
 
     if (gesture.kind === "clip-resize") {
-      const time = snapTime(screenXToTime(state, point.x, metrics), state, event.altKey);
+      const time = snapTime(
+        screenXToTime(state, point.x, metrics),
+        state,
+        event.altKey,
+      );
       core.resizeClip(gesture.clipId, gesture.edge, time);
       event.preventDefault();
       return;
@@ -609,7 +637,9 @@ export function createPlaylistInteractionController(
       core.moveAutomationPoint(
         gesture.clipId,
         gesture.pointId,
-        event.ctrlKey ? gesture.originalTime : snapTime(next.time, state, event.altKey),
+        event.ctrlKey
+          ? gesture.originalTime
+          : snapTime(next.time, state, event.altKey),
         event.shiftKey ? gesture.originalValue : next.value,
       );
       event.preventDefault();
@@ -628,7 +658,9 @@ export function createPlaylistInteractionController(
       const track = getHorizontalScrollbarRect(state, metrics);
       const thumb = getHorizontalScrollbarThumbRect(state, metrics);
       const travel = Math.max(1, track.width - thumb.width);
-      const delta = ((point.x - gesture.startPoint.x) / travel) * metrics.scrollbarVirtualRangePx;
+      const delta =
+        ((point.x - gesture.startPoint.x) / travel) *
+        metrics.scrollbarVirtualRangePx;
 
       core.updateViewport({ scrollX: gesture.startScrollX + delta });
       event.preventDefault();
@@ -639,7 +671,9 @@ export function createPlaylistInteractionController(
       const track = getVerticalScrollbarRect(state, metrics);
       const thumb = getVerticalScrollbarThumbRect(state, metrics);
       const travel = Math.max(1, track.height - thumb.height);
-      const delta = ((point.y - gesture.startPoint.y) / travel) * metrics.scrollbarVirtualRangePx;
+      const delta =
+        ((point.y - gesture.startPoint.y) / travel) *
+        metrics.scrollbarVirtualRangePx;
 
       core.updateViewport({ scrollY: gesture.startScrollY + delta });
       event.preventDefault();
@@ -657,7 +691,15 @@ export function createPlaylistInteractionController(
 
     activeGesture = null;
     host.releasePointerCapture?.(event.pointerId);
-    setCursor(host, hitTestPlaylist(core.getPresentation(), resolvePoint(host, event), metrics), null);
+    setCursor(
+      host,
+      hitTestPlaylist(
+        core.getPresentation(),
+        resolvePoint(host, event),
+        metrics,
+      ),
+      null,
+    );
   };
 
   const handleWheel = (event: WheelEvent): void => {

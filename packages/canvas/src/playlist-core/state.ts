@@ -1,8 +1,4 @@
-import {
-  clamp,
-  getTrackIdByIndex,
-  isAutomationClip,
-} from "./geometry";
+import { clamp, getTrackIdByIndex, isAutomationClip } from "./geometry";
 import {
   DEFAULT_PLAYLIST_METRICS,
   type PlaylistContextMenu,
@@ -42,9 +38,10 @@ export class PlaylistCore {
 
   private readonly listeners = new Set<PlaylistStateListener>();
 
-  private presentationCache:
-    | { state: PlaylistState; presentation: PlaylistPresentation }
-    | null = null;
+  private presentationCache: {
+    state: PlaylistState;
+    presentation: PlaylistPresentation;
+  } | null = null;
 
   readonly metrics: PlaylistMetrics;
 
@@ -209,7 +206,8 @@ export class PlaylistCore {
   moveClips(updates: PlaylistClipMoveUpdate[]): void {
     const byId = new Map(updates.map((update) => [update.id, update]));
     const maxTrackIndex = updates.reduce(
-      (max, update) => Math.max(max, Math.max(0, Math.floor(update.trackIndex))),
+      (max, update) =>
+        Math.max(max, Math.max(0, Math.floor(update.trackIndex))),
       this.state.tracks.length - 1,
     );
     const state = materializeTracksThrough(this.state, maxTrackIndex);
@@ -234,7 +232,9 @@ export class PlaylistCore {
     const state = materializeTracksThrough(this.state, trackIndex);
     const trackId = getTrackIdByIndex(state, trackIndex);
     const removedIds = new Set(
-      state.clips.filter((clip) => clip.trackId === trackId).map((clip) => clip.id),
+      state.clips
+        .filter((clip) => clip.trackId === trackId)
+        .map((clip) => clip.id),
     );
 
     this.commit({
@@ -299,7 +299,10 @@ export class PlaylistCore {
     const state = materializeTracksThrough(this.state, trackIndex);
     const trackId = getTrackIdByIndex(state, trackIndex);
 
-    if (state.clips.some((clip) => clip.trackId === trackId) || state.tracks.length <= 1) {
+    if (
+      state.clips.some((clip) => clip.trackId === trackId) ||
+      state.tracks.length <= 1
+    ) {
       this.closeContextMenu();
       return;
     }
@@ -326,11 +329,7 @@ export class PlaylistCore {
         return { ...clip, duration: nextEnd - start };
       }
 
-      const nextStart = clamp(
-        time,
-        0,
-        end - this.metrics.minClipDuration,
-      );
+      const nextStart = clamp(time, 0, end - this.metrics.minClipDuration);
       return { ...clip, start: nextStart, duration: end - nextStart };
     });
 

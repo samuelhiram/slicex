@@ -40,10 +40,17 @@ function getAutomationPointHit(
   point: PlaylistPoint,
   metrics: PlaylistMetrics,
 ): PlaylistHit | null {
-  for (let index = clipView.automationPoints.length - 1; index >= 0; index -= 1) {
+  for (
+    let index = clipView.automationPoints.length - 1;
+    index >= 0;
+    index -= 1
+  ) {
     const automationPoint = clipView.automationPoints[index];
 
-    if (distance(point, automationPoint.position) <= metrics.automationPointRadius + 4) {
+    if (
+      distance(point, automationPoint.position) <=
+      metrics.automationPointRadius + 4
+    ) {
       return {
         kind: "automation-point",
         clip: clipView.clip as PlaylistAutomationClip,
@@ -61,10 +68,13 @@ export function hitTestPlaylist(
   point: PlaylistPoint,
   metrics: PlaylistMetrics,
 ): PlaylistHit {
-  const { contextMenu, playPosition, scrollbars, trackRows, visibleClipViews } = presentation;
+  const { contextMenu, playPosition, scrollbars, trackRows, visibleClipViews } =
+    presentation;
 
   if (contextMenu && pointInRect(point, contextMenu.rect)) {
-    const itemIndex = contextMenu.items.findIndex((item) => pointInRect(point, item.rect));
+    const itemIndex = contextMenu.items.findIndex((item) =>
+      pointInRect(point, item.rect),
+    );
 
     if (itemIndex >= 0) {
       const item = contextMenu.items[itemIndex];
@@ -105,7 +115,9 @@ export function hitTestPlaylist(
   }
 
   if (point.x < metrics.trackHeaderWidth && point.y > metrics.rulerHeight) {
-    const row = trackRows.find((candidate) => pointInRect(point, candidate.headerRect));
+    const row = trackRows.find((candidate) =>
+      pointInRect(point, candidate.headerRect),
+    );
 
     if (row) {
       return {

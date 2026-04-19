@@ -13,7 +13,9 @@ import type {
 } from "./types";
 
 // Pure state transforms live here so the mutable PlaylistCore facade stays small and easy to scan.
-export function cloneSelection(selection: PlaylistSelection): PlaylistSelection {
+export function cloneSelection(
+  selection: PlaylistSelection,
+): PlaylistSelection {
   return {
     clipIds: [...selection.clipIds],
     automationPointIds: [...selection.automationPointIds],
@@ -72,8 +74,16 @@ export function normalizeState(
     metrics.minPxPerBeat,
     metrics.maxPxPerBeat,
   );
-  state.viewport.scrollX = clamp(state.viewport.scrollX, 0, getMaxScrollX(state, metrics));
-  state.viewport.scrollY = clamp(state.viewport.scrollY, 0, getMaxScrollY(state, metrics));
+  state.viewport.scrollX = clamp(
+    state.viewport.scrollX,
+    0,
+    getMaxScrollX(state, metrics),
+  );
+  state.viewport.scrollY = clamp(
+    state.viewport.scrollY,
+    0,
+    getMaxScrollY(state, metrics),
+  );
   state.playPosition.time = Math.max(0, state.playPosition.time);
   state.clips = state.clips.map((clip) => {
     const duration = Math.max(metrics.minClipDuration, clip.duration);

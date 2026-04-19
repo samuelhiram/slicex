@@ -44,14 +44,15 @@ export interface PlaylistTrackMenuDefinition {
   label: string;
 }
 
-export const PLAYLIST_TRACK_MENU_ITEMS: readonly PlaylistTrackMenuDefinition[] = [
-  { action: "clear-track", label: "Delete track content" },
-  { action: "delete-selected", label: "Delete selected clips on track" },
-  { action: "rename-track", label: "Rename track" },
-  { action: "recolor-track", label: "Recolor track" },
-  { action: "insert-track-below", label: "Insert track below" },
-  { action: "delete-empty-track", label: "Delete empty track" },
-] as const;
+export const PLAYLIST_TRACK_MENU_ITEMS: readonly PlaylistTrackMenuDefinition[] =
+  [
+    { action: "clear-track", label: "Delete track content" },
+    { action: "delete-selected", label: "Delete selected clips on track" },
+    { action: "rename-track", label: "Rename track" },
+    { action: "recolor-track", label: "Recolor track" },
+    { action: "insert-track-below", label: "Insert track below" },
+    { action: "delete-empty-track", label: "Delete empty track" },
+  ] as const;
 
 export interface PlaylistLayoutPresentation {
   sceneRect: PlaylistRect;
@@ -209,8 +210,14 @@ function createLayout(
     height: Math.max(0, state.viewport.height - metrics.rulerHeight),
   };
   const scrollbarCornerRect = {
-    x: Math.max(metrics.trackHeaderWidth, state.viewport.width - metrics.scrollbarSize),
-    y: Math.max(metrics.rulerHeight, state.viewport.height - metrics.scrollbarSize),
+    x: Math.max(
+      metrics.trackHeaderWidth,
+      state.viewport.width - metrics.scrollbarSize,
+    ),
+    y: Math.max(
+      metrics.rulerHeight,
+      state.viewport.height - metrics.scrollbarSize,
+    ),
     width: metrics.scrollbarSize,
     height: metrics.scrollbarSize,
   };
@@ -225,10 +232,9 @@ function createLayout(
   };
 }
 
-function getTrackFlags(state: PlaylistState): Map<
-  string,
-  { hasClips: boolean; hasSelectedClips: boolean }
-> {
+function getTrackFlags(
+  state: PlaylistState,
+): Map<string, { hasClips: boolean; hasSelectedClips: boolean }> {
   const selectedClipIds = new Set(state.selection.clipIds);
   const flagsByTrackId = new Map<
     string,
@@ -321,23 +327,38 @@ function createClipViews(
     state.hover != null && "clipId" in state.hover ? state.hover.clipId : null;
   const clipVisibilityBounds = normalizeRect({
     x: Math.max(0, metrics.trackHeaderWidth - metrics.timelineOverscanPx),
-    y: Math.max(0, metrics.rulerHeight - metrics.trackOverscan * metrics.trackHeight),
-    width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth + metrics.timelineOverscanPx * 2),
-    height: Math.max(0, state.viewport.height - metrics.rulerHeight + metrics.trackOverscan * metrics.trackHeight * 2),
+    y: Math.max(
+      0,
+      metrics.rulerHeight - metrics.trackOverscan * metrics.trackHeight,
+    ),
+    width: Math.max(
+      0,
+      state.viewport.width -
+        metrics.trackHeaderWidth +
+        metrics.timelineOverscanPx * 2,
+    ),
+    height: Math.max(
+      0,
+      state.viewport.height -
+        metrics.rulerHeight +
+        metrics.trackOverscan * metrics.trackHeight * 2,
+    ),
   });
 
   return state.clips.map((clip) => {
     const rect = getClipRect(state, clip, metrics);
     const titleRect = getClipTitleRect(state, clip, metrics);
-    const handleHeight = clip.type === "automation" ? titleRect.height : rect.height;
-    const bodyRect = clip.type === "automation"
-      ? {
-          x: rect.x,
-          y: rect.y + titleRect.height,
-          width: rect.width,
-          height: Math.max(0, rect.height - titleRect.height),
-        }
-      : rect;
+    const handleHeight =
+      clip.type === "automation" ? titleRect.height : rect.height;
+    const bodyRect =
+      clip.type === "automation"
+        ? {
+            x: rect.x,
+            y: rect.y + titleRect.height,
+            width: rect.width,
+            height: Math.max(0, rect.height - titleRect.height),
+          }
+        : rect;
     const automationPoints = isAutomationClip(clip)
       ? clip.points.map((point) => ({
           point,
@@ -479,8 +500,7 @@ function createPlayPosition(
   return {
     time: state.playPosition.time,
     x,
-    isVisible:
-      x >= metrics.trackHeaderWidth && x <= state.viewport.width,
+    isVisible: x >= metrics.trackHeaderWidth && x <= state.viewport.width,
     isRunning: state.playPosition.isRunning,
   };
 }
