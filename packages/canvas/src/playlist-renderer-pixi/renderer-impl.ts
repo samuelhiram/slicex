@@ -85,6 +85,20 @@ function clearTextLayer(layer: Container): void {
   }
 }
 
+function drawSceneBackground(
+  graphics: Graphics,
+  presentation: PlaylistPresentation,
+): void {
+  graphics
+    .rect(
+      presentation.layout.sceneRect.x,
+      presentation.layout.sceneRect.y,
+      presentation.layout.sceneRect.width,
+      presentation.layout.sceneRect.height,
+    )
+    .fill({ color: COLORS.background });
+}
+
 function drawGridAndRuler(
   graphics: Graphics,
   textLayer: Container,
@@ -92,14 +106,6 @@ function drawGridAndRuler(
 ): void {
   const { layout, metrics } = presentation;
 
-  graphics
-    .rect(
-      layout.sceneRect.x,
-      layout.sceneRect.y,
-      layout.sceneRect.width,
-      layout.sceneRect.height,
-    )
-    .fill({ color: COLORS.background });
   graphics
     .rect(
       layout.trackHeaderRect.x,
@@ -155,6 +161,25 @@ function drawGridAndRuler(
       });
     }
   }
+
+  addText(textLayer, "SliceX Playlist", 15, 11, {
+    color: COLORS.text,
+    size: 13,
+    weight: "700",
+  });
+}
+
+function drawTrackRowsBackground(
+  graphics: Graphics,
+  presentation: PlaylistPresentation,
+): void {
+  for (const row of presentation.trackRows) {
+    const rowColor = row.index % 2 === 0 ? COLORS.rowA : COLORS.rowB;
+
+    graphics
+      .rect(row.rowRect.x, row.rowRect.y, row.rowRect.width, row.rowRect.height)
+      .fill({ color: rowColor });
+  }
 }
 
 function drawTimelineGridOverlay(
@@ -184,11 +209,7 @@ function drawTrackRows(
 
   for (const row of presentation.trackRows) {
     const color = parseHexColor(row.track.color, COLORS.textMuted);
-    const rowColor = row.index % 2 === 0 ? COLORS.rowA : COLORS.rowB;
 
-    graphics
-      .rect(row.rowRect.x, row.rowRect.y, row.rowRect.width, row.rowRect.height)
-      .fill({ color: rowColor });
     graphics
       .rect(
         row.headerRect.x,
@@ -244,6 +265,28 @@ function drawTrackRows(
         .fill({ color: COLORS.selected, alpha: 0.6 });
     }
   }
+}
+
+function drawPlayPositionRulerMarker(
+  graphics: Graphics,
+  presentation: PlaylistPresentation,
+): void {
+  const { metrics, playPosition } = presentation;
+
+  if (!playPosition.isVisible) {
+    return;
+  }
+
+  graphics
+    .roundRect(playPosition.x - 7, 3, 14, metrics.rulerHeight - 6, 3)
+    .fill({ color: COLORS.playPosition })
+    .stroke({ color: COLORS.text, width: 1, alpha: 0.8 });
+  graphics
+    .moveTo(playPosition.x - 7, metrics.rulerHeight - 1)
+    .lineTo(playPosition.x + 7, metrics.rulerHeight - 1)
+    .lineTo(playPosition.x, metrics.rulerHeight + 7)
+    .lineTo(playPosition.x - 7, metrics.rulerHeight - 1)
+    .fill({ color: COLORS.playPosition });
 }
 
 function drawAutomation(
@@ -499,11 +542,14 @@ function drawPlaylist(
   graphics.clear();
   clearTextLayer(textLayer);
 
-  drawGridAndRuler(graphics, textLayer, presentation);
-  drawTrackRows(graphics, textLayer, presentation);
+  drawSceneBackground(graphics, presentation);
+  drawTrackRowsBackground(graphics, presentation);
   drawTimelineGridOverlay(graphics, presentation);
   drawClips(graphics, textLayer, presentation);
   drawOverlay(graphics, presentation);
+  drawGridAndRuler(graphics, textLayer, presentation);
+  drawTrackRows(graphics, textLayer, presentation);
+  drawPlayPositionRulerMarker(graphics, presentation);
   drawScrollbars(graphics, presentation);
   drawContextMenu(graphics, textLayer, presentation);
 
@@ -521,20 +567,70 @@ export function createPlaylistRenderer(
 ): PlaylistRenderer {
   const app = new Application();
   const root = new Container();
-  const graphics = new Graphics();
-  const textLayer = new Container();
+  const sceneGraphics = new Graphics();
+  const timelineMask = new Graphics();
+  const timelineContainer = new Container();
+  const timelineGraphics = new Graphics();
+  const timelineTextLayer = new Container();
+  const chromeGraphics = new Graphics();
+  const chromeTextLayer = new Container();
+  const foregroundGraphics = new Graphics();
+  const foregroundTextLayer = new Container();
   let destroyed = false;
   let ready = false;
 
   root.eventMode = "none";
-  root.addChild(graphics, textLayer);
+  timelineContainer.mask = timelineMask;
+  timelineContainer.addChild(timelineGraphics, timelineTextLayer);
+  root.addChild(
+    sceneGraphics,
+    timelineMask,
+    timelineContainer,
+    chromeGraphics,
+    chromeTextLayer,
+    foregroundGraphics,
+    foregroundTextLayer,
+  );
 
   const renderNow = (): void => {
     if (!ready || destroyed) {
       return;
     }
 
-    drawPlaylist(graphics, textLayer, core.getPresentation());
+    const presentation = core.getPresentation();
+
+    sceneGraphics.clear();
+    timelineMask.clear();
+    timelineGraphics.clear();
+    clearTextLayer(timelineTextLayer);
+    chromeGraphics.clear();
+    clearTextLayer(chromeTextLayer);
+    foregroundGraphics.clear();
+    clearTextLayer(foregroundTextLayer);
+
+    drawSceneBackground(sceneGraphics, presentation);
+    drawTrackRowsBackground(sceneGraphics, presentation);
+
+    timelineMask
+      .rect(
+        presentation.layout.timelineRect.x,
+        presentation.layout.timelineRect.y,
+        presentation.layout.timelineRect.width,
+        presentation.layout.timelineRect.height,
+      )
+      .fill({ color: 0xffffff });
+
+    drawTimelineGridOverlay(timelineGraphics, presentation);
+    drawClips(timelineGraphics, timelineTextLayer, presentation);
+    drawOverlay(timelineGraphics, presentation);
+
+    drawGridAndRuler(chromeGraphics, chromeTextLayer, presentation);
+    drawTrackRows(chromeGraphics, chromeTextLayer, presentation);
+    drawPlayPositionRulerMarker(chromeGraphics, presentation);
+
+    drawScrollbars(foregroundGraphics, presentation);
+    drawContextMenu(foregroundGraphics, foregroundTextLayer, presentation);
+
     (app as any).render?.();
   };
 
@@ -596,7 +692,14 @@ export function createPlaylistRenderer(
       destroyed = true;
       subscription.unsubscribe();
       resizeObserver?.disconnect();
-      clearTextLayer(textLayer);
+      sceneGraphics.clear();
+      timelineMask.clear();
+      timelineGraphics.clear();
+      clearTextLayer(timelineTextLayer);
+      chromeGraphics.clear();
+      clearTextLayer(chromeTextLayer);
+      foregroundGraphics.clear();
+      clearTextLayer(foregroundTextLayer);
 
       try {
         app.stage.removeChild(root);
