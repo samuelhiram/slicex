@@ -21,7 +21,7 @@ import type {
   PlaylistPoint,
   PlaylistTrackMenuAction,
 } from "../playlist-core";
-import { hitTestPlaylist, type PlaylistHit } from "./hit-test.js";
+import { hitTestPlaylist, type PlaylistHit } from "./hit-test";
 
 export interface PlaylistInteractionController {
   destroy: () => void;
