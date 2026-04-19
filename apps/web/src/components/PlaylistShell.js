@@ -20,7 +20,17 @@ export function PlaylistShell() {
                 setError(reason instanceof Error ? reason.message : "Renderer failed.");
             },
         });
+        let frameId = 0;
+        let lastFrame = performance.now();
+        const tick = (now) => {
+            const deltaSeconds = Math.min(0.05, (now - lastFrame) / 1000);
+            lastFrame = now;
+            core.advancePlayPosition(deltaSeconds * 2);
+            frameId = requestAnimationFrame(tick);
+        };
+        frameId = requestAnimationFrame(tick);
         return () => {
+            cancelAnimationFrame(frameId);
             interaction.destroy();
             renderer.destroy();
         };

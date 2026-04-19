@@ -1,4 +1,4 @@
-import { clamp, getMaxScrollX, getMaxScrollY, getTrackIdByIndex, isAutomationClip, } from "./geometry";
+import { clamp, createVirtualTrack, getMaxScrollX, getMaxScrollY, getTrackIdByIndex, isAutomationClip, } from "./geometry";
 import { DEFAULT_PLAYLIST_METRICS, } from "./types";
 function cloneSelection(selection) {
     return {
@@ -28,8 +28,14 @@ function cloneState(state) {
                 current: { ...state.marquee.current },
             }
             : null,
+        contextMenu: state.contextMenu
+            ? {
+                ...state.contextMenu,
+                position: { ...state.contextMenu.position },
+            }
+            : null,
         hover: state.hover ? { ...state.hover } : null,
-        playhead: state.playhead,
+        playPosition: { ...state.playPosition },
     };
 }
 function sortAutomationPoints(points) {
@@ -40,6 +46,7 @@ function normalizeState(input, metrics) {
     state.viewport.pxPerBeat = clamp(state.viewport.pxPerBeat, metrics.minPxPerBeat, metrics.maxPxPerBeat);
     state.viewport.scrollX = clamp(state.viewport.scrollX, 0, getMaxScrollX(state, metrics));
     state.viewport.scrollY = clamp(state.viewport.scrollY, 0, getMaxScrollY(state, metrics));
+    state.playPosition.time = Math.max(0, state.playPosition.time);
     state.clips = state.clips.map((clip) => {
         const duration = Math.max(metrics.minClipDuration, clip.duration);
         const start = Math.max(0, clip.start);
@@ -59,6 +66,16 @@ function normalizeState(input, metrics) {
     });
     return state;
 }
+function materializeTracksThrough(state, maxTrackIndex) {
+    if (maxTrackIndex < state.tracks.length) {
+        return state;
+    }
+    const tracks = [...state.tracks];
+    for (let index = tracks.length; index <= maxTrackIndex; index += 1) {
+        tracks.push(createVirtualTrack(index));
+    }
+    return { ...state, tracks };
+}
 function makePointId(clip) {
     let index = clip.points.length + 1;
     let id = `${clip.id}-pt-${index}`;
@@ -67,6 +84,23 @@ function makePointId(clip) {
         id = `${clip.id}-pt-${index}`;
     }
     return id;
+}
+function makeTrackId(tracks) {
+    let index = tracks.length + 1;
+    let id = `track-${index}`;
+    while (tracks.some((track) => track.id === id)) {
+        index += 1;
+        id = `track-${index}`;
+    }
+    return id;
+}
+function createInsertedTrack(tracks, afterIndex) {
+    const base = createVirtualTrack(afterIndex + 1);
+    return {
+        ...base,
+        id: makeTrackId(tracks),
+        label: `Track ${afterIndex + 2}`,
+    };
 }
 export class PlaylistCore {
     state;
@@ -135,21 +169,66 @@ export class PlaylistCore {
                 : null,
         });
     }
+    setContextMenu(contextMenu) {
+        this.commit({
+            ...this.state,
+            contextMenu: contextMenu
+                ? {
+                    ...contextMenu,
+                    position: { ...contextMenu.position },
+                }
+                : null,
+        });
+    }
+    openTrackContextMenu(trackIndex, position) {
+        const materialized = materializeTracksThrough(this.state, trackIndex);
+        this.commit({
+            ...materialized,
+            contextMenu: {
+                kind: "track",
+                trackIndex: Math.max(0, Math.floor(trackIndex)),
+                position: { ...position },
+            },
+        });
+    }
+    closeContextMenu() {
+        this.setContextMenu(null);
+    }
     setHover(hover) {
         this.commit({
             ...this.state,
             hover: hover ? { ...hover } : null,
         });
     }
-    setPlayhead(playhead) {
+    setPlayPosition(time) {
         this.commit({
             ...this.state,
-            playhead: Math.max(0, playhead),
+            playPosition: {
+                ...this.state.playPosition,
+                time: Math.max(0, time),
+            },
         });
+    }
+    setPlayPositionRunning(isRunning) {
+        this.commit({
+            ...this.state,
+            playPosition: {
+                ...this.state.playPosition,
+                isRunning,
+            },
+        });
+    }
+    advancePlayPosition(deltaTime) {
+        if (!this.state.playPosition.isRunning) {
+            return;
+        }
+        this.setPlayPosition(this.state.playPosition.time + Math.max(0, deltaTime));
     }
     moveClips(updates) {
         const byId = new Map(updates.map((update) => [update.id, update]));
-        const clips = this.state.clips.map((clip) => {
+        const maxTrackIndex = updates.reduce((max, update) => Math.max(max, Math.max(0, Math.floor(update.trackIndex))), this.state.tracks.length - 1);
+        const state = materializeTracksThrough(this.state, maxTrackIndex);
+        const clips = state.clips.map((clip) => {
             const update = byId.get(clip.id);
             if (!update) {
                 return clip;
@@ -157,10 +236,70 @@ export class PlaylistCore {
             return {
                 ...clip,
                 start: Math.max(0, update.start),
-                trackId: getTrackIdByIndex(this.state, update.trackIndex),
+                trackId: getTrackIdByIndex(state, update.trackIndex),
             };
         });
-        this.commit({ ...this.state, clips });
+        this.commit({ ...state, clips });
+    }
+    clearTrackClips(trackIndex) {
+        const state = materializeTracksThrough(this.state, trackIndex);
+        const trackId = getTrackIdByIndex(state, trackIndex);
+        const removedIds = new Set(state.clips.filter((clip) => clip.trackId === trackId).map((clip) => clip.id));
+        this.commit({
+            ...state,
+            clips: state.clips.filter((clip) => clip.trackId !== trackId),
+            selection: {
+                clipIds: state.selection.clipIds.filter((id) => !removedIds.has(id)),
+                automationPointIds: state.selection.automationPointIds,
+            },
+            contextMenu: null,
+        });
+    }
+    deleteSelectedClipsOnTrack(trackIndex) {
+        const state = materializeTracksThrough(this.state, trackIndex);
+        const trackId = getTrackIdByIndex(state, trackIndex);
+        const selected = new Set(state.selection.clipIds);
+        const removedIds = new Set(state.clips
+            .filter((clip) => clip.trackId === trackId && selected.has(clip.id))
+            .map((clip) => clip.id));
+        this.commit({
+            ...state,
+            clips: state.clips.filter((clip) => !removedIds.has(clip.id)),
+            selection: {
+                clipIds: state.selection.clipIds.filter((id) => !removedIds.has(id)),
+                automationPointIds: state.selection.automationPointIds,
+            },
+            contextMenu: null,
+        });
+    }
+    renameTrack(trackIndex, label) {
+        const state = materializeTracksThrough(this.state, trackIndex);
+        const tracks = state.tracks.map((track, index) => index === trackIndex ? { ...track, label } : track);
+        this.commit({ ...state, tracks, contextMenu: null });
+    }
+    recolorTrack(trackIndex, color) {
+        const state = materializeTracksThrough(this.state, trackIndex);
+        const tracks = state.tracks.map((track, index) => index === trackIndex ? { ...track, color } : track);
+        this.commit({ ...state, tracks, contextMenu: null });
+    }
+    insertTrackBelow(trackIndex) {
+        const state = materializeTracksThrough(this.state, trackIndex);
+        const tracks = [...state.tracks];
+        tracks.splice(trackIndex + 1, 0, createInsertedTrack(tracks, trackIndex));
+        this.commit({ ...state, tracks, contextMenu: null });
+    }
+    deleteEmptyTrack(trackIndex) {
+        const state = materializeTracksThrough(this.state, trackIndex);
+        const trackId = getTrackIdByIndex(state, trackIndex);
+        if (state.clips.some((clip) => clip.trackId === trackId) || state.tracks.length <= 1) {
+            this.closeContextMenu();
+            return;
+        }
+        this.commit({
+            ...state,
+            tracks: state.tracks.filter((_, index) => index !== trackIndex),
+            contextMenu: null,
+        });
     }
     resizeClip(clipId, edge, time) {
         const clips = this.state.clips.map((clip) => {

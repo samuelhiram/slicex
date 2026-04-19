@@ -4,21 +4,38 @@
 - `pnpm dev`
 - Abrir `http://localhost:3000`
 - Ver Playlist demo directo.
-- Arrastrar clip horizontal.
-- Arrastrar clip a otro track.
-- Resize desde borde izquierdo.
-- Resize desde borde derecho.
+- Clip body: arrastrar horizontal.
+- Clip body: mover entre tracks.
+- Borde izquierdo: resize.
+- Borde derecho: resize.
 - Drag en vacio: marquee selection.
 - Wheel: scroll vertical.
 - Shift + wheel: scroll horizontal.
 - Ctrl + wheel: zoom anclado al cursor.
 - Mouse medio + drag: pan.
-- Automation clip: mover punto.
-- Automation clip: Shift al mover punto bloquea vertical.
-- Automation clip: Ctrl al mover punto bloquea horizontal.
-- Automation clip: Alt ignora snap.
-- Right click en automation body: agrega punto.
-- Right click en punto: elimina punto.
-- Automation clip: resize desde title bar.
-- Zoom/pan no rompe render.
-- Pixi no almacena estado real; `playlist-core` manda.
+- Scrollbar horizontal: drag navega derecha/izquierda.
+- Scrollbar vertical: drag navega arriba/abajo.
+- Ruler click: mueve Play Position Marker.
+- Marker drag: scrub.
+- Pan/zoom: marker queda alineado.
+- Space: marker avanza/pausa sin audio.
+- Automation point: mover.
+- Shift + drag point: bloquea vertical.
+- Ctrl + drag point: bloquea horizontal.
+- Alt + drag/resize: ignora snap.
+- Right click automation body: agrega punto.
+- Right click punto: elimina punto.
+- Automation title/handles: resize.
+- Track headers: opacos, solidos, legibles.
+- Right click track header: menu custom.
+- Menu: Delete track content limpia track correcto.
+- Menu: Delete selected clips on track borra seleccion del track.
+- Menu: Rename track cambia label.
+- Menu: Recolor track cambia color.
+- Menu: Insert track below inserta fila.
+- Menu: Delete empty track elimina fila vacia.
+- Scroll abajo: aparecen tracks vacias.
+- Drag clip bajo ultima track real: crea track.
+- Scroll derecha: timeline sigue sin borde visible.
+- Renderer pinta viewport + overscan.
+- Estado real vive en `playlist-core`.

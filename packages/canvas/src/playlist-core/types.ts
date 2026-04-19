@@ -53,6 +53,11 @@ export interface PlaylistViewport {
   height: number;
 }
 
+export interface PlaylistPlayPosition {
+  time: number;
+  isRunning: boolean;
+}
+
 export interface PlaylistSnap {
   enabled: boolean;
   step: number;
@@ -67,6 +72,14 @@ export interface PlaylistMarquee {
   start: PlaylistPoint;
   current: PlaylistPoint;
 }
+
+export interface PlaylistTrackContextMenu {
+  kind: "track";
+  trackIndex: number;
+  position: PlaylistPoint;
+}
+
+export type PlaylistContextMenu = PlaylistTrackContextMenu | null;
 
 export type PlaylistHover =
   | { kind: "clip"; clipId: string }
@@ -83,8 +96,9 @@ export interface PlaylistState {
   snap: PlaylistSnap;
   selection: PlaylistSelection;
   marquee: PlaylistMarquee | null;
+  contextMenu: PlaylistContextMenu;
   hover: PlaylistHover;
-  playhead: number;
+  playPosition: PlaylistPlayPosition;
 }
 
 export interface PlaylistMetrics {
@@ -99,6 +113,14 @@ export interface PlaylistMetrics {
   minPxPerBeat: number;
   maxPxPerBeat: number;
   beatsPerBar: number;
+  trackOverscan: number;
+  timelineOverscanPx: number;
+  playMarkerHitWidth: number;
+  scrollbarSize: number;
+  scrollbarThumbMin: number;
+  scrollbarVirtualRangePx: number;
+  contextMenuWidth: number;
+  contextMenuItemHeight: number;
 }
 
 export type PlaylistStateListener = (state: PlaylistState) => void;
@@ -115,4 +137,12 @@ export const DEFAULT_PLAYLIST_METRICS: PlaylistMetrics = {
   minPxPerBeat: 8,
   maxPxPerBeat: 96,
   beatsPerBar: 4,
+  trackOverscan: 3,
+  timelineOverscanPx: 120,
+  playMarkerHitWidth: 14,
+  scrollbarSize: 14,
+  scrollbarThumbMin: 44,
+  scrollbarVirtualRangePx: 120000,
+  contextMenuWidth: 228,
+  contextMenuItemHeight: 28,
 };

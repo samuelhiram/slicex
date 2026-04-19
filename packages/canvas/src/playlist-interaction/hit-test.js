@@ -1,8 +1,44 @@
-import { getAutomationPointPosition, getClipRect, getClipTitleRect, isAutomationClip, pointInRect, } from "../playlist-core";
+import { getAutomationPointPosition, getClipRect, getClipTitleRect, getContextMenuRect, getHorizontalScrollbarRect, getHorizontalScrollbarThumbRect, getVerticalScrollbarRect, getVerticalScrollbarThumbRect, isAutomationClip, pointInRect, screenYToTrackIndex, timeToScreenX, } from "../playlist-core";
 function distance(left, right) {
     return Math.hypot(left.x - right.x, left.y - right.y);
 }
 export function hitTestPlaylist(state, point, metrics) {
+    const menuRect = getContextMenuRect(state, metrics);
+    if (menuRect && pointInRect(point, menuRect)) {
+        return {
+            kind: "context-menu",
+            itemIndex: Math.floor((point.y - menuRect.y - 4) / metrics.contextMenuItemHeight),
+        };
+    }
+    const horizontalScrollbarRect = getHorizontalScrollbarRect(state, metrics);
+    if (pointInRect(point, horizontalScrollbarRect)) {
+        return {
+            kind: "scrollbar-horizontal",
+            onThumb: pointInRect(point, getHorizontalScrollbarThumbRect(state, metrics)),
+        };
+    }
+    const verticalScrollbarRect = getVerticalScrollbarRect(state, metrics);
+    if (pointInRect(point, verticalScrollbarRect)) {
+        return {
+            kind: "scrollbar-vertical",
+            onThumb: pointInRect(point, getVerticalScrollbarThumbRect(state, metrics)),
+        };
+    }
+    const markerX = timeToScreenX(state, state.playPosition.time, metrics);
+    if (point.y <= metrics.rulerHeight &&
+        point.x >= metrics.trackHeaderWidth &&
+        Math.abs(point.x - markerX) <= metrics.playMarkerHitWidth) {
+        return { kind: "play-position-marker" };
+    }
+    if (point.y <= metrics.rulerHeight && point.x >= metrics.trackHeaderWidth) {
+        return { kind: "ruler" };
+    }
+    if (point.x < metrics.trackHeaderWidth && point.y > metrics.rulerHeight) {
+        return {
+            kind: "track-header",
+            trackIndex: screenYToTrackIndex(state, point.y, metrics),
+        };
+    }
     for (let index = state.clips.length - 1; index >= 0; index -= 1) {
         const clip = state.clips[index];
         const rect = getClipRect(state, clip, metrics);

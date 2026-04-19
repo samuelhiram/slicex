@@ -109,7 +109,11 @@ export function createDemoPlaylistState(): PlaylistState {
       automationPointIds: [],
     },
     marquee: null,
+    contextMenu: null,
     hover: null,
-    playhead: 0,
+    playPosition: {
+      time: 0,
+      isRunning: false,
+    },
   };
 }

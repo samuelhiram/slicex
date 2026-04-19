@@ -2,8 +2,15 @@ import {
   getAutomationPointPosition,
   getClipRect,
   getClipTitleRect,
+  getContextMenuRect,
+  getHorizontalScrollbarRect,
+  getHorizontalScrollbarThumbRect,
+  getVerticalScrollbarRect,
+  getVerticalScrollbarThumbRect,
   isAutomationClip,
   pointInRect,
+  screenYToTrackIndex,
+  timeToScreenX,
 } from "../playlist-core";
 import type {
   PlaylistAutomationClip,
@@ -14,6 +21,12 @@ import type {
 } from "../playlist-core";
 
 export type PlaylistHit =
+  | { kind: "context-menu"; itemIndex: number }
+  | { kind: "scrollbar-horizontal"; onThumb: boolean }
+  | { kind: "scrollbar-vertical"; onThumb: boolean }
+  | { kind: "track-header"; trackIndex: number }
+  | { kind: "play-position-marker" }
+  | { kind: "ruler" }
   | { kind: "automation-point"; clip: PlaylistAutomationClip; pointId: string }
   | { kind: "resize-left"; clip: PlaylistClip }
   | { kind: "resize-right"; clip: PlaylistClip }
@@ -30,6 +43,62 @@ export function hitTestPlaylist(
   point: PlaylistPoint,
   metrics: PlaylistMetrics,
 ): PlaylistHit {
+  const menuRect = getContextMenuRect(state, metrics);
+
+  if (menuRect && pointInRect(point, menuRect)) {
+    return {
+      kind: "context-menu",
+      itemIndex: Math.floor(
+        (point.y - menuRect.y - 4) / metrics.contextMenuItemHeight,
+      ),
+    };
+  }
+
+  const horizontalScrollbarRect = getHorizontalScrollbarRect(state, metrics);
+
+  if (pointInRect(point, horizontalScrollbarRect)) {
+    return {
+      kind: "scrollbar-horizontal",
+      onThumb: pointInRect(
+        point,
+        getHorizontalScrollbarThumbRect(state, metrics),
+      ),
+    };
+  }
+
+  const verticalScrollbarRect = getVerticalScrollbarRect(state, metrics);
+
+  if (pointInRect(point, verticalScrollbarRect)) {
+    return {
+      kind: "scrollbar-vertical",
+      onThumb: pointInRect(
+        point,
+        getVerticalScrollbarThumbRect(state, metrics),
+      ),
+    };
+  }
+
+  const markerX = timeToScreenX(state, state.playPosition.time, metrics);
+
+  if (
+    point.y <= metrics.rulerHeight &&
+    point.x >= metrics.trackHeaderWidth &&
+    Math.abs(point.x - markerX) <= metrics.playMarkerHitWidth
+  ) {
+    return { kind: "play-position-marker" };
+  }
+
+  if (point.y <= metrics.rulerHeight && point.x >= metrics.trackHeaderWidth) {
+    return { kind: "ruler" };
+  }
+
+  if (point.x < metrics.trackHeaderWidth && point.y > metrics.rulerHeight) {
+    return {
+      kind: "track-header",
+      trackIndex: screenYToTrackIndex(state, point.y, metrics),
+    };
+  }
+
   for (let index = state.clips.length - 1; index >= 0; index -= 1) {
     const clip = state.clips[index];
     const rect = getClipRect(state, clip, metrics);

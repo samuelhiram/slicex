@@ -1,33 +1,60 @@
 # Playlist Action Plan
 
-Fuente: FL Studio Playlist y Automation Clips, Image-Line manual.
+Fuente UX: FL Studio Playlist y Automation Clips, manual Image-Line.
 
-## Fase 1 - Base limpia
-- Reemplazar la pantalla inicial de `apps/web/src/app/page.tsx`.
-- Montar un canvas Pixi único desde `apps/web/src/components/PlaylistShell.tsx`.
-- Mantener código viejo si no estorba tests; no usarlo en la ruta default.
-- Salida: `localhost` abre directo el Playlist demo.
+## Fase 1 - Diagnostico y reemplazo controlado
+- Actual sirve: `playlist-core`, `playlist-interaction`, `playlist-renderer-pixi`, `PlaylistShell`.
+- Estorba: header izquierdo poco separado, sin menu tracklist, sin scrollbars virtuales.
+- Ruta final: `apps/web/src/app/page.tsx`.
+- Salida: `localhost` abre el Playlist demo directo.
 
 ## Fase 2 - Core
-- Crear `packages/canvas/src/playlist-core/*`.
-- Definir viewport, tracks, clips, automation clips, puntos, selección, snap.
-- Implementar tiempo-px, track-y, hit geometry base y mutations puras.
-- Salida: estado real vive fuera de Pixi/React.
+- Mantener estado real en `packages/canvas/src/playlist-core`.
+- Agregar `playPosition` formal.
+- Exponer `worldToScreenX`, `screenToWorldX`, `trackToY`, `yToTrack`.
+- Timeline positivo no acotado.
+- Tracks virtuales y materializacion automatica al mover clips.
+- Scroll model virtual H/V.
+- Context menu state por track.
+- Acciones: clear track, delete selected on track, rename, recolor, insert below, delete empty.
+- Salida: modelo no depende de Pixi, React ni ancho fijo.
 
-## Fase 3 - Interacción
-- Crear `packages/canvas/src/playlist-interaction/*`.
-- Resolver hover, drag clip, resize left/right, cambio de track, marquee, pan, zoom.
-- Editar puntos: mover, agregar, eliminar. Modifiers: Alt sin snap, Shift bloquea vertical, Ctrl bloquea horizontal.
-- Salida: interacción end-to-end sobre `playlist-core`.
+## Fase 3 - Interaccion
+- Ajustar hit-testing por prioridad.
+- Ruler: click seek.
+- Play Position Marker: drag y seek continuo.
+- Clips: select, marquee, drag, resize, cambio de track.
+- Viewport: pan middle, Ctrl+wheel zoom anclado, scroll libre.
+- Automation: mover/agregar/eliminar puntos; Alt sin snap, Shift vertical lock, Ctrl horizontal lock.
+- Track header: right click abre menu custom.
+- Scrollbars: drag H/V mueve camara virtual.
+- Salida: gestos FL esenciales end-to-end.
 
 ## Fase 4 - Render Pixi
-- Crear `packages/canvas/src/playlist-renderer-pixi/*`.
-- Pintar grid, ruler, tracks, clips, title bars, handles, overlays, automation curves y puntos.
-- Salida: renderer solo pinta estado.
+- Ruler dinamico por viewport.
+- Grid dinamico por viewport.
+- Tracks visibles + overscan, incluyendo virtuales.
+- Track headers opacos y legibles.
+- Clips visibles.
+- Automation curves/puntos.
+- Selection overlay.
+- Play Position Marker y linea vertical.
+- Scrollbars H/V visuales.
+- Menu contextual custom dibujado por Pixi.
+- Salida: renderer solo proyecta estado core.
 
-## Fase 5 - Integración final
-- Exportar módulos desde `packages/canvas/src/index.ts`.
-- Ajustar CSS para pantalla principal.
-- Crear `docs/playlist-manual-test.md`.
-- Ejecutar `pnpm install`, typecheck y `pnpm dev`.
-- Salida: app lista en localhost con demo interactiva.
+## Fase 5 - Infinito visual
+- Eliminar dependencia de `maxBeats`/`totalWidth`.
+- Eliminar limite UX por `tracks.length`.
+- Scroll horizontal como camara.
+- Scroll vertical como camara.
+- Crear tracks al soltar/arrastrar clips bajo la ultima track real.
+- Scrollbars desacopladas de documento finito.
+- Salida: derecha y abajo siguen visualmente sin topar.
+
+## Fase 6 - Integracion final
+- Demo data lista por defecto.
+- `docs/fl-playlist-parity-spec.md` actualizado.
+- `docs/playlist-manual-test.md` actualizado.
+- Ejecutar `pnpm install`, `pnpm dev`, typecheck, checks y prueba manual/Playwright.
+- Salida: app funcional inmediata.

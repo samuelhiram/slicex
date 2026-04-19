@@ -1,9 +1,12 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
-import { DEFAULT_PLAYLIST_METRICS, getAutomationPointPosition, getClipRect, isAutomationClip, normalizeRect, screenXToTime, timeToScreenX, trackIndexToScreenY, } from "../playlist-core";
+import { DEFAULT_PLAYLIST_METRICS, getContextMenuRect, getAutomationPointPosition, getClipRect, getHorizontalScrollbarRect, getHorizontalScrollbarThumbRect, getTrackByIndex, getTrackIdByIndex, getVerticalScrollbarRect, getVerticalScrollbarThumbRect, isAutomationClip, normalizeRect, screenXToTime, timeToScreenX, trackIndexToScreenY, } from "../playlist-core";
 const COLORS = {
     background: 0x181818,
     panel: 0x222222,
     panelStrong: 0x2a2a2a,
+    panelHeaderA: 0x272727,
+    panelHeaderB: 0x242424,
+    panelMenu: 0x202020,
     rowA: 0x1d1d1d,
     rowB: 0x202020,
     rowLine: 0x303030,
@@ -13,9 +16,13 @@ const COLORS = {
     textMuted: 0xb8b3a5,
     selected: 0xf4d35e,
     hover: 0xffffff,
-    playhead: 0xf05d3b,
+    playPosition: 0xf05d3b,
     marquee: 0x9ecbff,
     automationLine: 0x111111,
+    disabled: 0x6f6f6f,
+    scrollbarTrack: 0x151515,
+    scrollbarThumb: 0x5f5f5f,
+    scrollbarThumbHover: 0x7a7a7a,
 };
 function parseHexColor(value, fallback) {
     const normalized = value.trim();
@@ -115,32 +122,109 @@ function drawGridAndRuler(graphics, textLayer, state, metrics) {
     }
 }
 function drawTracks(graphics, textLayer, state, metrics) {
-    const startIndex = Math.max(0, Math.floor(state.viewport.scrollY / metrics.trackHeight));
-    const endIndex = Math.min(state.tracks.length - 1, Math.ceil((state.viewport.scrollY + state.viewport.height - metrics.rulerHeight) /
-        metrics.trackHeight));
+    const startIndex = Math.max(0, Math.floor(state.viewport.scrollY / metrics.trackHeight) -
+        metrics.trackOverscan);
+    const endIndex = Math.ceil((state.viewport.scrollY + state.viewport.height - metrics.rulerHeight) /
+        metrics.trackHeight) + metrics.trackOverscan;
     for (let index = startIndex; index <= endIndex; index += 1) {
-        const track = state.tracks[index];
+        const track = getTrackByIndex(state, index);
         const y = trackIndexToScreenY(state, index, metrics);
         const color = parseHexColor(track.color, COLORS.textMuted);
         const rowColor = index % 2 === 0 ? COLORS.rowA : COLORS.rowB;
+        const isVirtual = index >= state.tracks.length;
         graphics
-            .rect(0, y, state.viewport.width, metrics.trackHeight)
+            .rect(metrics.trackHeaderWidth, y, state.viewport.width - metrics.trackHeaderWidth, metrics.trackHeight)
             .fill({ color: rowColor });
+        graphics
+            .rect(0, y, metrics.trackHeaderWidth, metrics.trackHeight)
+            .fill({ color: index % 2 === 0 ? COLORS.panelHeaderA : COLORS.panelHeaderB });
         graphics.rect(0, y, 5, metrics.trackHeight).fill({ color });
         graphics
             .moveTo(0, y + metrics.trackHeight - 1)
             .lineTo(state.viewport.width, y + metrics.trackHeight - 1)
             .stroke({ color: COLORS.rowLine, width: 1 });
+        graphics
+            .moveTo(metrics.trackHeaderWidth - 0.5, y)
+            .lineTo(metrics.trackHeaderWidth - 0.5, y + metrics.trackHeight)
+            .stroke({ color: COLORS.rowLine, width: 1.5 });
         addText(textLayer, track.label, 16, y + 13, {
             color: COLORS.text,
             size: 13,
-            weight: "700",
+            weight: isVirtual ? "500" : "700",
         });
-        addText(textLayer, `Track ${index + 1}`, 16, y + 34, {
+        addText(textLayer, isVirtual ? "Empty" : `Track ${index + 1}`, 16, y + 34, {
             color: COLORS.textMuted,
             size: 11,
         });
     }
+}
+const TRACK_MENU_ITEMS = [
+    "Delete track content",
+    "Delete selected clips on track",
+    "Rename track",
+    "Recolor track",
+    "Insert track below",
+    "Delete empty track",
+];
+function hasSelectedClipsOnTrack(state, trackIndex) {
+    const trackId = getTrackIdByIndex(state, trackIndex);
+    const selected = new Set(state.selection.clipIds);
+    return state.clips.some((clip) => clip.trackId === trackId && selected.has(clip.id));
+}
+function hasClipsOnTrack(state, trackIndex) {
+    const trackId = getTrackIdByIndex(state, trackIndex);
+    return state.clips.some((clip) => clip.trackId === trackId);
+}
+function drawContextMenu(graphics, textLayer, state, metrics) {
+    const rect = getContextMenuRect(state, metrics);
+    if (!rect || state.contextMenu?.kind !== "track") {
+        return;
+    }
+    const trackIndex = state.contextMenu.trackIndex;
+    const hasSelected = hasSelectedClipsOnTrack(state, trackIndex);
+    const trackHasClips = hasClipsOnTrack(state, trackIndex);
+    graphics
+        .roundRect(rect.x, rect.y, rect.width, rect.height, 4)
+        .fill({ color: COLORS.panelMenu, alpha: 0.98 })
+        .stroke({ color: COLORS.rowLine, width: 1 });
+    for (let index = 0; index < TRACK_MENU_ITEMS.length; index += 1) {
+        const itemY = rect.y + 4 + index * metrics.contextMenuItemHeight;
+        const disabled = (index === 1 && !hasSelected) ||
+            (index === 5 && trackHasClips);
+        if (index % 2 === 0) {
+            graphics
+                .rect(rect.x + 4, itemY, rect.width - 8, metrics.contextMenuItemHeight)
+                .fill({ color: 0x252525, alpha: 0.72 });
+        }
+        addText(textLayer, TRACK_MENU_ITEMS[index], rect.x + 12, itemY + 7, {
+            color: disabled ? COLORS.disabled : COLORS.text,
+            size: 12,
+            weight: index <= 1 ? "700" : "500",
+        });
+    }
+}
+function drawScrollbars(graphics, state, metrics) {
+    const horizontal = getHorizontalScrollbarRect(state, metrics);
+    const horizontalThumb = getHorizontalScrollbarThumbRect(state, metrics);
+    const vertical = getVerticalScrollbarRect(state, metrics);
+    const verticalThumb = getVerticalScrollbarThumbRect(state, metrics);
+    graphics
+        .rect(horizontal.x, horizontal.y, horizontal.width, horizontal.height)
+        .fill({ color: COLORS.scrollbarTrack, alpha: 0.96 })
+        .stroke({ color: COLORS.rowLine, width: 1 });
+    graphics
+        .roundRect(horizontalThumb.x, horizontalThumb.y, horizontalThumb.width, horizontalThumb.height, 4)
+        .fill({ color: COLORS.scrollbarThumb });
+    graphics
+        .rect(vertical.x, vertical.y, vertical.width, vertical.height)
+        .fill({ color: COLORS.scrollbarTrack, alpha: 0.96 })
+        .stroke({ color: COLORS.rowLine, width: 1 });
+    graphics
+        .roundRect(verticalThumb.x, verticalThumb.y, verticalThumb.width, verticalThumb.height, 4)
+        .fill({ color: COLORS.scrollbarThumb });
+    graphics
+        .rect(vertical.x, horizontal.y, vertical.width, horizontal.height)
+        .fill({ color: COLORS.panelStrong });
 }
 function drawTimelineGridOverlay(graphics, state, metrics) {
     const step = pickGridStep(state.viewport.pxPerBeat);
@@ -238,13 +322,23 @@ function drawClip(graphics, textLayer, state, clip, metrics) {
     }
 }
 function drawOverlay(graphics, state, metrics) {
-    const playheadX = timeToScreenX(state, state.playhead, metrics);
-    if (playheadX >= metrics.trackHeaderWidth &&
-        playheadX <= state.viewport.width) {
+    const markerX = timeToScreenX(state, state.playPosition.time, metrics);
+    if (markerX >= metrics.trackHeaderWidth &&
+        markerX <= state.viewport.width) {
         graphics
-            .moveTo(playheadX + 0.5, 0)
-            .lineTo(playheadX + 0.5, state.viewport.height)
-            .stroke({ color: COLORS.playhead, width: 2 });
+            .roundRect(markerX - 7, 3, 14, metrics.rulerHeight - 6, 3)
+            .fill({ color: COLORS.playPosition })
+            .stroke({ color: COLORS.text, width: 1, alpha: 0.8 });
+        graphics
+            .moveTo(markerX - 7, metrics.rulerHeight - 1)
+            .lineTo(markerX + 7, metrics.rulerHeight - 1)
+            .lineTo(markerX, metrics.rulerHeight + 7)
+            .lineTo(markerX - 7, metrics.rulerHeight - 1)
+            .fill({ color: COLORS.playPosition });
+        graphics
+            .moveTo(markerX + 0.5, 0)
+            .lineTo(markerX + 0.5, state.viewport.height)
+            .stroke({ color: COLORS.playPosition, width: 2 });
     }
     if (state.marquee) {
         const rect = normalizeRect({
@@ -269,6 +363,8 @@ function drawPlaylist(graphics, textLayer, state, metrics) {
         drawClip(graphics, textLayer, state, clip, metrics);
     }
     drawOverlay(graphics, state, metrics);
+    drawScrollbars(graphics, state, metrics);
+    drawContextMenu(graphics, textLayer, state, metrics);
     addText(textLayer, "SliceX Playlist", 15, 11, {
         color: COLORS.text,
         size: 13,

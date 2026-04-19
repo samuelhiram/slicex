@@ -10,4 +10,12 @@ export const DEFAULT_PLAYLIST_METRICS = {
     minPxPerBeat: 8,
     maxPxPerBeat: 96,
     beatsPerBar: 4,
+    trackOverscan: 3,
+    timelineOverscanPx: 120,
+    playMarkerHitWidth: 14,
+    scrollbarSize: 14,
+    scrollbarThumbMin: 44,
+    scrollbarVirtualRangePx: 120000,
+    contextMenuWidth: 228,
+    contextMenuItemHeight: 28,
 };

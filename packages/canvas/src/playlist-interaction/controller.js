@@ -1,4 +1,4 @@
-import { automationPointFromScreen, clamp, getClipRect, getTrackIndexById, normalizeRect, rectsIntersect, screenXToTime, screenYToTrackIndex, snapTime, } from "../playlist-core";
+import { automationPointFromScreen, clamp, getHorizontalScrollbarRect, getHorizontalScrollbarThumbRect, getClipRect, getTrackIdByIndex, getVerticalScrollbarRect, getVerticalScrollbarThumbRect, getTrackIndexById, normalizeRect, rectsIntersect, screenXToTime, screenYToTrackIndex, snapTime, } from "../playlist-core";
 import { hitTestPlaylist } from "./hit-test";
 function resolvePoint(host, event) {
     const rect = host.getBoundingClientRect();
@@ -20,6 +20,18 @@ function setCursor(host, hit, active) {
         host.style.cursor = "grabbing";
         return;
     }
+    if (active?.kind === "play-position-drag") {
+        host.style.cursor = "ew-resize";
+        return;
+    }
+    if (active?.kind === "scrollbar-horizontal") {
+        host.style.cursor = "ew-resize";
+        return;
+    }
+    if (active?.kind === "scrollbar-vertical") {
+        host.style.cursor = "ns-resize";
+        return;
+    }
     if (!hit) {
         host.style.cursor = "default";
         return;
@@ -34,6 +46,22 @@ function setCursor(host, hit, active) {
     }
     if (hit.kind === "automation-body") {
         host.style.cursor = "crosshair";
+        return;
+    }
+    if (hit.kind === "play-position-marker" || hit.kind === "ruler") {
+        host.style.cursor = "ew-resize";
+        return;
+    }
+    if (hit.kind === "scrollbar-horizontal") {
+        host.style.cursor = "ew-resize";
+        return;
+    }
+    if (hit.kind === "scrollbar-vertical") {
+        host.style.cursor = "ns-resize";
+        return;
+    }
+    if (hit.kind === "track-header") {
+        host.style.cursor = "default";
         return;
     }
     host.style.cursor = "default";
@@ -84,7 +112,77 @@ function setHoverFromHit(core, hit) {
         });
         return;
     }
+    if (hit.kind === "play-position-marker" || hit.kind === "ruler") {
+        core.setHover(null);
+        return;
+    }
+    if (hit.kind === "track-header") {
+        core.setHover({ kind: "track", trackId: getTrackIdByIndex(core.getState(), hit.trackIndex) });
+        return;
+    }
     core.setHover(null);
+}
+function hasSelectedClipsOnTrack(core, trackIndex) {
+    const state = core.getState();
+    const trackId = getTrackIdByIndex(state, trackIndex);
+    const selected = new Set(state.selection.clipIds);
+    return state.clips.some((clip) => clip.trackId === trackId && selected.has(clip.id));
+}
+const TRACK_COLORS = [
+    "#e85d75",
+    "#46b871",
+    "#d9a441",
+    "#39a8c9",
+    "#c970d8",
+    "#b7d957",
+    "#f0703f",
+    "#8fd3a8",
+];
+function executeTrackMenuAction(core, itemIndex) {
+    const state = core.getState();
+    const menu = state.contextMenu;
+    if (!menu || menu.kind !== "track") {
+        return;
+    }
+    const trackIndex = menu.trackIndex;
+    if (itemIndex === 0) {
+        core.clearTrackClips(trackIndex);
+        return;
+    }
+    if (itemIndex === 1) {
+        if (hasSelectedClipsOnTrack(core, trackIndex)) {
+            core.deleteSelectedClipsOnTrack(trackIndex);
+        }
+        core.closeContextMenu();
+        return;
+    }
+    if (itemIndex === 2) {
+        const current = core.getState().tracks[trackIndex]?.label ?? `Track ${trackIndex + 1}`;
+        const nextLabel = typeof window === "undefined"
+            ? current
+            : window.prompt("Rename track", current);
+        if (nextLabel?.trim()) {
+            core.renameTrack(trackIndex, nextLabel.trim());
+            return;
+        }
+        core.closeContextMenu();
+        return;
+    }
+    if (itemIndex === 3) {
+        const current = core.getState().tracks[trackIndex]?.color;
+        const currentIndex = Math.max(0, TRACK_COLORS.indexOf(current ?? ""));
+        core.recolorTrack(trackIndex, TRACK_COLORS[(currentIndex + 1) % TRACK_COLORS.length]);
+        return;
+    }
+    if (itemIndex === 4) {
+        core.insertTrackBelow(trackIndex);
+        return;
+    }
+    if (itemIndex === 5) {
+        core.deleteEmptyTrack(trackIndex);
+        return;
+    }
+    core.closeContextMenu();
 }
 export function createPlaylistInteractionController(host, core) {
     const metrics = core.metrics;
@@ -96,6 +194,13 @@ export function createPlaylistInteractionController(host, core) {
         const state = core.getState();
         const point = resolvePoint(host, event);
         const hit = hitTestPlaylist(state, point, metrics);
+        if (state.contextMenu && hit.kind !== "context-menu") {
+            core.closeContextMenu();
+            if (event.button === 0) {
+                event.preventDefault();
+                return;
+            }
+        }
         if (event.button === 1) {
             activeGesture = {
                 kind: "pan",
@@ -110,6 +215,11 @@ export function createPlaylistInteractionController(host, core) {
             return;
         }
         if (event.button === 2) {
+            if (hit.kind === "track-header") {
+                core.openTrackContextMenu(hit.trackIndex, point);
+                event.preventDefault();
+                return;
+            }
             if (hit.kind === "automation-point") {
                 core.removeAutomationPoint(hit.clip.id, hit.pointId);
                 event.preventDefault();
@@ -124,6 +234,51 @@ export function createPlaylistInteractionController(host, core) {
             return;
         }
         if (event.button !== 0) {
+            return;
+        }
+        if (hit.kind === "context-menu") {
+            executeTrackMenuAction(core, hit.itemIndex);
+            event.preventDefault();
+            return;
+        }
+        if (hit.kind === "scrollbar-horizontal") {
+            activeGesture = {
+                kind: "scrollbar-horizontal",
+                pointerId: event.pointerId,
+                startPoint: point,
+                startScrollX: state.viewport.scrollX,
+            };
+            host.setPointerCapture?.(event.pointerId);
+            setCursor(host, hit, activeGesture);
+            event.preventDefault();
+            return;
+        }
+        if (hit.kind === "scrollbar-vertical") {
+            activeGesture = {
+                kind: "scrollbar-vertical",
+                pointerId: event.pointerId,
+                startPoint: point,
+                startScrollY: state.viewport.scrollY,
+            };
+            host.setPointerCapture?.(event.pointerId);
+            setCursor(host, hit, activeGesture);
+            event.preventDefault();
+            return;
+        }
+        if (hit.kind === "track-header") {
+            core.setSelection({ clipIds: [], automationPointIds: [] });
+            event.preventDefault();
+            return;
+        }
+        if (hit.kind === "play-position-marker" || hit.kind === "ruler") {
+            core.setPlayPosition(snapTime(screenXToTime(state, point.x, metrics), state, event.altKey));
+            activeGesture = {
+                kind: "play-position-drag",
+                pointerId: event.pointerId,
+            };
+            host.setPointerCapture?.(event.pointerId);
+            setCursor(host, hit, activeGesture);
+            event.preventDefault();
             return;
         }
         if (hit.kind === "automation-point") {
@@ -235,7 +390,7 @@ export function createPlaylistInteractionController(host, core) {
             core.moveClips(gesture.originals.map((clip) => ({
                 id: clip.id,
                 start: clip.start + deltaTime,
-                trackIndex: clamp(clip.trackIndex + trackDelta, 0, Math.max(0, state.tracks.length - 1)),
+                trackIndex: clamp(clip.trackIndex + trackDelta, 0, Number.POSITIVE_INFINITY),
             })));
             event.preventDefault();
             return;
@@ -253,6 +408,29 @@ export function createPlaylistInteractionController(host, core) {
             }
             const next = automationPointFromScreen(state, clip, point, metrics);
             core.moveAutomationPoint(gesture.clipId, gesture.pointId, event.ctrlKey ? gesture.originalTime : snapTime(next.time, state, event.altKey), event.shiftKey ? gesture.originalValue : next.value);
+            event.preventDefault();
+            return;
+        }
+        if (gesture.kind === "play-position-drag") {
+            core.setPlayPosition(snapTime(screenXToTime(state, point.x, metrics), state, event.altKey));
+            event.preventDefault();
+            return;
+        }
+        if (gesture.kind === "scrollbar-horizontal") {
+            const track = getHorizontalScrollbarRect(state, metrics);
+            const thumb = getHorizontalScrollbarThumbRect(state, metrics);
+            const travel = Math.max(1, track.width - thumb.width);
+            const delta = ((point.x - gesture.startPoint.x) / travel) * metrics.scrollbarVirtualRangePx;
+            core.updateViewport({ scrollX: gesture.startScrollX + delta });
+            event.preventDefault();
+            return;
+        }
+        if (gesture.kind === "scrollbar-vertical") {
+            const track = getVerticalScrollbarRect(state, metrics);
+            const thumb = getVerticalScrollbarThumbRect(state, metrics);
+            const travel = Math.max(1, track.height - thumb.height);
+            const delta = ((point.y - gesture.startPoint.y) / travel) * metrics.scrollbarVirtualRangePx;
+            core.updateViewport({ scrollY: gesture.startScrollY + delta });
             event.preventDefault();
         }
     };
@@ -293,6 +471,11 @@ export function createPlaylistInteractionController(host, core) {
     const handleKeyDown = (event) => {
         if (event.key === "Delete" || event.key === "Backspace") {
             core.removeSelected();
+            event.preventDefault();
+            return;
+        }
+        if (event.code === "Space") {
+            core.setPlayPositionRunning(!core.getState().playPosition.isRunning);
             event.preventDefault();
         }
     };

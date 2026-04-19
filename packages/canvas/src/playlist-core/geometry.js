@@ -27,12 +27,100 @@ export function pointInRect(point, rect) {
         point.y >= rect.y &&
         point.y <= rect.y + rect.height);
 }
+export function getHorizontalScrollbarRect(state, metrics = DEFAULT_PLAYLIST_METRICS) {
+    return {
+        x: metrics.trackHeaderWidth,
+        y: Math.max(metrics.rulerHeight, state.viewport.height - metrics.scrollbarSize),
+        width: Math.max(metrics.scrollbarThumbMin, state.viewport.width - metrics.trackHeaderWidth - metrics.scrollbarSize),
+        height: metrics.scrollbarSize,
+    };
+}
+export function getVerticalScrollbarRect(state, metrics = DEFAULT_PLAYLIST_METRICS) {
+    return {
+        x: Math.max(metrics.trackHeaderWidth, state.viewport.width - metrics.scrollbarSize),
+        y: metrics.rulerHeight,
+        width: metrics.scrollbarSize,
+        height: Math.max(metrics.scrollbarThumbMin, state.viewport.height - metrics.rulerHeight - metrics.scrollbarSize),
+    };
+}
+export function getHorizontalScrollbarThumbRect(state, metrics = DEFAULT_PLAYLIST_METRICS) {
+    const track = getHorizontalScrollbarRect(state, metrics);
+    const width = clamp(track.width * 0.24, metrics.scrollbarThumbMin, track.width);
+    const travel = Math.max(1, track.width - width);
+    const local = ((state.viewport.scrollX % metrics.scrollbarVirtualRangePx) /
+        metrics.scrollbarVirtualRangePx) *
+        travel;
+    return {
+        x: track.x + local,
+        y: track.y + 2,
+        width,
+        height: Math.max(1, track.height - 4),
+    };
+}
+export function getVerticalScrollbarThumbRect(state, metrics = DEFAULT_PLAYLIST_METRICS) {
+    const track = getVerticalScrollbarRect(state, metrics);
+    const height = clamp(track.height * 0.24, metrics.scrollbarThumbMin, track.height);
+    const travel = Math.max(1, track.height - height);
+    const local = ((state.viewport.scrollY % metrics.scrollbarVirtualRangePx) /
+        metrics.scrollbarVirtualRangePx) *
+        travel;
+    return {
+        x: track.x + 2,
+        y: track.y + local,
+        width: Math.max(1, track.width - 4),
+        height,
+    };
+}
+export function getContextMenuRect(state, metrics = DEFAULT_PLAYLIST_METRICS) {
+    if (!state.contextMenu) {
+        return null;
+    }
+    const itemCount = 6;
+    const width = metrics.contextMenuWidth;
+    const height = itemCount * metrics.contextMenuItemHeight + 8;
+    return {
+        x: clamp(state.contextMenu.position.x, 0, Math.max(0, state.viewport.width - width)),
+        y: clamp(state.contextMenu.position.y, 0, Math.max(0, state.viewport.height - height)),
+        width,
+        height,
+    };
+}
 export function getTrackIndexById(state, trackId) {
-    return Math.max(0, state.tracks.findIndex((track) => track.id === trackId));
+    const realIndex = state.tracks.findIndex((track) => track.id === trackId);
+    if (realIndex >= 0) {
+        return realIndex;
+    }
+    const virtualIndex = /^track-(\d+)$/.exec(trackId)?.[1];
+    if (virtualIndex) {
+        return Math.max(0, Number.parseInt(virtualIndex, 10) - 1);
+    }
+    return 0;
 }
 export function getTrackIdByIndex(state, trackIndex) {
-    const index = clamp(trackIndex, 0, Math.max(0, state.tracks.length - 1));
-    return state.tracks[index]?.id ?? state.tracks[0]?.id ?? "track-1";
+    const index = Math.max(0, Math.floor(trackIndex));
+    return state.tracks[index]?.id ?? `track-${index + 1}`;
+}
+const VIRTUAL_TRACK_COLORS = [
+    "#e85d75",
+    "#46b871",
+    "#d9a441",
+    "#39a8c9",
+    "#c970d8",
+    "#b7d957",
+    "#f0703f",
+    "#8fd3a8",
+];
+export function createVirtualTrack(trackIndex) {
+    const index = Math.max(0, Math.floor(trackIndex));
+    return {
+        id: `track-${index + 1}`,
+        label: `Track ${index + 1}`,
+        color: VIRTUAL_TRACK_COLORS[index % VIRTUAL_TRACK_COLORS.length],
+    };
+}
+export function getTrackByIndex(state, trackIndex) {
+    const index = Math.max(0, Math.floor(trackIndex));
+    return state.tracks[index] ?? createVirtualTrack(index);
 }
 export function timeToScreenX(state, time, metrics = DEFAULT_PLAYLIST_METRICS) {
     return (metrics.trackHeaderWidth +
@@ -51,8 +139,12 @@ export function trackIndexToScreenY(state, trackIndex, metrics = DEFAULT_PLAYLIS
 export function screenYToTrackIndex(state, screenY, metrics = DEFAULT_PLAYLIST_METRICS) {
     const raw = (screenY - metrics.rulerHeight + state.viewport.scrollY) /
         metrics.trackHeight;
-    return clamp(Math.floor(raw), 0, Math.max(0, state.tracks.length - 1));
+    return Math.max(0, Math.floor(raw));
 }
+export const worldToScreenX = timeToScreenX;
+export const screenToWorldX = screenXToTime;
+export const trackToY = trackIndexToScreenY;
+export const yToTrack = screenYToTrackIndex;
 export function getClipRect(state, clip, metrics = DEFAULT_PLAYLIST_METRICS) {
     const trackIndex = getTrackIndexById(state, clip.trackId);
     const rowTop = trackIndexToScreenY(state, trackIndex, metrics);
@@ -102,15 +194,11 @@ export function getContentEndBeat(state) {
     return state.clips.reduce((end, clip) => Math.max(end, clip.start + clip.duration), metricsDefaultEnd(state));
 }
 function metricsDefaultEnd(state) {
-    return Math.max(32, state.playhead + 16);
+    return Math.max(32, state.playPosition.time + 16);
 }
-export function getMaxScrollY(state, metrics = DEFAULT_PLAYLIST_METRICS) {
-    const visibleTrackHeight = Math.max(0, state.viewport.height - metrics.rulerHeight);
-    const contentHeight = state.tracks.length * metrics.trackHeight;
-    return Math.max(0, contentHeight - visibleTrackHeight);
+export function getMaxScrollY(_state, _metrics = DEFAULT_PLAYLIST_METRICS) {
+    return Number.POSITIVE_INFINITY;
 }
-export function getMaxScrollX(state, metrics = DEFAULT_PLAYLIST_METRICS) {
-    const visibleTimelineWidth = Math.max(0, state.viewport.width - metrics.trackHeaderWidth);
-    const contentWidth = (getContentEndBeat(state) + 16) * state.viewport.pxPerBeat;
-    return Math.max(0, contentWidth - visibleTimelineWidth);
+export function getMaxScrollX(_state, _metrics = DEFAULT_PLAYLIST_METRICS) {
+    return Number.POSITIVE_INFINITY;
 }
