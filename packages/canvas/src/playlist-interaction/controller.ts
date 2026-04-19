@@ -3,7 +3,6 @@ import {
   clamp,
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
-  getClipRect,
   getTrackIdByIndex,
   getVerticalScrollbarRect,
   getVerticalScrollbarThumbRect,
@@ -15,12 +14,14 @@ import {
   snapTime,
 } from "../playlist-core";
 import type {
+  PlaylistAutomationPoint,
   PlaylistClip,
   PlaylistCore,
   PlaylistMetrics,
   PlaylistPoint,
+  PlaylistTrackMenuAction,
 } from "../playlist-core";
-import { hitTestPlaylist, type PlaylistHit } from "./hit-test";
+import { hitTestPlaylist, type PlaylistHit } from "./hit-test.js";
 
 export interface PlaylistInteractionController {
   destroy: () => void;
@@ -183,9 +184,9 @@ function getSelectedDragClips(core: PlaylistCore, clip: PlaylistClip): PlaylistC
   return state.clips.filter((candidate) => selected.has(candidate.id));
 }
 
-function selectClipsInMarquee(core: PlaylistCore, metrics: PlaylistMetrics): void {
-  const state = core.getState();
-  const marquee = state.marquee;
+function selectClipsInMarquee(core: PlaylistCore): void {
+  const presentation = core.getPresentation();
+  const marquee = presentation.state.marquee;
 
   if (!marquee) {
     return;
@@ -197,9 +198,9 @@ function selectClipsInMarquee(core: PlaylistCore, metrics: PlaylistMetrics): voi
     width: marquee.current.x - marquee.start.x,
     height: marquee.current.y - marquee.start.y,
   });
-  const clipIds = state.clips
-    .filter((clip) => rectsIntersect(rect, getClipRect(state, clip, metrics)))
-    .map((clip) => clip.id);
+  const clipIds = presentation.clipViews
+    .filter((view) => rectsIntersect(rect, view.rect))
+    .map((view) => view.clip.id);
 
   core.setSelection({ clipIds, automationPointIds: [] });
 }
@@ -263,7 +264,10 @@ const TRACK_COLORS = [
   "#8fd3a8",
 ];
 
-function executeTrackMenuAction(core: PlaylistCore, itemIndex: number): void {
+function executeTrackMenuAction(
+  core: PlaylistCore,
+  action: PlaylistTrackMenuAction,
+): void {
   const state = core.getState();
   const menu = state.contextMenu;
 
@@ -273,12 +277,12 @@ function executeTrackMenuAction(core: PlaylistCore, itemIndex: number): void {
 
   const trackIndex = menu.trackIndex;
 
-  if (itemIndex === 0) {
+  if (action === "clear-track") {
     core.clearTrackClips(trackIndex);
     return;
   }
 
-  if (itemIndex === 1) {
+  if (action === "delete-selected") {
     if (hasSelectedClipsOnTrack(core, trackIndex)) {
       core.deleteSelectedClipsOnTrack(trackIndex);
     }
@@ -287,7 +291,7 @@ function executeTrackMenuAction(core: PlaylistCore, itemIndex: number): void {
     return;
   }
 
-  if (itemIndex === 2) {
+  if (action === "rename-track") {
     const current = core.getState().tracks[trackIndex]?.label ?? `Track ${trackIndex + 1}`;
     const nextLabel =
       typeof window === "undefined"
@@ -303,19 +307,19 @@ function executeTrackMenuAction(core: PlaylistCore, itemIndex: number): void {
     return;
   }
 
-  if (itemIndex === 3) {
+  if (action === "recolor-track") {
     const current = core.getState().tracks[trackIndex]?.color;
     const currentIndex = Math.max(0, TRACK_COLORS.indexOf(current ?? ""));
     core.recolorTrack(trackIndex, TRACK_COLORS[(currentIndex + 1) % TRACK_COLORS.length]);
     return;
   }
 
-  if (itemIndex === 4) {
+  if (action === "insert-track-below") {
     core.insertTrackBelow(trackIndex);
     return;
   }
 
-  if (itemIndex === 5) {
+  if (action === "delete-empty-track") {
     core.deleteEmptyTrack(trackIndex);
     return;
   }
@@ -338,7 +342,7 @@ export function createPlaylistInteractionController(
 
     const state = core.getState();
     const point = resolvePoint(host, event);
-    const hit = hitTestPlaylist(state, point, metrics);
+    const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
 
     if (state.contextMenu && hit.kind !== "context-menu") {
       core.closeContextMenu();
@@ -391,7 +395,7 @@ export function createPlaylistInteractionController(
     }
 
     if (hit.kind === "context-menu") {
-      executeTrackMenuAction(core, hit.itemIndex);
+      executeTrackMenuAction(core, hit.action);
       event.preventDefault();
       return;
     }
@@ -444,7 +448,7 @@ export function createPlaylistInteractionController(
 
     if (hit.kind === "automation-point") {
       const automationPoint = hit.clip.points.find(
-        (candidate) => candidate.id === hit.pointId,
+        (candidate: PlaylistAutomationPoint) => candidate.id === hit.pointId,
       );
 
       if (!automationPoint) {
@@ -525,7 +529,7 @@ export function createPlaylistInteractionController(
     const point = resolvePoint(host, event);
 
     if (!activeGesture) {
-      const hit = hitTestPlaylist(state, point, metrics);
+      const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
       setHoverFromHit(core, hit);
       setCursor(host, hit, null);
       return;
@@ -548,7 +552,7 @@ export function createPlaylistInteractionController(
 
     if (gesture.kind === "marquee") {
       core.setMarquee({ start: gesture.startPoint, current: point });
-      selectClipsInMarquee(core, metrics);
+          selectClipsInMarquee(core);
       event.preventDefault();
       return;
     }
@@ -653,7 +657,7 @@ export function createPlaylistInteractionController(
 
     activeGesture = null;
     host.releasePointerCapture?.(event.pointerId);
-    setCursor(host, hitTestPlaylist(core.getState(), resolvePoint(host, event), metrics), null);
+    setCursor(host, hitTestPlaylist(core.getPresentation(), resolvePoint(host, event), metrics), null);
   };
 
   const handleWheel = (event: WheelEvent): void => {

@@ -1,16 +1,10 @@
 import {
   clamp,
-  createVirtualTrack,
-  getMaxScrollX,
-  getMaxScrollY,
   getTrackIdByIndex,
-  getTrackIndexById,
   isAutomationClip,
 } from "./geometry";
 import {
   DEFAULT_PLAYLIST_METRICS,
-  type PlaylistAutomationClip,
-  type PlaylistClip,
   type PlaylistContextMenu,
   type PlaylistMarquee,
   type PlaylistMetrics,
@@ -18,9 +12,17 @@ import {
   type PlaylistSelection,
   type PlaylistState,
   type PlaylistStateListener,
-  type PlaylistTrack,
 } from "./types";
+import type { PlaylistPresentation } from "./presentation";
+import { createPlaylistPresentation } from "./presentation";
+import {
+  createInsertedTrack,
+  makePointId,
+  materializeTracksThrough,
+} from "./state-track-helpers";
+import { normalizeState, sortAutomationPoints } from "./state-utils";
 
+// PlaylistCore is the mutable facade. Keep pure transforms in the helper modules.
 export interface PlaylistCoreOptions {
   metrics?: PlaylistMetrics;
 }
@@ -35,148 +37,14 @@ export interface PlaylistClipMoveUpdate {
   trackIndex: number;
 }
 
-function cloneSelection(selection: PlaylistSelection): PlaylistSelection {
-  return {
-    clipIds: [...selection.clipIds],
-    automationPointIds: [...selection.automationPointIds],
-  };
-}
-
-function cloneClip(clip: PlaylistClip): PlaylistClip {
-  if (isAutomationClip(clip)) {
-    return {
-      ...clip,
-      points: clip.points.map((point) => ({ ...point })),
-    };
-  }
-
-  return { ...clip };
-}
-
-function cloneState(state: PlaylistState): PlaylistState {
-  return {
-    tracks: state.tracks.map((track) => ({ ...track })),
-    clips: state.clips.map(cloneClip),
-    viewport: { ...state.viewport },
-    snap: { ...state.snap },
-    selection: cloneSelection(state.selection),
-    marquee: state.marquee
-      ? {
-          start: { ...state.marquee.start },
-          current: { ...state.marquee.current },
-        }
-      : null,
-    contextMenu: state.contextMenu
-      ? {
-          ...state.contextMenu,
-          position: { ...state.contextMenu.position },
-        }
-      : null,
-    hover: state.hover ? { ...state.hover } : null,
-    playPosition: { ...state.playPosition },
-  };
-}
-
-function sortAutomationPoints(
-  points: PlaylistAutomationClip["points"],
-): PlaylistAutomationClip["points"] {
-  return [...points].sort((left, right) => left.time - right.time);
-}
-
-function normalizeState(
-  input: PlaylistState,
-  metrics: PlaylistMetrics,
-): PlaylistState {
-  const state = cloneState(input);
-
-  state.viewport.pxPerBeat = clamp(
-    state.viewport.pxPerBeat,
-    metrics.minPxPerBeat,
-    metrics.maxPxPerBeat,
-  );
-  state.viewport.scrollX = clamp(state.viewport.scrollX, 0, getMaxScrollX(state, metrics));
-  state.viewport.scrollY = clamp(state.viewport.scrollY, 0, getMaxScrollY(state, metrics));
-  state.playPosition.time = Math.max(0, state.playPosition.time);
-  state.clips = state.clips.map((clip) => {
-    const duration = Math.max(metrics.minClipDuration, clip.duration);
-    const start = Math.max(0, clip.start);
-
-    if (isAutomationClip(clip)) {
-      return {
-        ...clip,
-        start,
-        duration,
-        points: sortAutomationPoints(
-          clip.points.map((point) => ({
-            ...point,
-            time: clamp(point.time, 0, duration),
-            value: clamp(point.value, 0, 1),
-          })),
-        ),
-      };
-    }
-
-    return { ...clip, start, duration };
-  });
-
-  return state;
-}
-
-function materializeTracksThrough(
-  state: PlaylistState,
-  maxTrackIndex: number,
-): PlaylistState {
-  if (maxTrackIndex < state.tracks.length) {
-    return state;
-  }
-
-  const tracks = [...state.tracks];
-
-  for (let index = tracks.length; index <= maxTrackIndex; index += 1) {
-    tracks.push(createVirtualTrack(index));
-  }
-
-  return { ...state, tracks };
-}
-
-function makePointId(clip: PlaylistAutomationClip): string {
-  let index = clip.points.length + 1;
-  let id = `${clip.id}-pt-${index}`;
-
-  while (clip.points.some((point) => point.id === id)) {
-    index += 1;
-    id = `${clip.id}-pt-${index}`;
-  }
-
-  return id;
-}
-
-function makeTrackId(tracks: PlaylistTrack[]): string {
-  let index = tracks.length + 1;
-  let id = `track-${index}`;
-
-  while (tracks.some((track) => track.id === id)) {
-    index += 1;
-    id = `track-${index}`;
-  }
-
-  return id;
-}
-
-function createInsertedTrack(tracks: PlaylistTrack[], afterIndex: number): PlaylistTrack {
-  const base = createVirtualTrack(afterIndex + 1);
-
-  return {
-    ...base,
-    id: makeTrackId(tracks),
-    label: `Track ${afterIndex + 2}`,
-  };
-}
-
 export class PlaylistCore {
   private state: PlaylistState;
 
   private readonly listeners = new Set<PlaylistStateListener>();
+
+  private presentationCache:
+    | { state: PlaylistState; presentation: PlaylistPresentation }
+    | null = null;
 
   readonly metrics: PlaylistMetrics;
 
@@ -185,10 +53,26 @@ export class PlaylistCore {
     this.state = normalizeState(initialState, this.metrics);
   }
 
+  // Lifecycle and derived presentation.
   getState(): PlaylistState {
     return this.state;
   }
 
+  getPresentation(): PlaylistPresentation {
+    if (this.presentationCache?.state === this.state) {
+      return this.presentationCache.presentation;
+    }
+
+    const presentation = createPlaylistPresentation(this.state, this.metrics);
+    this.presentationCache = {
+      state: this.state,
+      presentation,
+    };
+
+    return presentation;
+  }
+
+  // Subscription management.
   subscribe(listener: PlaylistStateListener): PlaylistSubscription {
     this.listeners.add(listener);
 
@@ -199,6 +83,7 @@ export class PlaylistCore {
     };
   }
 
+  // Viewport and selection.
   setViewportSize(width: number, height: number): void {
     this.commit({
       ...this.state,
@@ -320,6 +205,7 @@ export class PlaylistCore {
     this.setPlayPosition(this.state.playPosition.time + Math.max(0, deltaTime));
   }
 
+  // Track and clip mutations.
   moveClips(updates: PlaylistClipMoveUpdate[]): void {
     const byId = new Map(updates.map((update) => [update.id, update]));
     const maxTrackIndex = updates.reduce(
@@ -425,6 +311,7 @@ export class PlaylistCore {
     });
   }
 
+  // Automation mutations.
   resizeClip(clipId: string, edge: "left" | "right", time: number): void {
     const clips = this.state.clips.map((clip) => {
       if (clip.id !== clipId) {
@@ -572,8 +459,10 @@ export class PlaylistCore {
     });
   }
 
+  // Commit and notify listeners.
   private commit(nextState: PlaylistState): void {
     this.state = normalizeState(nextState, this.metrics);
+    this.presentationCache = null;
 
     for (const listener of this.listeners) {
       listener(this.state);

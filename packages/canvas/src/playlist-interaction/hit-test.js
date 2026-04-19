@@ -1,77 +1,100 @@
-import { getAutomationPointPosition, getClipRect, getClipTitleRect, getContextMenuRect, getHorizontalScrollbarRect, getHorizontalScrollbarThumbRect, getVerticalScrollbarRect, getVerticalScrollbarThumbRect, isAutomationClip, pointInRect, screenYToTrackIndex, timeToScreenX, } from "../playlist-core";
+import { pointInRect, } from "../playlist-core";
 function distance(left, right) {
     return Math.hypot(left.x - right.x, left.y - right.y);
 }
-export function hitTestPlaylist(state, point, metrics) {
-    const menuRect = getContextMenuRect(state, metrics);
-    if (menuRect && pointInRect(point, menuRect)) {
-        return {
-            kind: "context-menu",
-            itemIndex: Math.floor((point.y - menuRect.y - 4) / metrics.contextMenuItemHeight),
-        };
+function getAutomationPointHit(clipView, point, metrics) {
+    for (let index = clipView.automationPoints.length - 1; index >= 0; index -= 1) {
+        const automationPoint = clipView.automationPoints[index];
+        if (distance(point, automationPoint.position) <= metrics.automationPointRadius + 4) {
+            return {
+                kind: "automation-point",
+                clip: clipView.clip,
+                clipId: clipView.clip.id,
+                pointId: automationPoint.point.id,
+            };
+        }
     }
-    const horizontalScrollbarRect = getHorizontalScrollbarRect(state, metrics);
-    if (pointInRect(point, horizontalScrollbarRect)) {
+    return null;
+}
+export function hitTestPlaylist(presentation, point, metrics) {
+    const { contextMenu, playPosition, scrollbars, trackRows, visibleClipViews } = presentation;
+    if (contextMenu && pointInRect(point, contextMenu.rect)) {
+        const itemIndex = contextMenu.items.findIndex((item) => pointInRect(point, item.rect));
+        if (itemIndex >= 0) {
+            const item = contextMenu.items[itemIndex];
+            return {
+                kind: "context-menu",
+                action: item.action,
+                disabled: item.disabled,
+            };
+        }
+    }
+    if (pointInRect(point, scrollbars.horizontal.trackRect)) {
         return {
             kind: "scrollbar-horizontal",
-            onThumb: pointInRect(point, getHorizontalScrollbarThumbRect(state, metrics)),
+            onThumb: pointInRect(point, scrollbars.horizontal.thumbRect),
         };
     }
-    const verticalScrollbarRect = getVerticalScrollbarRect(state, metrics);
-    if (pointInRect(point, verticalScrollbarRect)) {
+    if (pointInRect(point, scrollbars.vertical.trackRect)) {
         return {
             kind: "scrollbar-vertical",
-            onThumb: pointInRect(point, getVerticalScrollbarThumbRect(state, metrics)),
+            onThumb: pointInRect(point, scrollbars.vertical.thumbRect),
         };
     }
-    const markerX = timeToScreenX(state, state.playPosition.time, metrics);
-    if (point.y <= metrics.rulerHeight &&
+    if (playPosition.isVisible &&
+        point.y <= metrics.rulerHeight &&
         point.x >= metrics.trackHeaderWidth &&
-        Math.abs(point.x - markerX) <= metrics.playMarkerHitWidth) {
+        Math.abs(point.x - playPosition.x) <= metrics.playMarkerHitWidth) {
         return { kind: "play-position-marker" };
     }
     if (point.y <= metrics.rulerHeight && point.x >= metrics.trackHeaderWidth) {
         return { kind: "ruler" };
     }
     if (point.x < metrics.trackHeaderWidth && point.y > metrics.rulerHeight) {
-        return {
-            kind: "track-header",
-            trackIndex: screenYToTrackIndex(state, point.y, metrics),
-        };
+        const row = trackRows.find((candidate) => pointInRect(point, candidate.headerRect));
+        if (row) {
+            return {
+                kind: "track-header",
+                trackIndex: row.index,
+                trackId: row.track.id,
+            };
+        }
     }
-    for (let index = state.clips.length - 1; index >= 0; index -= 1) {
-        const clip = state.clips[index];
-        const rect = getClipRect(state, clip, metrics);
-        if (!pointInRect(point, rect)) {
+    for (let index = visibleClipViews.length - 1; index >= 0; index -= 1) {
+        const clipView = visibleClipViews[index];
+        if (!pointInRect(point, clipView.rect)) {
             continue;
         }
-        if (isAutomationClip(clip)) {
-            for (let pointIndex = clip.points.length - 1; pointIndex >= 0; pointIndex -= 1) {
-                const automationPoint = clip.points[pointIndex];
-                const position = getAutomationPointPosition(state, clip, automationPoint, metrics);
-                if (distance(point, position) <= metrics.automationPointRadius + 4) {
-                    return {
-                        kind: "automation-point",
-                        clip,
-                        pointId: automationPoint.id,
-                    };
-                }
-            }
+        const automationPointHit = getAutomationPointHit(clipView, point, metrics);
+        if (automationPointHit) {
+            return automationPointHit;
         }
-        const titleRect = getClipTitleRect(state, clip, metrics);
-        const localX = point.x - rect.x;
-        const insideTitle = pointInRect(point, titleRect);
-        const canResize = clip.type !== "automation" || insideTitle;
-        if (canResize && localX <= metrics.resizeHandleWidth) {
-            return { kind: "resize-left", clip };
+        if (pointInRect(point, clipView.resizeLeftRect)) {
+            return {
+                kind: "resize-left",
+                clip: clipView.clip,
+                clipId: clipView.clip.id,
+            };
         }
-        if (canResize && rect.width - localX <= metrics.resizeHandleWidth) {
-            return { kind: "resize-right", clip };
+        if (pointInRect(point, clipView.resizeRightRect)) {
+            return {
+                kind: "resize-right",
+                clip: clipView.clip,
+                clipId: clipView.clip.id,
+            };
         }
-        if (isAutomationClip(clip) && !insideTitle) {
-            return { kind: "automation-body", clip };
+        if (clipView.isAutomation && !pointInRect(point, clipView.titleRect)) {
+            return {
+                kind: "automation-body",
+                clip: clipView.clip,
+                clipId: clipView.clip.id,
+            };
         }
-        return { kind: "clip", clip };
+        return {
+            kind: "clip",
+            clip: clipView.clip,
+            clipId: clipView.clip.id,
+        };
     }
     return { kind: "empty" };
 }

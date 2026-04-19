@@ -1,110 +1,13 @@
-import { clamp, createVirtualTrack, getMaxScrollX, getMaxScrollY, getTrackIdByIndex, isAutomationClip, } from "./geometry";
+import { clamp, getTrackIdByIndex, isAutomationClip, } from "./geometry";
 import { DEFAULT_PLAYLIST_METRICS, } from "./types";
-function cloneSelection(selection) {
-    return {
-        clipIds: [...selection.clipIds],
-        automationPointIds: [...selection.automationPointIds],
-    };
-}
-function cloneClip(clip) {
-    if (isAutomationClip(clip)) {
-        return {
-            ...clip,
-            points: clip.points.map((point) => ({ ...point })),
-        };
-    }
-    return { ...clip };
-}
-function cloneState(state) {
-    return {
-        tracks: state.tracks.map((track) => ({ ...track })),
-        clips: state.clips.map(cloneClip),
-        viewport: { ...state.viewport },
-        snap: { ...state.snap },
-        selection: cloneSelection(state.selection),
-        marquee: state.marquee
-            ? {
-                start: { ...state.marquee.start },
-                current: { ...state.marquee.current },
-            }
-            : null,
-        contextMenu: state.contextMenu
-            ? {
-                ...state.contextMenu,
-                position: { ...state.contextMenu.position },
-            }
-            : null,
-        hover: state.hover ? { ...state.hover } : null,
-        playPosition: { ...state.playPosition },
-    };
-}
-function sortAutomationPoints(points) {
-    return [...points].sort((left, right) => left.time - right.time);
-}
-function normalizeState(input, metrics) {
-    const state = cloneState(input);
-    state.viewport.pxPerBeat = clamp(state.viewport.pxPerBeat, metrics.minPxPerBeat, metrics.maxPxPerBeat);
-    state.viewport.scrollX = clamp(state.viewport.scrollX, 0, getMaxScrollX(state, metrics));
-    state.viewport.scrollY = clamp(state.viewport.scrollY, 0, getMaxScrollY(state, metrics));
-    state.playPosition.time = Math.max(0, state.playPosition.time);
-    state.clips = state.clips.map((clip) => {
-        const duration = Math.max(metrics.minClipDuration, clip.duration);
-        const start = Math.max(0, clip.start);
-        if (isAutomationClip(clip)) {
-            return {
-                ...clip,
-                start,
-                duration,
-                points: sortAutomationPoints(clip.points.map((point) => ({
-                    ...point,
-                    time: clamp(point.time, 0, duration),
-                    value: clamp(point.value, 0, 1),
-                }))),
-            };
-        }
-        return { ...clip, start, duration };
-    });
-    return state;
-}
-function materializeTracksThrough(state, maxTrackIndex) {
-    if (maxTrackIndex < state.tracks.length) {
-        return state;
-    }
-    const tracks = [...state.tracks];
-    for (let index = tracks.length; index <= maxTrackIndex; index += 1) {
-        tracks.push(createVirtualTrack(index));
-    }
-    return { ...state, tracks };
-}
-function makePointId(clip) {
-    let index = clip.points.length + 1;
-    let id = `${clip.id}-pt-${index}`;
-    while (clip.points.some((point) => point.id === id)) {
-        index += 1;
-        id = `${clip.id}-pt-${index}`;
-    }
-    return id;
-}
-function makeTrackId(tracks) {
-    let index = tracks.length + 1;
-    let id = `track-${index}`;
-    while (tracks.some((track) => track.id === id)) {
-        index += 1;
-        id = `track-${index}`;
-    }
-    return id;
-}
-function createInsertedTrack(tracks, afterIndex) {
-    const base = createVirtualTrack(afterIndex + 1);
-    return {
-        ...base,
-        id: makeTrackId(tracks),
-        label: `Track ${afterIndex + 2}`,
-    };
-}
+import { createPlaylistPresentation } from "./presentation";
+import { createInsertedTrack, makePointId, materializeTracksThrough, } from "./state-track-helpers";
+import { normalizeState, sortAutomationPoints } from "./state-utils";
+// PlaylistCore is the mutable facade. Keep pure transforms in the helper modules.
 export class PlaylistCore {
     state;
     listeners = new Set();
+    presentationCache = null;
     metrics;
     constructor(initialState, options = {}) {
         this.metrics = options.metrics ?? DEFAULT_PLAYLIST_METRICS;
@@ -112,6 +15,17 @@ export class PlaylistCore {
     }
     getState() {
         return this.state;
+    }
+    getPresentation() {
+        if (this.presentationCache?.state === this.state) {
+            return this.presentationCache.presentation;
+        }
+        const presentation = createPlaylistPresentation(this.state, this.metrics);
+        this.presentationCache = {
+            state: this.state,
+            presentation,
+        };
+        return presentation;
     }
     subscribe(listener) {
         this.listeners.add(listener);
@@ -406,6 +320,7 @@ export class PlaylistCore {
     }
     commit(nextState) {
         this.state = normalizeState(nextState, this.metrics);
+        this.presentationCache = null;
         for (const listener of this.listeners) {
             listener(this.state);
         }
