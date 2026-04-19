@@ -38,6 +38,10 @@ const COLORS = {
   scrollbarThumb: 0x5f5f5f,
 };
 
+const CLIP_BODY_ALPHA = 1;
+const CLIP_TITLE_ALPHA = 0.34;
+const CLIP_RESIZE_ALPHA = 0.2;
+
 function parseHexColor(value: string, fallback: number): number {
   const normalized = value.trim();
 
@@ -99,7 +103,7 @@ function drawSceneBackground(
     .fill({ color: COLORS.background });
 }
 
-function drawGridAndRuler(
+function drawRulerChrome(
   graphics: Graphics,
   textLayer: Container,
   presentation: PlaylistPresentation,
@@ -137,15 +141,6 @@ function drawGridAndRuler(
 
   for (const tick of presentation.rulerTicks) {
     graphics
-      .moveTo(tick.x, metrics.rulerHeight)
-      .lineTo(tick.x, layout.sceneRect.height)
-      .stroke({
-        alpha: tick.isBar ? 0.95 : 0.55,
-        color: tick.isBar ? COLORS.gridMajor : COLORS.gridMinor,
-        width: tick.isBar ? 1.25 : 1,
-      });
-
-    graphics
       .moveTo(tick.x, metrics.rulerHeight - (tick.isBar ? 15 : 8))
       .lineTo(tick.x, metrics.rulerHeight)
       .stroke({
@@ -182,7 +177,7 @@ function drawTrackRowsBackground(
   }
 }
 
-function drawTimelineGridOverlay(
+function drawTimelineGrid(
   graphics: Graphics,
   presentation: PlaylistPresentation,
 ): void {
@@ -343,9 +338,8 @@ function drawClipLabel(
   );
 }
 
-function drawClip(
+function drawClipBody(
   graphics: Graphics,
-  textLayer: Container,
   clipView: PlaylistClipPresentation,
 ): void {
   const color = parseHexColor(clipView.clip.color, 0x777777);
@@ -358,7 +352,29 @@ function drawClip(
       clipView.rect.height,
       4,
     )
-    .fill({ color, alpha: clipView.isAutomation ? 0.82 : 0.9 })
+    .fill({ color, alpha: CLIP_BODY_ALPHA });
+  graphics
+    .rect(
+      clipView.titleRect.x,
+      clipView.titleRect.y,
+      clipView.titleRect.width,
+      clipView.titleRect.height,
+    )
+    .fill({ color: COLORS.panel, alpha: CLIP_TITLE_ALPHA });
+}
+
+function drawClipOverlay(
+  graphics: Graphics,
+  clipView: PlaylistClipPresentation,
+): void {
+  graphics
+    .roundRect(
+      clipView.rect.x,
+      clipView.rect.y,
+      clipView.rect.width,
+      clipView.rect.height,
+      4,
+    )
     .stroke({
       color: clipView.selected
         ? COLORS.selected
@@ -368,14 +384,6 @@ function drawClip(
       width: clipView.selected ? 2 : 1,
       alpha: clipView.hovered || clipView.selected ? 1 : 0.8,
     });
-  graphics
-    .rect(
-      clipView.titleRect.x,
-      clipView.titleRect.y,
-      clipView.titleRect.width,
-      clipView.titleRect.height,
-    )
-    .fill({ color: COLORS.panel, alpha: 0.34 });
 
   graphics
     .rect(
@@ -384,7 +392,7 @@ function drawClip(
       clipView.resizeLeftRect.width,
       clipView.resizeLeftRect.height,
     )
-    .fill({ color: COLORS.text, alpha: 0.2 });
+    .fill({ color: COLORS.text, alpha: CLIP_RESIZE_ALPHA });
   graphics
     .rect(
       clipView.resizeRightRect.x,
@@ -392,22 +400,32 @@ function drawClip(
       clipView.resizeRightRect.width,
       clipView.resizeRightRect.height,
     )
-    .fill({ color: COLORS.text, alpha: 0.2 });
-
-  drawClipLabel(textLayer, clipView);
+    .fill({ color: COLORS.text, alpha: CLIP_RESIZE_ALPHA });
 
   if (clipView.isAutomation) {
     drawAutomation(graphics, clipView);
   }
 }
 
+function drawClip(
+  clipGraphics: Graphics,
+  clipTextLayer: Container,
+  overlayGraphics: Graphics,
+  clipView: PlaylistClipPresentation,
+): void {
+  drawClipBody(clipGraphics, clipView);
+  drawClipLabel(clipTextLayer, clipView);
+  drawClipOverlay(overlayGraphics, clipView);
+}
+
 function drawClips(
-  graphics: Graphics,
-  textLayer: Container,
+  clipGraphics: Graphics,
+  clipTextLayer: Container,
+  overlayGraphics: Graphics,
   presentation: PlaylistPresentation,
 ): void {
   for (const clipView of presentation.visibleClipViews) {
-    drawClip(graphics, textLayer, clipView);
+    drawClip(clipGraphics, clipTextLayer, overlayGraphics, clipView);
   }
 }
 
@@ -498,7 +516,7 @@ function drawScrollbars(
     .fill({ color: COLORS.panelStrong });
 }
 
-function drawOverlay(
+function drawTimelineOverlay(
   graphics: Graphics,
   presentation: PlaylistPresentation,
 ): void {
@@ -534,32 +552,6 @@ function drawOverlay(
   }
 }
 
-function drawPlaylist(
-  graphics: Graphics,
-  textLayer: Container,
-  presentation: PlaylistPresentation,
-): void {
-  graphics.clear();
-  clearTextLayer(textLayer);
-
-  drawSceneBackground(graphics, presentation);
-  drawTrackRowsBackground(graphics, presentation);
-  drawTimelineGridOverlay(graphics, presentation);
-  drawClips(graphics, textLayer, presentation);
-  drawOverlay(graphics, presentation);
-  drawGridAndRuler(graphics, textLayer, presentation);
-  drawTrackRows(graphics, textLayer, presentation);
-  drawPlayPositionRulerMarker(graphics, presentation);
-  drawScrollbars(graphics, presentation);
-  drawContextMenu(graphics, textLayer, presentation);
-
-  addText(textLayer, "SliceX Playlist", 15, 11, {
-    color: COLORS.text,
-    size: 13,
-    weight: "700",
-  });
-}
-
 export function createPlaylistRenderer(
   container: HTMLElement,
   core: PlaylistCore,
@@ -570,8 +562,10 @@ export function createPlaylistRenderer(
   const sceneGraphics = new Graphics();
   const timelineMask = new Graphics();
   const timelineContainer = new Container();
-  const timelineGraphics = new Graphics();
-  const timelineTextLayer = new Container();
+  const timelineGridGraphics = new Graphics();
+  const clipGraphics = new Graphics();
+  const clipTextLayer = new Container();
+  const overlayGraphics = new Graphics();
   const chromeGraphics = new Graphics();
   const chromeTextLayer = new Container();
   const foregroundGraphics = new Graphics();
@@ -581,7 +575,12 @@ export function createPlaylistRenderer(
 
   root.eventMode = "none";
   timelineContainer.mask = timelineMask;
-  timelineContainer.addChild(timelineGraphics, timelineTextLayer);
+  timelineContainer.addChild(
+    timelineGridGraphics,
+    clipGraphics,
+    clipTextLayer,
+    overlayGraphics,
+  );
   root.addChild(
     sceneGraphics,
     timelineMask,
@@ -601,8 +600,10 @@ export function createPlaylistRenderer(
 
     sceneGraphics.clear();
     timelineMask.clear();
-    timelineGraphics.clear();
-    clearTextLayer(timelineTextLayer);
+    timelineGridGraphics.clear();
+    clipGraphics.clear();
+    clearTextLayer(clipTextLayer);
+    overlayGraphics.clear();
     chromeGraphics.clear();
     clearTextLayer(chromeTextLayer);
     foregroundGraphics.clear();
@@ -620,11 +621,11 @@ export function createPlaylistRenderer(
       )
       .fill({ color: 0xffffff });
 
-    drawTimelineGridOverlay(timelineGraphics, presentation);
-    drawClips(timelineGraphics, timelineTextLayer, presentation);
-    drawOverlay(timelineGraphics, presentation);
+    drawTimelineGrid(timelineGridGraphics, presentation);
+    drawClips(clipGraphics, clipTextLayer, overlayGraphics, presentation);
+    drawTimelineOverlay(overlayGraphics, presentation);
 
-    drawGridAndRuler(chromeGraphics, chromeTextLayer, presentation);
+    drawRulerChrome(chromeGraphics, chromeTextLayer, presentation);
     drawTrackRows(chromeGraphics, chromeTextLayer, presentation);
     drawPlayPositionRulerMarker(chromeGraphics, presentation);
 
@@ -694,8 +695,10 @@ export function createPlaylistRenderer(
       resizeObserver?.disconnect();
       sceneGraphics.clear();
       timelineMask.clear();
-      timelineGraphics.clear();
-      clearTextLayer(timelineTextLayer);
+      timelineGridGraphics.clear();
+      clipGraphics.clear();
+      clearTextLayer(clipTextLayer);
+      overlayGraphics.clear();
       chromeGraphics.clear();
       clearTextLayer(chromeTextLayer);
       foregroundGraphics.clear();
