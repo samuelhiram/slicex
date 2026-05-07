@@ -2,7 +2,7 @@
 
 ## Resumen rápido
 
-SliceX es un monorepo modular para construir un editor financiero con fronteras claras entre dominio, persistencia y render. Este repositorio contiene paquetes reutilizables (`@slicex/*`) y una aplicación Next.js en `apps/web`.
+SliceX es un monorepo modular para construir un editor financiero con fronteras claras entre dominio, persistencia y render. Este repositorio contiene paquetes reutilizables (`@slicex/*`) y una aplicación SPA Vite + React + Hono Worker desplegada en Cloudflare Workers, en `apps/web`.
 
 ## Rápido inicio (desarrollo)
 
@@ -44,7 +44,7 @@ pnpm dev
 - `packages/canvas` — Motor Pixi y adaptadores gráficos.
 - `packages/contracts` — DTOs, validaciones y `ErrorEnvelope`.
 - `packages/db` — Prisma schema y acceso a base de datos.
-- `apps/web` — Next.js (App Router), route handlers y UI.
+- `apps/web` — Vite + React (SPA) + Hono Worker en `worker/`, deploy a Cloudflare Workers.
 
 ## Documentación y decisiones (ADRs)
 

@@ -8,6 +8,11 @@ coverage/
 /.idea
 .DS_Store
 
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars
+worker-configuration.d.ts
+
 # Build artifacts
 *.tsbuildinfo
 

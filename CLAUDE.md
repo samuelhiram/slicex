@@ -19,20 +19,28 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 | Capa | Tech |
 |---|---|
 | Monorepo | pnpm 10 + workspaces + Turbo |
-| App | Next.js 16 (App Router) + React 19 + TypeScript 5 |
+| App | Vite 6 + React 19 + TypeScript 5 (SPA) |
+| Worker / API | Hono 4 sobre Cloudflare Workers, vía `@cloudflare/vite-plugin` |
 | Renderer | Pixi.js 8 |
 | Estado | Zustand 4 (store actual `editorStore.ts` está dormido — modelo financial, no playlist) |
-| Persistencia | Prisma 7 + `@prisma/adapter-pg` (Postgres) |
+| Persistencia | Prisma 7 + `@prisma/adapter-pg` sobre Cloudflare Hyperdrive (Postgres) |
 | Validación | Zod en `@slicex/contracts` |
-| Logging | `pino` + `@sentry/nextjs` |
+| Observabilidad | `@sentry/cloudflare` (Worker) + `@sentry/react` (browser) + JSON `console` → Workers Logpush |
 | Tests | Vitest (unit) + Playwright (config presente, **0 specs** hoy) |
+| Deploy | `wrangler deploy` o Workers Builds (push a `master` → build+deploy) |
 
 ## Mapa rápido
 
-- [apps/web/src/components/PlaylistShell.tsx](apps/web/src/components/PlaylistShell.tsx) — única superficie React activa.
+- [apps/web/index.html](apps/web/index.html) + [apps/web/src/main.tsx](apps/web/src/main.tsx) — entrada Vite/React.
+- [apps/web/src/App.tsx](apps/web/src/App.tsx) — root React, monta `<PlaylistShell />`.
+- [apps/web/src/components/PlaylistShell.tsx](apps/web/src/components/PlaylistShell.tsx) — única superficie React activa (canvas Pixi).
+- [apps/web/worker/index.ts](apps/web/worker/index.ts) — Worker entry (Hono + Sentry).
+- [apps/web/worker/routes/](apps/web/worker/routes/) — `health.ts`, `timelines.ts`.
+- [apps/web/wrangler.jsonc](apps/web/wrangler.jsonc) — config Worker + assets + Hyperdrive binding.
+- [apps/web/vite.config.ts](apps/web/vite.config.ts) — Vite + plugin React + plugin Cloudflare.
 - [packages/canvas/src/playlist-core/](packages/canvas/src/playlist-core/) — modelo, geometría, estado, demo data.
-- [packages/canvas/src/playlist-interaction/controller.ts](packages/canvas/src/playlist-interaction/controller.ts) — pan, zoom, drag, resize, marquee, automation, scrollbars (~780 líneas).
-- [packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts](packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts) — renderer Pixi por capas (~720 líneas).
+- [packages/canvas/src/playlist-interaction/controller.ts](packages/canvas/src/playlist-interaction/controller.ts) — pan, zoom, drag, resize, marquee, automation, scrollbars.
+- [packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts](packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts) — renderer Pixi por capas.
 - [packages/db/prisma/schema.prisma](packages/db/prisma/schema.prisma) — schema multi-tenant con `Timeline`/`TimelineRevision` para persistencia futura.
 
 ## Reglas que se aplican aquí
@@ -48,10 +56,14 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 ```powershell
 pnpm install
 pnpm dev                  # turbo dev de todos los paquetes
-pnpm dev:web              # solo apps/web
+pnpm dev:web              # apps/web (Vite + Worker en runtime CF local)
+
+pnpm -w run build:web     # build SPA + Worker (vite build)
+pnpm -w run preview:web   # preview local del build con runtime CF
+pnpm -w run deploy:web    # vite build + wrangler deploy
 
 pnpm -w run check:arch    # check-imports + check-js-siblings
-pnpm -w run typecheck     # tsc -b --noEmit
+pnpm -w run typecheck     # tsc raíz + tsc client + tsc worker
 pnpm -w run test:unit     # vitest (pasar -- --run para no entrar en watch)
 pnpm exec vitest run      # forma directa, equivalente
 pnpm -w run check:env     # crea/valida .env.local
@@ -59,11 +71,24 @@ pnpm -w run check:fast    # check:arch + check:env (gate pre-commit)
 
 pnpm -w --filter @slicex/db prisma generate
 pnpm -w --filter @slicex/db prisma migrate dev
+
+# Cloudflare:
+pnpm -w --filter apps-web exec wrangler hyperdrive create slicex-pg \
+  --connection-string="postgresql://..."
+pnpm -w --filter apps-web exec wrangler secret put SENTRY_DSN
+pnpm -w --filter apps-web exec wrangler deploy
 ```
+
+## Deploy de un dedo
+
+1. Connect repo en Cloudflare Workers Builds (dashboard → Workers → connect Git).
+2. Build command: `pnpm -w run build:web`. Output: `apps/web/dist/`.
+3. Cada push a `master` (o branch que conectes) hace build + deploy automático. PRs reciben preview URLs.
+4. Bindings/secrets vivos en wrangler.jsonc o dashboard (Hyperdrive id, SENTRY_DSN, etc).
 
 ## Cómo trabajar conmigo
 
-- **Antes de borrar algo del scaffolding financiero** (`@slicex/core`, `@slicex/contracts`, `@slicex/db`, `editorStore.ts`, ruta `/api/timelines/[timelineId]`): preguntar.
+- **Antes de borrar algo del scaffolding financiero** (`@slicex/core`, `@slicex/contracts`, `@slicex/db`, `editorStore.ts`, ruta Hono `/api/timelines/:timelineId`): preguntar.
 - **Antes de tocar `master`**: confirmar. Trabajar en branch.
 - **Gates obligatorios** antes de reportar trabajo terminado: `check:arch`, `typecheck`, `vitest run`. Tres en verde, no dos.
 - **Dev server en el navegador**: para cambios de UI/canvas, levantar `pnpm dev:web` y verificar en el browser, no solo confiar en typecheck.
@@ -71,4 +96,5 @@ pnpm -w --filter @slicex/db prisma migrate dev
 
 ## Lo que ya se limpió (referencia)
 
-Fase A (commit `b0b48c0`) podó cruft, middleware roto (`proxy.ts`), duplicados de Sentry/Playwright, directorios vacíos, `pixi-viewport` sin uso. Ver el diff si necesitas contexto histórico.
+- Fase A (commit `b0b48c0`) podó cruft, middleware roto (`proxy.ts`), duplicados de Sentry/Playwright, directorios vacíos, `pixi-viewport` sin uso.
+- Fase Cloudflare (branch `feature/cloudflare-migration`): se eliminó Next.js y se sustituyó por Vite + Hono sobre Cloudflare Workers. La composición React, estilos y la ruta `timelines` se preservaron 1:1; sólo cambió el frame que las hospeda.

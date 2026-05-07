@@ -1,15 +1,14 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "jsx": "react-jsx",
-    "types": ["vite/client"],
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"],
     "moduleResolution": "Bundler",
     "module": "ESNext",
     "noEmit": true,
     "isolatedModules": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*", "vite.config.ts"],
-  "exclude": ["node_modules", "dist", "worker"]
+  "include": ["worker/**/*"],
+  "exclude": ["node_modules", "dist"]
 }

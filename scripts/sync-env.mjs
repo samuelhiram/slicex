@@ -5,7 +5,7 @@ import path from "path";
 const root = process.cwd();
 const localFile = path.join(root, ".env.local");
 const exampleFile = path.join(root, ".env.example");
-const REQUIRED = ["NEXT_PUBLIC_APP_URL"];
+const REQUIRED = ["VITE_APP_URL"];
 
 async function parseEnv(filePath) {
   const map = {};
@@ -46,7 +46,7 @@ async function main() {
       }
       if (Object.keys(toWrite).length === 0) {
         // Fallback defaults
-        toWrite["NEXT_PUBLIC_APP_URL"] = "http://localhost:3000";
+        toWrite["VITE_APP_URL"] = "http://localhost:3000";
       }
       await writeEnv(localFile, toWrite);
       console.log(
@@ -55,7 +55,7 @@ async function main() {
       process.exit(0);
     } catch (e) {
       // Create minimal .env.local
-      const defaults = { NEXT_PUBLIC_APP_URL: "http://localhost:3000" };
+      const defaults = { VITE_APP_URL: "http://localhost:3000" };
       await writeEnv(localFile, defaults);
       console.log("✅ check-env: created minimal .env.local");
       process.exit(0);

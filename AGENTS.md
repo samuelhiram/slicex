@@ -10,7 +10,7 @@ Documentar las responsabilidades por capa y las reglas de colaboración para evi
 - `@slicex/canvas`: renderer Pixi y adaptadores gráficos (sin fetch ni auth). Implementaciones gráficas y optimizaciones de render.
 - `@slicex/contracts`: DTOs, validaciones y el `ErrorEnvelope` compartido (contratos entre capas).
 - `@slicex/db`: Prisma schema, migraciones y el cliente Prisma singleton.
-- `apps/web`: Next.js (App Router), routing HTTP, store (Zustand) y wiring de UI + adapters.
+- `apps/web`: SPA Vite + React 19 + Hono Worker (Cloudflare Workers). El cliente vive en `src/`; el Worker (API + asset fallback) vive en `worker/`. Store Zustand y wiring de UI + adapters.
 
 ## Principios y reglas básicas
 
@@ -44,7 +44,7 @@ pnpm -w run check:env
 
 - Branches: `feature/<desc>`, `fix/<desc>`, `chore/<desc>`, `hotfix/<desc>`.
 - Mensajes de commit: usar el formato `type(scope): short description`. Ej: `feat(core): add recurrence rule`.
-- Abrir PR contra `main`. Todas las PRs deben pasar `check:fast` en la CI y tener al menos una revisión aprobatoria.
+- Abrir PR contra `master`. Todas las PRs deben pasar `check:fast` en la CI y tener al menos una revisión aprobatoria.
 
 ## Proceso de PR y revisiones
 

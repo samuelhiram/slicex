@@ -2,16 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [master]
   pull_request:
-    branches: [ main, master ]
+    branches: [master]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18.x]
+        node-version: [20.x]
     env:
       CI: true
     steps:
@@ -30,10 +30,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run architecture checks
+      - name: Architecture checks
         run: pnpm -w run check:arch
 
-      - name: Check env
+      - name: Env check
         run: pnpm -w run check:env
 
       - name: Typecheck
@@ -42,44 +42,19 @@ jobs:
       - name: Unit tests
         run: pnpm -w run test:unit -- --run
 
+      - name: Build web (Vite + Worker)
+        run: pnpm -w run build:web
+
       - name: Install Playwright browsers
         run: pnpm -w exec playwright install --with-deps
 
-      - name: E2E tests (Playwright)
-        run: pnpm -w run test:e2e -- --config=playwright.config.ts --reporter=github
+      - name: E2E tests
+        run: pnpm -w run test:e2e
 
-      - name: Upload Playwright HTML report (if generated)
+      - name: Upload Playwright HTML report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: playwright-report || ''
-name: CI
-
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-
-jobs:
-  ci:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Install pnpm
-        run: npm i -g pnpm
-      - name: Install deps
-        run: pnpm install
-      - name: Typecheck
-        run: pnpm -w typecheck
-      - name: Lint
-        run: pnpm -w lint
-      - name: Unit tests
-        run: pnpm -w test:unit
-      - name: Build
-        run: pnpm build
+          path: playwright-report
+          if-no-files-found: ignore
