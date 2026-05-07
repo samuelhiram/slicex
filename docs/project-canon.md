@@ -2,6 +2,7 @@
 
 > Estado sintetizado del repo inspeccionado en `master`.
 > Este archivo sirve como referencia canónica corta para entender qué es SliceX hoy, cómo está organizado y qué partes del repo describen el estado real.
+> **Para el comportamiento del producto** (modelo de timeline, objetos financieros, mecánicas de tarjeta/MSI, etc.) ver [product-spec.md](product-spec.md) — ese es el documento primigenio del producto, no este.
 
 ## 1. Qué es SliceX hoy
 

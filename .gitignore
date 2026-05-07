@@ -18,3 +18,6 @@ playwright-webserver.log
 
 # Local scratch
 .tmp/
+
+# Claude Code local-only settings
+.claude/settings.local.json
