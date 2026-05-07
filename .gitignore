@@ -7,3 +7,14 @@ coverage/
 .env.*
 /.idea
 .DS_Store
+
+# Build artifacts
+*.tsbuildinfo
+
+# Playwright
+playwright-report/
+test-results/
+playwright-webserver.log
+
+# Local scratch
+.tmp/

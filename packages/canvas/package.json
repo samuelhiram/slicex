@@ -8,7 +8,6 @@
     "react": "*"
   },
   "dependencies": {
-    "@slicex/core": "workspace:^",
-    "pixi-viewport": "^6.0.3"
+    "@slicex/core": "workspace:^"
   }
 }
