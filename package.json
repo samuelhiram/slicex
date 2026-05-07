@@ -10,8 +10,11 @@
     "dev": "turbo dev",
     "dev:web": "pnpm --filter apps-web dev",
     "build": "turbo build",
+    "build:web": "pnpm --filter apps-web build",
+    "deploy:web": "pnpm --filter apps-web deploy",
+    "preview:web": "pnpm --filter apps-web preview",
     "lint": "eslint . --ext .ts,.tsx --fix",
-    "typecheck": "tsc -b --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter apps-web run typecheck",
     "test": "pnpm -w test:unit",
     "test:unit": "vitest",
     "test:e2e": "playwright test",
@@ -22,8 +25,8 @@
     "check:js-siblings": "node scripts/check-js-siblings.mjs",
     "check:fast": "pnpm -w -s run check:arch && pnpm -w -s run check:env",
     "pre:commit": "pnpm -w -s run check:fast",
-    "db:generate": "pnpm -w --filter @slicex/db prisma generate",
-    "db:migrate": "pnpm -w --filter @slicex/db prisma migrate dev"
+    "db:generate": "pnpm --filter @slicex/db exec prisma generate",
+    "db:migrate": "pnpm --filter @slicex/db exec prisma migrate dev"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
@@ -36,7 +39,7 @@
     "jsdom": "^29.0.2",
     "turbo": "^1.10.5",
     "typescript": "^5.2.0",
-    "vitest": "^1.0.0"
+    "vitest": "^3.0.0"
   },
   "dependencies": {
     "pixi.js": "^8.17.1",

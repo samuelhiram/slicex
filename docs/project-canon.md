@@ -6,7 +6,7 @@
 
 ## 1. Qué es SliceX hoy
 
-SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web en Next.js y paquetes compartidos. En el estado actual del código, la superficie principal visible no es un editor financiero genérico sino un **Playlist tipo FL Studio** montado en `apps/web` y renderizado con Pixi desde `@slicex/canvas`.
+SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vite + React + Hono Worker desplegada en Cloudflare Workers) y paquetes compartidos. En el estado actual del código, la superficie principal visible no es un editor financiero genérico sino un **Playlist tipo FL Studio** montado en `apps/web` y renderizado con Pixi desde `@slicex/canvas`.
 
 ## 2. Estado real actual
 
@@ -43,8 +43,10 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web en Next
 ### App
 
 - `apps/web`
-  - App Router de Next.js.
-  - Entrada actual del producto visible.
+  - SPA Vite + React 19 (cliente) + Hono Worker (API) corriendo como **un solo Cloudflare Worker** vía `@cloudflare/vite-plugin`.
+  - Entrada cliente: `index.html` → `src/main.tsx` → `<App />` → `<PlaylistShell />`.
+  - Entrada Worker: `worker/index.ts` (Hono + Sentry CF) → rutas en `worker/routes/`.
+  - Static Assets binding sirve la SPA con `not_found_handling: "single-page-application"` y `run_worker_first: ["/api/*"]` deriva el API al Worker.
   - Monta el playlist full-screen.
 
 ### Paquetes
@@ -63,11 +65,21 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web en Next
 
 ## 4. Superficie principal para entender el proyecto
 
-### Entrada web
+### Entrada web (cliente)
 
-- `apps/web/src/app/page.tsx`
+- `apps/web/index.html`
+- `apps/web/src/main.tsx`
+- `apps/web/src/App.tsx`
 - `apps/web/src/components/PlaylistShell.tsx`
-- `apps/web/src/app/globals.css`
+- `apps/web/src/styles/globals.css`
+
+### Entrada web (Worker / API)
+
+- `apps/web/worker/index.ts`
+- `apps/web/worker/routes/health.ts`
+- `apps/web/worker/routes/timelines.ts`
+- `apps/web/wrangler.jsonc`
+- `apps/web/vite.config.ts`
 
 ### Playlist core
 
@@ -237,13 +249,9 @@ Estas inconsistencias existen en el repo inspeccionado y conviene conocerlas:
    - También incluye notas más recientes de playlist/interacción.
    - Sirve como log histórico, no como snapshot único.
 
-3. **CI duplicada en un solo archivo**
-   - `.github/workflows/ci.yml` contiene dos bloques `name: CI` concatenados.
-   - Eso debe considerarse deuda de limpieza documental/técnica.
-
-4. **Rama objetivo mencionada con variación**
-   - Algunos docs hablan de PR contra `main`.
-   - El repo inspeccionado usa `master` como default branch.
+3. **Rama objetivo mencionada con variación histórica**
+   - Algunos docs viejos hablan de PR contra `main`.
+   - El repo usa `master` como default branch (CI y AGENTS ya están alineados).
 
 ## 12. Qué tomar como verdad canónica mínima
 

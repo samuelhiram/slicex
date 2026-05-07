@@ -1,13 +1,14 @@
 html,
 body,
-#__next {
+#root {
   width: 100%;
   height: 100%;
 }
 
 :root {
   color-scheme: dark;
-  --font-sans: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  --font-sans: "IBM Plex Sans", "Segoe UI Variable", "Segoe UI", Arial,
+    sans-serif;
   --page-bg: #181818;
   --text: #f1f1e8;
   --muted: #b8b3a5;
@@ -92,8 +93,7 @@ textarea {
   color: var(--muted);
 }
 
-.app-error,
-.global-error {
+.app-error {
   min-height: 100dvh;
   display: grid;
   align-content: start;
@@ -105,29 +105,24 @@ textarea {
 }
 
 .app-error__eyebrow,
-.global-error__eyebrow,
-.app-error__body,
-.global-error__body {
+.app-error__body {
   color: var(--muted);
 }
 
-.app-error__title,
-.global-error__title {
+.app-error__title {
   margin: 0;
   font-size: 16px;
   line-height: 1.25;
   font-weight: 700;
 }
 
-.app-error__body,
-.global-error__body {
+.app-error__body {
   margin: 0;
   font-size: 14px;
   line-height: 1.45;
 }
 
-.app-error__action,
-.global-error__action {
+.app-error__action {
   margin: 0;
   padding: 8px 10px;
   border: 1px solid var(--line);
