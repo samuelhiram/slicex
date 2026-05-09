@@ -11,8 +11,9 @@
     "dev:web": "pnpm --filter apps-web dev",
     "build": "turbo build",
     "build:web": "pnpm --filter apps-web build",
-    "deploy:web": "pnpm --filter apps-web deploy",
+    "deploy:web": "wrangler deploy",
     "preview:web": "pnpm --filter apps-web preview",
+    "cf-typegen": "wrangler types ./apps/web/worker-configuration.d.ts",
     "lint": "eslint . --ext .ts,.tsx --fix",
     "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter apps-web run typecheck",
     "test": "pnpm -w test:unit",
@@ -39,7 +40,8 @@
     "jsdom": "^29.0.2",
     "turbo": "^1.10.5",
     "typescript": "^5.2.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "wrangler": "^4.0.0"
   },
   "dependencies": {
     "pixi.js": "^8.17.1",
