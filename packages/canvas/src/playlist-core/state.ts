@@ -120,13 +120,15 @@ export class PlaylistCore {
   // Generic dispatch — any caller (including future tools/gestures) can use this directly.
   dispatch(action: PlaylistAction): void {
     const previous = this.history.present;
-    const next = normalizeState(
-      playlistReducer(previous, action, this.metrics),
-      this.metrics,
-    );
-    if (next === previous) {
+    const reduced = playlistReducer(previous, action, this.metrics);
+    // Reducer signals "no change" by returning the same reference. Skip
+    // normalization and notify entirely so callers like advancePlayPosition
+    // (60 fps from the rAF tick) don't churn allocations and re-renders
+    // when they're effectively a no-op.
+    if (reduced === previous) {
       return;
     }
+    const next = normalizeState(reduced, this.metrics);
     if (isUndoableAction(action) && this.gestureDepth === 0) {
       this.history = pushHistory(this.history, next);
     } else {

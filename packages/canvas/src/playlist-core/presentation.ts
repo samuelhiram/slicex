@@ -10,14 +10,12 @@ import {
 } from "./types";
 import {
   getAutomationPointPosition,
-  getClipRect,
   getClipTitleRect,
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
   getTrackByIndex,
   getTrackHeight,
   getTrackIdByIndex,
-  getTrackIndexById,
   getVerticalScrollbarRect,
   getVerticalScrollbarThumbRect,
   isAutomationClip,
@@ -27,8 +25,58 @@ import {
   rectsIntersect,
   screenXToTime,
   timeToScreenX,
-  trackIndexToScreenY,
 } from "./geometry";
+
+// Per-presentation caches that turn the inner loops from O(clips × tracks)
+// into roughly O(visible clips). Built once per createPlaylistPresentation.
+interface TrackLayoutCache {
+  trackIndexById: Map<string, number>;
+  trackTops: number[];
+  trackHeights: number[];
+}
+
+function buildTrackLayoutCache(
+  state: PlaylistState,
+  metrics: PlaylistMetrics,
+): TrackLayoutCache {
+  const trackIndexById = new Map<string, number>();
+  const trackTops: number[] = new Array(state.tracks.length);
+  const trackHeights: number[] = new Array(state.tracks.length);
+  let acc = 0;
+  for (let i = 0; i < state.tracks.length; i += 1) {
+    const track = state.tracks[i]!;
+    trackIndexById.set(track.id, i);
+    const h = getTrackHeight(track, metrics);
+    trackTops[i] = acc;
+    trackHeights[i] = h;
+    acc += h;
+  }
+  return { trackIndexById, trackTops, trackHeights };
+}
+
+function trackTopAt(
+  index: number,
+  cache: TrackLayoutCache,
+  metrics: PlaylistMetrics,
+): number {
+  if (index < cache.trackTops.length) {
+    return cache.trackTops[index]!;
+  }
+  const lastTop =
+    cache.trackTops.length > 0
+      ? cache.trackTops[cache.trackTops.length - 1]! +
+        cache.trackHeights[cache.trackHeights.length - 1]!
+      : 0;
+  return lastTop + (index - cache.trackTops.length) * metrics.trackHeight;
+}
+
+function trackHeightAt(
+  index: number,
+  cache: TrackLayoutCache,
+  metrics: PlaylistMetrics,
+): number {
+  return cache.trackHeights[index] ?? metrics.trackHeight;
+}
 
 export type PlaylistTrackMenuAction =
   | "clear-track"
@@ -263,10 +311,10 @@ function createTrackRows(
   state: PlaylistState,
   metrics: PlaylistMetrics,
   flagsByTrackId: Map<string, { hasClips: boolean; hasSelectedClips: boolean }>,
+  cache: TrackLayoutCache,
 ): PlaylistTrackRowPresentation[] {
-  // Build a list of indices visible in the viewport. We accumulate per-track
-  // height so each row can have its own height (FL Studio drag-resize).
-  const top = state.viewport.scrollY - metrics.trackOverscan * metrics.trackHeight;
+  const top =
+    state.viewport.scrollY - metrics.trackOverscan * metrics.trackHeight;
   const bottom =
     state.viewport.scrollY +
     state.viewport.height -
@@ -274,29 +322,50 @@ function createTrackRows(
     metrics.trackOverscan * metrics.trackHeight;
   const rows: PlaylistTrackRowPresentation[] = [];
 
-  let acc = 0;
-  let index = 0;
-  // Walk real tracks first, building rows that overlap the visible band.
-  for (; index < state.tracks.length; index += 1) {
-    const track = state.tracks[index]!;
-    const height = getTrackHeight(track, metrics);
-    if (acc + height >= top && acc <= bottom) {
-      rows.push(buildTrackRow(state, metrics, track, index, acc, height, flagsByTrackId));
-    }
-    acc += height;
-    if (acc > bottom) {
-      break;
+  // Real tracks: read from the cache instead of recomputing per-track height.
+  for (let index = 0; index < state.tracks.length; index += 1) {
+    const acc = cache.trackTops[index]!;
+    const height = cache.trackHeights[index]!;
+    if (acc > bottom) break;
+    if (acc + height >= top) {
+      rows.push(
+        buildTrackRow(
+          state,
+          metrics,
+          state.tracks[index]!,
+          index,
+          acc,
+          height,
+          flagsByTrackId,
+        ),
+      );
     }
   }
-  // If the visible band extends past the materialised tracks, emit virtuals
-  // using the metrics default height.
+
+  // Virtual tracks past the materialised range, using the metric default height.
+  const realCount = state.tracks.length;
+  let acc =
+    realCount > 0
+      ? cache.trackTops[realCount - 1]! + cache.trackHeights[realCount - 1]!
+      : 0;
+  let virtIndex = realCount;
   while (acc <= bottom) {
-    const virtIndex = Math.max(index, state.tracks.length);
-    const track = getTrackByIndex(state, virtIndex);
     const height = metrics.trackHeight;
-    rows.push(buildTrackRow(state, metrics, track, virtIndex, acc, height, flagsByTrackId));
+    if (acc + height >= top) {
+      rows.push(
+        buildTrackRow(
+          state,
+          metrics,
+          getTrackByIndex(state, virtIndex),
+          virtIndex,
+          acc,
+          height,
+          flagsByTrackId,
+        ),
+      );
+    }
     acc += height;
-    index = virtIndex + 1;
+    virtIndex += 1;
   }
 
   return rows;
@@ -389,6 +458,7 @@ function buildTrackRow(
 function createClipViews(
   state: PlaylistState,
   metrics: PlaylistMetrics,
+  cache: TrackLayoutCache,
 ): PlaylistClipPresentation[] {
   const selectedClipIds = new Set(state.selection.clipIds);
   const hoveredClipId =
@@ -413,8 +483,52 @@ function createClipViews(
     ),
   });
 
-  return state.clips.map((clip) => {
-    const rect = getClipRect(state, clip, metrics);
+  // Pre-filter: only build presentations for clips that overlap the
+  // overscanned viewport. Avoids the previous O(clips) allocation regardless
+  // of position. trackIndexById lookups are O(1) via the layout cache.
+  const visibleStartTime = screenXToTime(
+    state,
+    clipVisibilityBounds.x,
+    metrics,
+  );
+  const visibleEndTime = screenXToTime(
+    state,
+    clipVisibilityBounds.x + clipVisibilityBounds.width,
+    metrics,
+  );
+  const visibleStartLocalY =
+    clipVisibilityBounds.y - metrics.rulerHeight + state.viewport.scrollY;
+  const visibleEndLocalY =
+    clipVisibilityBounds.y +
+    clipVisibilityBounds.height -
+    metrics.rulerHeight +
+    state.viewport.scrollY;
+
+  const views: PlaylistClipPresentation[] = [];
+  const pxPerBeat = state.viewport.pxPerBeat;
+  const headerOffset = metrics.trackHeaderWidth - state.viewport.scrollX;
+  const rulerOffset = metrics.rulerHeight - state.viewport.scrollY;
+
+  for (const clip of state.clips) {
+    const clipEnd = clip.start + clip.duration;
+    if (clipEnd < visibleStartTime || clip.start > visibleEndTime) {
+      continue;
+    }
+    const trackIndex = cache.trackIndexById.get(clip.trackId);
+    if (trackIndex === undefined) {
+      continue;
+    }
+    const trackTop = cache.trackTops[trackIndex]!;
+    const trackHeight = cache.trackHeights[trackIndex]!;
+    if (trackTop + trackHeight < visibleStartLocalY) continue;
+    if (trackTop > visibleEndLocalY) continue;
+
+    const rect = {
+      x: headerOffset + clip.start * pxPerBeat,
+      y: rulerOffset + trackTop + metrics.clipPaddingY,
+      width: clip.duration * pxPerBeat,
+      height: trackHeight - metrics.clipPaddingY * 2,
+    };
     const titleRect = getClipTitleRect(state, clip, metrics);
     const handleHeight =
       clip.type === "automation" ? titleRect.height : rect.height;
@@ -434,13 +548,12 @@ function createClipViews(
           selected: state.selection.automationPointIds.includes(point.id),
         }))
       : [];
-    const trackIndex = getTrackIndexById(state, clip.trackId);
     const track = state.tracks[trackIndex];
     const trackMuted = track ? isTrackEffectivelyMuted(state, track) : false;
     const effectivelyMuted = clip.muted === true || trackMuted;
     const trackLocked = track?.locked === true;
 
-    return {
+    views.push({
       clip,
       trackIndex,
       rect,
@@ -468,8 +581,10 @@ function createClipViews(
         state.hover?.kind !== "automation-point",
       effectivelyMuted,
       trackLocked,
-    };
-  });
+    });
+  }
+
+  return views;
 }
 
 function createRulerTicks(
@@ -555,16 +670,19 @@ export function createPlaylistPresentation(
   state: PlaylistState,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): PlaylistPresentation {
+  const cache = buildTrackLayoutCache(state, metrics);
   const flagsByTrackId = getTrackFlags(state);
   const layout = createLayout(state, metrics);
-  const trackRows = createTrackRows(state, metrics, flagsByTrackId);
+  const trackRows = createTrackRows(state, metrics, flagsByTrackId, cache);
   const trackRowsByIndex = new Map(
     trackRows.map((row) => [row.index, row] as const),
   );
-  const clipViews = createClipViews(state, metrics);
+  const clipViews = createClipViews(state, metrics, cache);
   const clipViewsById = new Map(
     clipViews.map((view) => [view.clip.id, view] as const),
   );
+  // Every entry in clipViews is already inside the overscanned bounds; the
+  // visibility flag remains a strict-intersect filter for the renderer.
   const visibleClipViews = clipViews.filter((view) => view.isVisible);
   const rulerTicks = createRulerTicks(state, metrics);
   const scrollbars = createScrollbars(state, metrics);
@@ -585,13 +703,31 @@ export function createPlaylistPresentation(
     timeToScreenX: (time: number) => timeToScreenX(state, time, metrics),
     screenXToTime: (screenX: number) => screenXToTime(state, screenX, metrics),
     trackIndexToScreenY: (trackIndex: number) =>
-      trackIndexToScreenY(state, trackIndex, metrics),
+      metrics.rulerHeight +
+      trackTopAt(trackIndex, cache, metrics) -
+      state.viewport.scrollY,
     screenYToTrackIndex: (screenY: number) => {
-      const raw =
-        (screenY - metrics.rulerHeight + state.viewport.scrollY) /
-        metrics.trackHeight;
-
-      return Math.max(0, Math.floor(raw));
+      const localY = screenY - metrics.rulerHeight + state.viewport.scrollY;
+      if (localY <= 0) return 0;
+      for (let i = 0; i < cache.trackTops.length; i += 1) {
+        const top = cache.trackTops[i]!;
+        const h = cache.trackHeights[i]!;
+        if (localY < top + h) return i;
+      }
+      const realCount = cache.trackTops.length;
+      const lastEnd =
+        realCount > 0
+          ? cache.trackTops[realCount - 1]! +
+            cache.trackHeights[realCount - 1]!
+          : 0;
+      return (
+        realCount +
+        Math.max(0, Math.floor((localY - lastEnd) / metrics.trackHeight))
+      );
     },
   };
 }
+
+// Re-export so external callers (controller, tools) can use the same fast
+// path that the presentation closure uses internally.
+export { trackTopAt as presentationTrackTopAt, trackHeightAt as presentationTrackHeightAt };

@@ -6,12 +6,34 @@ import {
   getTrackIdByIndex,
   isAutomationClip,
 } from "./geometry";
+import type { PlaylistHover } from "./types";
 import {
   createInsertedTrack,
   materializeTracksThrough,
 } from "./state-track-helpers";
 import { sortAutomationPoints } from "./state-utils";
 import type { PlaylistMetrics, PlaylistState } from "./types";
+
+// Hover equality short-circuit so SET_HOVER on the same target during a
+// pointermove flood doesn't allocate a fresh state every frame.
+function hoversEqual(a: PlaylistHover, b: PlaylistHover): boolean {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "clip":
+    case "resize-left":
+    case "resize-right":
+      return a.clipId === (b as { clipId: string }).clipId;
+    case "automation-point":
+      return (
+        a.clipId === (b as { clipId: string }).clipId &&
+        a.pointId === (b as { pointId: string }).pointId
+      );
+    case "track":
+      return a.trackId === (b as { trackId: string }).trackId;
+  }
+}
 
 // Pure reducer. Same input + action always produces the same output.
 // Normalization (clamp viewport, sort points, etc.) runs after dispatch in PlaylistCore.
@@ -188,6 +210,9 @@ export function playlistReducer(
           : null,
       };
     case "SET_HOVER":
+      if (hoversEqual(state.hover, action.hover)) {
+        return state;
+      }
       return { ...state, hover: action.hover ? { ...action.hover } : null };
     case "SET_CONTEXT_MENU":
       return {
@@ -212,49 +237,79 @@ export function playlistReducer(
     }
     case "CLOSE_CONTEXT_MENU":
       return { ...state, contextMenu: null };
-    case "SET_VIEWPORT_SIZE":
+    case "SET_VIEWPORT_SIZE": {
+      const width = Math.max(1, Math.round(action.width));
+      const height = Math.max(1, Math.round(action.height));
+      if (
+        state.viewport.width === width &&
+        state.viewport.height === height
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        viewport: { ...state.viewport, width, height },
+      };
+    }
+    case "UPDATE_VIEWPORT": {
+      const candidateViewport = { ...state.viewport, ...action.patch };
+      let pxPerBeat = candidateViewport.pxPerBeat;
+      let scrollX = candidateViewport.scrollX;
+      let scrollY = candidateViewport.scrollY;
+      if (action.clamp) {
+        pxPerBeat = clamp(
+          pxPerBeat,
+          metrics.minPxPerBeat,
+          metrics.maxPxPerBeat,
+        );
+        const clampedCandidate: PlaylistState = {
+          ...state,
+          viewport: { ...candidateViewport, pxPerBeat },
+        };
+        scrollX = clamp(
+          scrollX,
+          0,
+          getMaxScrollX(clampedCandidate, metrics),
+        );
+        scrollY = clamp(
+          scrollY,
+          0,
+          getMaxScrollY(clampedCandidate, metrics),
+        );
+      }
+      if (
+        state.viewport.scrollX === scrollX &&
+        state.viewport.scrollY === scrollY &&
+        state.viewport.pxPerBeat === pxPerBeat &&
+        state.viewport.width === candidateViewport.width &&
+        state.viewport.height === candidateViewport.height
+      ) {
+        return state;
+      }
       return {
         ...state,
         viewport: {
-          ...state.viewport,
-          width: Math.max(1, Math.round(action.width)),
-          height: Math.max(1, Math.round(action.height)),
+          ...candidateViewport,
+          pxPerBeat,
+          scrollX,
+          scrollY,
         },
       };
-    case "UPDATE_VIEWPORT": {
-      const next: PlaylistState = {
-        ...state,
-        viewport: { ...state.viewport, ...action.patch },
-      };
-      if (!action.clamp) {
-        return next;
-      }
-      next.viewport.pxPerBeat = clamp(
-        next.viewport.pxPerBeat,
-        metrics.minPxPerBeat,
-        metrics.maxPxPerBeat,
-      );
-      next.viewport.scrollX = clamp(
-        next.viewport.scrollX,
-        0,
-        getMaxScrollX(next, metrics),
-      );
-      next.viewport.scrollY = clamp(
-        next.viewport.scrollY,
-        0,
-        getMaxScrollY(next, metrics),
-      );
-      return next;
     }
-    case "SET_PLAY_POSITION":
+    case "SET_PLAY_POSITION": {
+      const time = Math.max(0, action.time);
+      if (state.playPosition.time === time) {
+        return state;
+      }
       return {
         ...state,
-        playPosition: {
-          ...state.playPosition,
-          time: Math.max(0, action.time),
-        },
+        playPosition: { ...state.playPosition, time },
       };
+    }
     case "SET_PLAY_RUNNING":
+      if (state.playPosition.isRunning === action.isRunning) {
+        return state;
+      }
       return {
         ...state,
         playPosition: { ...state.playPosition, isRunning: action.isRunning },

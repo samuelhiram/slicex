@@ -498,16 +498,38 @@ function metricsDefaultEnd(state: PlaylistState): number {
   return Math.max(32, state.playPosition.time + 16);
 }
 
+// FL Studio caps scroll at the end of content + a comfortable buffer so the
+// renderer doesn't keep allocating virtual rows / grid ticks once you're far
+// past anything visible. Returning Infinity here used to let the user wander
+// arbitrarily far and tank frame rate.
+const SCROLL_BUFFER_TRACKS = 8;
+const SCROLL_BUFFER_BARS = 32;
+
 export function getMaxScrollY(
-  _state: PlaylistState,
-  _metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+  state: PlaylistState,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): number {
-  return Number.POSITIVE_INFINITY;
+  let totalHeight = 0;
+  for (const track of state.tracks) {
+    totalHeight += getTrackHeight(track, metrics);
+  }
+  // Always allow at least one full viewport plus a buffer so users with empty
+  // playlists can still scroll a bit and we never go negative.
+  totalHeight += SCROLL_BUFFER_TRACKS * metrics.trackHeight;
+  const visible = Math.max(0, state.viewport.height - metrics.rulerHeight);
+  return Math.max(0, totalHeight - visible);
 }
 
 export function getMaxScrollX(
-  _state: PlaylistState,
-  _metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+  state: PlaylistState,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): number {
-  return Number.POSITIVE_INFINITY;
+  const endBeat = getContentEndBeat(state);
+  const bufferBeats = SCROLL_BUFFER_BARS * metrics.beatsPerBar;
+  const totalWidth = (endBeat + bufferBeats) * state.viewport.pxPerBeat;
+  const visible = Math.max(
+    0,
+    state.viewport.width - metrics.trackHeaderWidth,
+  );
+  return Math.max(0, totalWidth - visible);
 }
