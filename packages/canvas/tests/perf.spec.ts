@@ -83,8 +83,8 @@ describe("perf — dispatch is idempotent for no-op actions", () => {
   });
 });
 
-describe("perf — scroll bounds", () => {
-  it("getMaxScrollY is finite and matches total track heights + buffer", () => {
+describe("perf — infinite scroll is preserved", () => {
+  it("getMaxScrollY / getMaxScrollX stay Infinity (unbounded timeline)", () => {
     const state: PlaylistState = {
       ...createDemoPlaylistState(),
       viewport: {
@@ -93,48 +93,51 @@ describe("perf — scroll bounds", () => {
         height: 600,
       },
     };
-    const max = getMaxScrollY(state, M);
-    expect(max).toBeLessThan(Number.POSITIVE_INFINITY);
-    expect(max).toBeGreaterThan(0);
+    expect(getMaxScrollY(state, M)).toBe(Number.POSITIVE_INFINITY);
+    expect(getMaxScrollX(state, M)).toBe(Number.POSITIVE_INFINITY);
   });
 
-  it("getMaxScrollX is finite and grows with content end", () => {
-    const small = {
-      ...createDemoPlaylistState(),
-      viewport: {
-        ...createDemoPlaylistState().viewport,
-        width: 1000,
-        height: 600,
-      },
-    };
-    const big = {
-      ...small,
-      clips: [
-        ...small.clips,
-        {
-          id: "far-clip",
-          type: "audio" as const,
-          trackId: small.tracks[0]!.id,
-          start: 1000,
-          duration: 4,
-          label: "x",
-          color: "#fff",
-        },
-      ],
-    };
-    expect(getMaxScrollX(big, M)).toBeGreaterThan(getMaxScrollX(small, M));
-    expect(getMaxScrollX(big, M)).toBeLessThan(Number.POSITIVE_INFINITY);
-  });
-
-  it("scrolling far past content gets clamped via UPDATE_VIEWPORT", () => {
+  it("scrolling far past content is allowed (no clamp)", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     core.setViewportSize(1200, 600);
     core.updateViewport({ scrollX: 1_000_000, scrollY: 1_000_000 });
     const v = core.getState().viewport;
-    expect(v.scrollX).toBeLessThan(1_000_000);
-    expect(v.scrollY).toBeLessThan(1_000_000);
-    expect(v.scrollX).toBeGreaterThan(0);
-    expect(v.scrollY).toBeGreaterThan(0);
+    expect(v.scrollX).toBe(1_000_000);
+    expect(v.scrollY).toBe(1_000_000);
+  });
+
+  it("presentation far from origin only emits the visible row band", () => {
+    const state: PlaylistState = {
+      ...createDemoPlaylistState(),
+      viewport: {
+        ...createDemoPlaylistState().viewport,
+        width: 1200,
+        height: 600,
+        scrollX: 0,
+        scrollY: 1_000_000,
+      },
+    };
+    const t0 = performance.now();
+    const pres = createPlaylistPresentation(state, M);
+    const elapsed = performance.now() - t0;
+    // Visible rows: ~ (height - ruler) / trackHeight + a few of overscan.
+    expect(pres.trackRows.length).toBeLessThan(40);
+    // Should be effectively instant — well under a frame budget.
+    expect(elapsed).toBeLessThan(50);
+  });
+
+  it("presentation far on X only emits ruler ticks for the visible window", () => {
+    const state: PlaylistState = {
+      ...createDemoPlaylistState(),
+      viewport: {
+        ...createDemoPlaylistState().viewport,
+        width: 1200,
+        height: 600,
+        scrollX: 1_000_000,
+      },
+    };
+    const pres = createPlaylistPresentation(state, M);
+    expect(pres.rulerTicks.length).toBeLessThan(200);
   });
 });
 

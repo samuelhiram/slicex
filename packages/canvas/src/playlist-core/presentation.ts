@@ -342,16 +342,25 @@ function createTrackRows(
     }
   }
 
-  // Virtual tracks past the materialised range, using the metric default height.
+  // Virtual tracks past the materialised range, using the metric default
+  // height. Jump directly to the first virtual that overlaps the visible
+  // band so the loop is O(visible rows) instead of O(scrollY/trackHeight) —
+  // critical because the timeline scroll is unbounded by design.
   const realCount = state.tracks.length;
-  let acc =
+  const realEnd =
     realCount > 0
       ? cache.trackTops[realCount - 1]! + cache.trackHeights[realCount - 1]!
       : 0;
-  let virtIndex = realCount;
+  const virtualHeight = Math.max(1, metrics.trackHeight);
+  const visibleStartLocal = Math.max(top, realEnd);
+  const skipCount = Math.max(
+    0,
+    Math.floor((visibleStartLocal - realEnd) / virtualHeight),
+  );
+  let acc = realEnd + skipCount * virtualHeight;
+  let virtIndex = realCount + skipCount;
   while (acc <= bottom) {
-    const height = metrics.trackHeight;
-    if (acc + height >= top) {
+    if (acc + virtualHeight >= top) {
       rows.push(
         buildTrackRow(
           state,
@@ -359,12 +368,12 @@ function createTrackRows(
           getTrackByIndex(state, virtIndex),
           virtIndex,
           acc,
-          height,
+          virtualHeight,
           flagsByTrackId,
         ),
       );
     }
-    acc += height;
+    acc += virtualHeight;
     virtIndex += 1;
   }
 
