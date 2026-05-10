@@ -42,8 +42,8 @@ const TOOL_BUTTONS: ReadonlyArray<{
   { id: "paint", label: "Pnt", title: "Paint" },
   { id: "delete", label: "Del", title: "Delete" },
   { id: "mute", label: "Mut", title: "Mute" },
-  { id: "slip", label: "Slp", title: "Slip (coming soon)" },
-  { id: "slice", label: "Slc", title: "Slice (coming soon)" },
+  { id: "slip", label: "Slp", title: "Slip" },
+  { id: "slice", label: "Slc", title: "Slice" },
   { id: "zoom", label: "Zm", title: "Zoom" },
 ];
 
@@ -431,22 +431,32 @@ function PlaylistToolbar({ core }: ToolbarProps) {
     "song",
   );
   const [recording, setRecording] = React.useState(false);
+  const [clipCount, setClipCount] = React.useState(0);
+  const [selectedCount, setSelectedCount] = React.useState(0);
 
   React.useEffect(() => {
     if (!core) {
       return undefined;
     }
-    setActive(core.getState().tool);
-    setSnapMode(core.getState().snap.mode);
-    setStretchMode(core.getState().stretchMode);
-    setTransportMode(core.getState().transport.mode);
-    setRecording(core.getState().transport.recording);
+    const s0 = core.getState();
+    setActive(s0.tool);
+    setSnapMode(s0.snap.mode);
+    setStretchMode(s0.stretchMode);
+    setTransportMode(s0.transport.mode);
+    setRecording(s0.transport.recording);
+    setClipCount(s0.clips.length);
+    setSelectedCount(s0.selection.clipIds.length);
     const sub = core.subscribe((state) => {
       setActive(state.tool);
       setSnapMode(state.snap.mode);
       setStretchMode(state.stretchMode);
       setTransportMode(state.transport.mode);
       setRecording(state.transport.recording);
+      // React useState bails out when the new value is === the old one
+      // (number identity), so setting these every notify is cheap when
+      // nothing changed (canon §3.10).
+      setClipCount(state.clips.length);
+      setSelectedCount(state.selection.clipIds.length);
     });
     return () => sub.unsubscribe();
   }, [core]);
@@ -521,6 +531,23 @@ function PlaylistToolbar({ core }: ToolbarProps) {
         <span className="playlist-shell__tool-label">Rec</span>
         <span className="playlist-shell__tool-hotkey">R</span>
       </button>
+      <div
+        className="playlist-shell__counter"
+        role="status"
+        aria-label="Playlist item counter"
+        title={`${clipCount} item${clipCount === 1 ? "" : "s"} in the playlist${selectedCount > 0 ? ` · ${selectedCount} selected` : ""}`}
+        data-has-selection={selectedCount > 0 ? "true" : "false"}
+      >
+        <span className="playlist-shell__counter-value">{clipCount}</span>
+        <span className="playlist-shell__counter-label">
+          item{clipCount === 1 ? "" : "s"}
+        </span>
+        {selectedCount > 0 ? (
+          <span className="playlist-shell__counter-selected">
+            {selectedCount} sel
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }

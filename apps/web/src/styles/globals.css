@@ -133,6 +133,46 @@ textarea {
   color: var(--muted);
 }
 
+.playlist-shell__counter {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 4px 8px;
+  margin-left: 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  user-select: none;
+  transition: border-color 80ms ease, color 80ms ease;
+}
+
+.playlist-shell__counter[data-has-selection="true"] {
+  border-color: var(--accent, #f4d35e);
+}
+
+.playlist-shell__counter-value {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.playlist-shell__counter-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.playlist-shell__counter-selected {
+  color: var(--accent, #f4d35e);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
 .playlist-shell__snap {
   display: flex;
   align-items: center;
