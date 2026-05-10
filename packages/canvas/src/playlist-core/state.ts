@@ -3,7 +3,7 @@ import {
   type PlaylistAction,
   type PlaylistClipMoveUpdate,
 } from "./actions";
-import { isAutomationClip } from "./geometry";
+import { getTrackIdByIndex, isAutomationClip } from "./geometry";
 import {
   canRedo,
   canUndo,
@@ -17,6 +17,9 @@ import {
 import { playlistReducer } from "./reducer";
 import {
   DEFAULT_PLAYLIST_METRICS,
+  type PlaylistAutomationPoint,
+  type PlaylistClip,
+  type PlaylistClipType,
   type PlaylistContextMenu,
   type PlaylistMarquee,
   type PlaylistMetrics,
@@ -24,13 +27,26 @@ import {
   type PlaylistSelection,
   type PlaylistState,
   type PlaylistStateListener,
+  type PlaylistToolId,
 } from "./types";
 import type { PlaylistPresentation } from "./presentation";
 import { createPlaylistPresentation } from "./presentation";
-import { makePointId } from "./state-track-helpers";
+import { makeClipId, makePointId } from "./state-track-helpers";
 import { normalizeState } from "./state-utils";
 
 export type { PlaylistClipMoveUpdate } from "./actions";
+
+export interface PlaylistCreateClipInput {
+  trackIndex: number;
+  start: number;
+  duration: number;
+  type?: PlaylistClipType;
+  id?: string;
+  label?: string;
+  color?: string;
+  muted?: boolean;
+  points?: PlaylistAutomationPoint[];
+}
 
 // PlaylistCore is the mutable facade backed by a pure reducer + history stack.
 // The public API mirrors the original mutator surface so consumers (controller,
@@ -299,6 +315,49 @@ export class PlaylistCore {
 
   removeSelected(): void {
     this.dispatch({ type: "REMOVE_SELECTED" });
+  }
+
+  // Tool selection (UI-only, not undoable).
+  setTool(tool: PlaylistToolId): void {
+    this.dispatch({ type: "SET_TOOL", tool });
+  }
+
+  // Clip CRUD used by the tool dispatchers (Draw, Paint, Delete, Mute).
+  createClip(input: PlaylistCreateClipInput): string {
+    const state = this.history.present;
+    const trackId = getTrackIdByIndex(state, input.trackIndex);
+    const id = input.id ?? makeClipId(state.clips);
+    const baseClip = {
+      id,
+      type: input.type ?? "pattern",
+      trackId,
+      start: Math.max(0, input.start),
+      duration: Math.max(this.metrics.minClipDuration, input.duration),
+      label: input.label ?? "Clip",
+      color: input.color ?? "#888888",
+      muted: input.muted,
+    };
+    const clip: PlaylistClip =
+      baseClip.type === "automation"
+        ? {
+            ...baseClip,
+            type: "automation",
+            points: input.points ?? [
+              { id: `${id}-pt-1`, time: 0, value: 0.5 },
+              { id: `${id}-pt-2`, time: baseClip.duration, value: 0.5 },
+            ],
+          }
+        : { ...baseClip, type: baseClip.type };
+    this.dispatch({ type: "CREATE_CLIP", clip });
+    return id;
+  }
+
+  deleteClip(clipId: string): void {
+    this.dispatch({ type: "DELETE_CLIP", clipId });
+  }
+
+  toggleClipMute(clipId: string): void {
+    this.dispatch({ type: "TOGGLE_CLIP_MUTE", clipId });
   }
 
   // Notify subscribers about the latest committed state.

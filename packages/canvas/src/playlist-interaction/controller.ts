@@ -6,7 +6,6 @@ import {
   getTrackIdByIndex,
   getVerticalScrollbarRect,
   getVerticalScrollbarThumbRect,
-  getTrackIndexById,
   normalizeRect,
   rectsIntersect,
   screenXToTime,
@@ -14,14 +13,15 @@ import {
   snapTime,
 } from "../playlist-core";
 import type {
-  PlaylistAutomationPoint,
   PlaylistClip,
   PlaylistCore,
-  PlaylistMetrics,
   PlaylistPoint,
+  PlaylistToolId,
   PlaylistTrackMenuAction,
 } from "../playlist-core";
+import type { ActiveGesture } from "./gesture-types";
 import { hitTestPlaylist, type PlaylistHit } from "./hit-test";
+import { getTool, zoomToolApplyOut } from "./tools";
 
 export interface PlaylistInteractionController {
   destroy: () => void;
@@ -32,63 +32,18 @@ type PlaylistInteractionHost = HTMLElement & {
   releasePointerCapture?: (pointerId: number) => void;
 };
 
-interface ClipDragOriginal {
-  id: string;
-  start: number;
-  trackIndex: number;
-}
+const TOOL_HOTKEYS: Readonly<Record<string, PlaylistToolId>> = {
+  P: "draw",
+  B: "paint",
+  D: "delete",
+  T: "mute",
+  S: "slip",
+  C: "slice",
+  E: "select",
+  Z: "zoom",
+};
 
-type ActiveGesture =
-  | {
-      kind: "pan";
-      pointerId: number;
-      startPoint: PlaylistPoint;
-      startScrollX: number;
-      startScrollY: number;
-    }
-  | {
-      kind: "marquee";
-      pointerId: number;
-      startPoint: PlaylistPoint;
-    }
-  | {
-      kind: "clip-drag";
-      pointerId: number;
-      primaryClipId: string;
-      startPointerTime: number;
-      startTrackIndex: number;
-      originals: ClipDragOriginal[];
-    }
-  | {
-      kind: "clip-resize";
-      pointerId: number;
-      clipId: string;
-      edge: "left" | "right";
-    }
-  | {
-      kind: "automation-point-drag";
-      pointerId: number;
-      clipId: string;
-      pointId: string;
-      originalTime: number;
-      originalValue: number;
-    }
-  | {
-      kind: "play-position-drag";
-      pointerId: number;
-    }
-  | {
-      kind: "scrollbar-horizontal";
-      pointerId: number;
-      startPoint: PlaylistPoint;
-      startScrollX: number;
-    }
-  | {
-      kind: "scrollbar-vertical";
-      pointerId: number;
-      startPoint: PlaylistPoint;
-      startScrollY: number;
-    };
+const PAINT_DEFAULT_DURATION = 4;
 
 function resolvePoint(
   host: HTMLElement,
@@ -106,6 +61,7 @@ function setCursor(
   host: HTMLElement,
   hit: PlaylistHit | null,
   active: ActiveGesture | null,
+  toolId: PlaylistToolId,
 ): void {
   if (active?.kind === "pan" || active?.kind === "clip-drag") {
     host.style.cursor = "grabbing";
@@ -137,31 +93,17 @@ function setCursor(
     return;
   }
 
+  if (active?.kind === "paint-drag" || active?.kind === "delete-drag") {
+    host.style.cursor = getTool(toolId).cursor;
+    return;
+  }
+
   if (!hit) {
     host.style.cursor = "default";
     return;
   }
 
-  if (hit.kind === "resize-left" || hit.kind === "resize-right") {
-    host.style.cursor = "ew-resize";
-    return;
-  }
-
-  if (hit.kind === "automation-point" || hit.kind === "clip") {
-    host.style.cursor = "grab";
-    return;
-  }
-
-  if (hit.kind === "automation-body") {
-    host.style.cursor = "crosshair";
-    return;
-  }
-
-  if (hit.kind === "play-position-marker" || hit.kind === "ruler") {
-    host.style.cursor = "ew-resize";
-    return;
-  }
-
+  // Universal hits override tool cursors.
   if (hit.kind === "scrollbar-horizontal") {
     host.style.cursor = "ew-resize";
     return;
@@ -172,26 +114,35 @@ function setCursor(
     return;
   }
 
-  if (hit.kind === "track-header") {
+  if (hit.kind === "play-position-marker" || hit.kind === "ruler") {
+    host.style.cursor = "ew-resize";
+    return;
+  }
+
+  if (hit.kind === "track-header" || hit.kind === "context-menu") {
     host.style.cursor = "default";
     return;
   }
 
-  host.style.cursor = "default";
-}
-
-function getSelectedDragClips(
-  core: PlaylistCore,
-  clip: PlaylistClip,
-): PlaylistClip[] {
-  const state = core.getState();
-  const selected = new Set(state.selection.clipIds);
-
-  if (!selected.has(clip.id)) {
-    return [clip];
+  // Timeline area (clip / automation / empty): cursor follows the active tool.
+  if (toolId === "select") {
+    if (hit.kind === "resize-left" || hit.kind === "resize-right") {
+      host.style.cursor = "ew-resize";
+      return;
+    }
+    if (hit.kind === "automation-point" || hit.kind === "clip") {
+      host.style.cursor = "grab";
+      return;
+    }
+    if (hit.kind === "automation-body") {
+      host.style.cursor = "crosshair";
+      return;
+    }
+    host.style.cursor = "default";
+    return;
   }
 
-  return state.clips.filter((candidate) => selected.has(candidate.id));
+  host.style.cursor = getTool(toolId).cursor;
 }
 
 function selectClipsInMarquee(core: PlaylistCore): void {
@@ -382,12 +333,17 @@ export function createPlaylistInteractionController(
         startScrollY: state.viewport.scrollY,
       };
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture);
+      setCursor(host, hit, activeGesture, state.tool);
       event.preventDefault();
       return;
     }
 
     if (event.button === 2) {
+      if (state.tool === "zoom") {
+        zoomToolApplyOut({ core, metrics, point, hit, event });
+        event.preventDefault();
+        return;
+      }
       if (hit.kind === "track-header") {
         core.openTrackContextMenu(hit.trackIndex, point);
         event.preventDefault();
@@ -407,6 +363,18 @@ export function createPlaylistInteractionController(
           snapTime(next.time, state, event.altKey),
           next.value,
         );
+        event.preventDefault();
+        return;
+      }
+
+      // Draw and Paint tools: RMB on a clip deletes it (FL Studio behaviour).
+      if (
+        (state.tool === "draw" || state.tool === "paint") &&
+        (hit.kind === "clip" ||
+          hit.kind === "resize-left" ||
+          hit.kind === "resize-right")
+      ) {
+        core.deleteClip(hit.clip.id);
         event.preventDefault();
         return;
       }
@@ -432,7 +400,7 @@ export function createPlaylistInteractionController(
         startScrollX: state.viewport.scrollX,
       };
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture);
+      setCursor(host, hit, activeGesture, state.tool);
       event.preventDefault();
       return;
     }
@@ -445,7 +413,7 @@ export function createPlaylistInteractionController(
         startScrollY: state.viewport.scrollY,
       };
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture);
+      setCursor(host, hit, activeGesture, state.tool);
       event.preventDefault();
       return;
     }
@@ -465,91 +433,34 @@ export function createPlaylistInteractionController(
         pointerId: event.pointerId,
       };
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture);
+      setCursor(host, hit, activeGesture, state.tool);
       event.preventDefault();
       return;
     }
 
-    if (hit.kind === "automation-point") {
-      const automationPoint = hit.clip.points.find(
-        (candidate: PlaylistAutomationPoint) => candidate.id === hit.pointId,
-      );
-
-      if (!automationPoint) {
-        return;
+    // Delegate timeline-area hits to the active tool.
+    const tool = getTool(state.tool);
+    const gesture = tool.onPointerDown({ core, metrics, point, hit, event });
+    if (gesture) {
+      activeGesture = gesture;
+      if (gestureMutatesDoc(gesture)) {
+        core.beginGesture();
       }
-
-      core.setSelection({
-        clipIds: [hit.clip.id],
-        automationPointIds: [hit.pointId],
-      });
-      activeGesture = {
-        kind: "automation-point-drag",
-        pointerId: event.pointerId,
-        clipId: hit.clip.id,
-        pointId: hit.pointId,
-        originalTime: automationPoint.time,
-        originalValue: automationPoint.value,
-      };
-      core.beginGesture();
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture);
-      event.preventDefault();
-      return;
+      setCursor(host, hit, activeGesture, state.tool);
     }
-
-    if (hit.kind === "resize-left" || hit.kind === "resize-right") {
-      core.setSelection({ clipIds: [hit.clip.id], automationPointIds: [] });
-      activeGesture = {
-        kind: "clip-resize",
-        pointerId: event.pointerId,
-        clipId: hit.clip.id,
-        edge: hit.kind === "resize-left" ? "left" : "right",
-      };
-      core.beginGesture();
-      host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture);
-      event.preventDefault();
-      return;
-    }
-
-    if (hit.kind === "clip" || hit.kind === "automation-body") {
-      const selectedClips = getSelectedDragClips(core, hit.clip);
-
-      if (!state.selection.clipIds.includes(hit.clip.id)) {
-        core.setSelection({ clipIds: [hit.clip.id], automationPointIds: [] });
-      }
-
-      activeGesture = {
-        kind: "clip-drag",
-        pointerId: event.pointerId,
-        primaryClipId: hit.clip.id,
-        startPointerTime: screenXToTime(state, point.x, metrics),
-        startTrackIndex: getTrackIndexById(state, hit.clip.trackId),
-        originals: selectedClips.map((clip) => ({
-          id: clip.id,
-          start: clip.start,
-          trackIndex: getTrackIndexById(state, clip.trackId),
-        })),
-      };
-      core.beginGesture();
-      host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture);
-      event.preventDefault();
-      return;
-    }
-
-    activeGesture = {
-      kind: "marquee",
-      pointerId: event.pointerId,
-      startPoint: point,
-    };
-    core.setSelection({ clipIds: [], automationPointIds: [] });
-    core.setMarquee({ start: point, current: point });
-    host.setPointerCapture?.(event.pointerId);
-    setCursor(host, hit, activeGesture);
     event.preventDefault();
   };
+
+  function gestureMutatesDoc(gesture: ActiveGesture): boolean {
+    return (
+      gesture.kind === "clip-drag" ||
+      gesture.kind === "clip-resize" ||
+      gesture.kind === "automation-point-drag" ||
+      gesture.kind === "paint-drag" ||
+      gesture.kind === "delete-drag"
+    );
+  }
 
   const handlePointerMove = (event: PointerEvent): void => {
     const state = core.getState();
@@ -558,7 +469,7 @@ export function createPlaylistInteractionController(
     if (!activeGesture) {
       const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
       setHoverFromHit(core, hit);
-      setCursor(host, hit, null);
+      setCursor(host, hit, null, state.tool);
       return;
     }
 
@@ -680,6 +591,54 @@ export function createPlaylistInteractionController(
 
       core.updateViewport({ scrollY: gesture.startScrollY + delta });
       event.preventDefault();
+      return;
+    }
+
+    if (gesture.kind === "paint-drag") {
+      const trackIndex = screenYToTrackIndex(state, point.y, metrics);
+      const start = Math.max(
+        0,
+        snapTime(screenXToTime(state, point.x, metrics), state, event.altKey),
+      );
+      if (
+        trackIndex !== gesture.lastTrackIndex ||
+        start !== gesture.lastSnappedStart
+      ) {
+        const trackId = getTrackIdByIndex(state, trackIndex);
+        const cellOccupied = state.clips.some(
+          (clip: PlaylistClip) =>
+            clip.trackId === trackId &&
+            start >= clip.start &&
+            start < clip.start + clip.duration,
+        );
+        if (!cellOccupied) {
+          core.createClip({
+            trackIndex,
+            start,
+            duration: PAINT_DEFAULT_DURATION,
+            type: "pattern",
+            label: "Clip",
+            color: "#7aa6d8",
+          });
+        }
+        gesture.lastTrackIndex = trackIndex;
+        gesture.lastSnappedStart = start;
+      }
+      event.preventDefault();
+      return;
+    }
+
+    if (gesture.kind === "delete-drag") {
+      const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
+      if (
+        hit.kind === "clip" ||
+        hit.kind === "automation-body" ||
+        hit.kind === "resize-left" ||
+        hit.kind === "resize-right"
+      ) {
+        core.deleteClip(hit.clip.id);
+      }
+      event.preventDefault();
     }
   };
 
@@ -695,7 +654,9 @@ export function createPlaylistInteractionController(
     if (
       activeGesture.kind === "clip-drag" ||
       activeGesture.kind === "clip-resize" ||
-      activeGesture.kind === "automation-point-drag"
+      activeGesture.kind === "automation-point-drag" ||
+      activeGesture.kind === "paint-drag" ||
+      activeGesture.kind === "delete-drag"
     ) {
       core.endGesture();
     }
@@ -710,6 +671,7 @@ export function createPlaylistInteractionController(
         metrics,
       ),
       null,
+      core.getState().tool,
     );
   };
 
@@ -774,6 +736,16 @@ export function createPlaylistInteractionController(
     if (event.code === "Space") {
       core.setPlayPositionRunning(!core.getState().playPosition.isRunning);
       event.preventDefault();
+      return;
+    }
+
+    // Tool hotkeys (P/B/D/T/S/C/E/Z) — only when no modifier is held.
+    if (!cmd && !event.altKey && !event.shiftKey && event.key.length === 1) {
+      const tool = TOOL_HOTKEYS[event.key.toUpperCase()];
+      if (tool) {
+        core.setTool(tool);
+        event.preventDefault();
+      }
     }
   };
 

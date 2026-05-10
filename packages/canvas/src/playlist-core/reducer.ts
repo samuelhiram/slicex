@@ -57,6 +57,16 @@ export function playlistReducer(
       return insertTrackBelow(state, action.trackIndex);
     case "DELETE_EMPTY_TRACK":
       return deleteEmptyTrack(state, action.trackIndex);
+    case "CREATE_CLIP":
+      return createClip(state, action.clip);
+    case "DELETE_CLIP":
+      return deleteClip(state, action.clipId);
+    case "TOGGLE_CLIP_MUTE":
+      return toggleClipMute(state, action.clipId);
+    case "SET_TOOL":
+      return state.tool === action.tool
+        ? state
+        : { ...state, tool: action.tool };
     case "SET_SELECTION":
       return {
         ...state,
@@ -413,6 +423,42 @@ function insertTrackBelow(
     createInsertedTrack(tracks, trackIndex),
   );
   return { ...materialized, tracks, contextMenu: null };
+}
+
+function createClip(
+  state: PlaylistState,
+  clip: import("./types").PlaylistClip,
+): PlaylistState {
+  if (state.clips.some((existing) => existing.id === clip.id)) {
+    return state;
+  }
+  return { ...state, clips: [...state.clips, clip] };
+}
+
+function deleteClip(state: PlaylistState, clipId: string): PlaylistState {
+  if (!state.clips.some((clip) => clip.id === clipId)) {
+    return state;
+  }
+  return {
+    ...state,
+    clips: state.clips.filter((clip) => clip.id !== clipId),
+    selection: {
+      clipIds: state.selection.clipIds.filter((id) => id !== clipId),
+      automationPointIds: state.selection.automationPointIds,
+    },
+  };
+}
+
+function toggleClipMute(state: PlaylistState, clipId: string): PlaylistState {
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId) {
+      return clip;
+    }
+    changed = true;
+    return { ...clip, muted: !clip.muted };
+  });
+  return changed ? { ...state, clips } : state;
 }
 
 function deleteEmptyTrack(

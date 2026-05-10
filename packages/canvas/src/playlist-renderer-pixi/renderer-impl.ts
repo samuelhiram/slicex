@@ -39,6 +39,7 @@ const COLORS = {
 };
 
 const CLIP_BODY_ALPHA = 1;
+const CLIP_BODY_ALPHA_MUTED = 0.28;
 const CLIP_TITLE_ALPHA = 0.34;
 const CLIP_RESIZE_ALPHA = 0.2;
 
@@ -343,6 +344,8 @@ function drawClipBody(
   clipView: PlaylistClipPresentation,
 ): void {
   const color = parseHexColor(clipView.clip.color, 0x777777);
+  const muted = clipView.clip.muted === true;
+  const bodyAlpha = muted ? CLIP_BODY_ALPHA_MUTED : CLIP_BODY_ALPHA;
 
   graphics
     .roundRect(
@@ -352,7 +355,7 @@ function drawClipBody(
       clipView.rect.height,
       4,
     )
-    .fill({ color, alpha: CLIP_BODY_ALPHA });
+    .fill({ color, alpha: bodyAlpha });
   graphics
     .rect(
       clipView.titleRect.x,
@@ -360,7 +363,36 @@ function drawClipBody(
       clipView.titleRect.width,
       clipView.titleRect.height,
     )
-    .fill({ color: COLORS.panel, alpha: CLIP_TITLE_ALPHA });
+    .fill({
+      color: COLORS.panel,
+      alpha: muted ? CLIP_TITLE_ALPHA * 0.6 : CLIP_TITLE_ALPHA,
+    });
+
+  if (muted) {
+    // Diagonal-stripe overlay so the muted state is unambiguous even on
+    // colour-blind / low-contrast displays.
+    const step = 8;
+    const startOffset = clipView.rect.x - clipView.rect.height;
+    const totalWidth = clipView.rect.width + clipView.rect.height;
+    for (let offset = 0; offset <= totalWidth; offset += step) {
+      const x1 = startOffset + offset;
+      const y1 = clipView.rect.y;
+      const x2 = x1 + clipView.rect.height;
+      const y2 = clipView.rect.y + clipView.rect.height;
+      const clampedX1 = Math.max(clipView.rect.x, x1);
+      const clampedX2 = Math.min(
+        clipView.rect.x + clipView.rect.width,
+        x2,
+      );
+      if (clampedX1 >= clampedX2) {
+        continue;
+      }
+      graphics
+        .moveTo(clampedX1, y1 + (clampedX1 - x1))
+        .lineTo(clampedX2, y1 + (clampedX2 - x1))
+        .stroke({ color: COLORS.text, alpha: 0.18, width: 1 });
+    }
+  }
 }
 
 function drawClipOverlay(

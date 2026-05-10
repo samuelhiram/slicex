@@ -1,6 +1,7 @@
 import { createVirtualTrack } from "./geometry";
 import type {
   PlaylistAutomationClip,
+  PlaylistClip,
   PlaylistTrack,
   PlaylistState,
 } from "./types";
@@ -58,4 +59,16 @@ export function createInsertedTrack(
     id: makeTrackId(tracks),
     label: `Track ${afterIndex + 2}`,
   };
+}
+
+export function makeClipId(clips: PlaylistClip[]): string {
+  let index = clips.length + 1;
+  let id = `clip-${index}`;
+
+  while (clips.some((clip) => clip.id === id)) {
+    index += 1;
+    id = `clip-${index}`;
+  }
+
+  return id;
 }

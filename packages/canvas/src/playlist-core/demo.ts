@@ -115,5 +115,6 @@ export function createDemoPlaylistState(): PlaylistState {
       time: 0,
       isRunning: false,
     },
+    tool: "select",
   };
 }

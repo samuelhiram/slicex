@@ -1,5 +1,28 @@
 export type PlaylistClipType = "audio" | "pattern" | "automation";
 
+// FL Studio toolbar identifiers. `select` is the default; `slip` and `slice`
+// are recognised by the dispatcher but their behaviour lands in Fase 6.
+export type PlaylistToolId =
+  | "select"
+  | "draw"
+  | "paint"
+  | "delete"
+  | "mute"
+  | "slip"
+  | "slice"
+  | "zoom";
+
+export const PLAYLIST_TOOL_HOTKEYS: Readonly<Record<PlaylistToolId, string>> = {
+  select: "E",
+  draw: "P",
+  paint: "B",
+  delete: "D",
+  mute: "T",
+  slip: "S",
+  slice: "C",
+  zoom: "Z",
+};
+
 export interface PlaylistPoint {
   x: number;
   y: number;
@@ -32,6 +55,7 @@ interface PlaylistClipBase {
   duration: number;
   label: string;
   color: string;
+  muted?: boolean;
 }
 
 export interface PlaylistRegularClip extends PlaylistClipBase {
@@ -99,6 +123,7 @@ export interface PlaylistState {
   contextMenu: PlaylistContextMenu;
   hover: PlaylistHover;
   playPosition: PlaylistPlayPosition;
+  tool: PlaylistToolId;
 }
 
 export interface PlaylistMetrics {

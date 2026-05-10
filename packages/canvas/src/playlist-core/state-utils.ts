@@ -54,6 +54,7 @@ export function cloneState(state: PlaylistState): PlaylistState {
       : null,
     hover: state.hover ? { ...state.hover } : null,
     playPosition: { ...state.playPosition },
+    tool: state.tool ?? "select",
   };
 }
 

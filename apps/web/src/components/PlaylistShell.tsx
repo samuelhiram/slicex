@@ -1,13 +1,71 @@
 import React from "react";
 import {
+  PLAYLIST_TOOL_HOTKEYS,
   createDemoPlaylistState,
   createPlaylistCore,
   createPlaylistInteractionController,
   createPlaylistRenderer,
+  type PlaylistCore,
+  type PlaylistToolId,
 } from "@slicex/canvas";
+
+const TOOL_BUTTONS: ReadonlyArray<{
+  id: PlaylistToolId;
+  label: string;
+  title: string;
+}> = [
+  { id: "select", label: "Sel", title: "Select" },
+  { id: "draw", label: "Drw", title: "Draw" },
+  { id: "paint", label: "Pnt", title: "Paint" },
+  { id: "delete", label: "Del", title: "Delete" },
+  { id: "mute", label: "Mut", title: "Mute" },
+  { id: "slip", label: "Slp", title: "Slip (coming soon)" },
+  { id: "slice", label: "Slc", title: "Slice (coming soon)" },
+  { id: "zoom", label: "Zm", title: "Zoom" },
+];
+
+interface ToolbarProps {
+  core: PlaylistCore | null;
+}
+
+function PlaylistToolbar({ core }: ToolbarProps) {
+  const [active, setActive] = React.useState<PlaylistToolId>("select");
+
+  React.useEffect(() => {
+    if (!core) {
+      return undefined;
+    }
+    setActive(core.getState().tool);
+    const sub = core.subscribe((state) => setActive(state.tool));
+    return () => sub.unsubscribe();
+  }, [core]);
+
+  return (
+    <div className="playlist-shell__toolbar" role="toolbar" aria-label="Tools">
+      {TOOL_BUTTONS.map((button) => {
+        const hotkey = PLAYLIST_TOOL_HOTKEYS[button.id];
+        return (
+          <button
+            key={button.id}
+            type="button"
+            className="playlist-shell__tool"
+            data-active={active === button.id ? "true" : "false"}
+            data-tool={button.id}
+            title={`${button.title} (${hotkey})`}
+            onClick={() => core?.setTool(button.id)}
+          >
+            <span className="playlist-shell__tool-label">{button.label}</span>
+            <span className="playlist-shell__tool-hotkey">{hotkey}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export function PlaylistShell() {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
+  const [core, setCore] = React.useState<PlaylistCore | null>(null);
   const [status, setStatus] = React.useState<"loading" | "ready" | "error">(
     "loading",
   );
@@ -20,9 +78,10 @@ export function PlaylistShell() {
       return undefined;
     }
 
-    const core = createPlaylistCore(createDemoPlaylistState());
-    const interaction = createPlaylistInteractionController(host, core);
-    const renderer = createPlaylistRenderer(host, core, {
+    const instance = createPlaylistCore(createDemoPlaylistState());
+    setCore(instance);
+    const interaction = createPlaylistInteractionController(host, instance);
+    const renderer = createPlaylistRenderer(host, instance, {
       onReady: () => setStatus("ready"),
       onError: (reason) => {
         setStatus("error");
@@ -35,7 +94,7 @@ export function PlaylistShell() {
     const tick = (now: number) => {
       const deltaSeconds = Math.min(0.05, (now - lastFrame) / 1000);
       lastFrame = now;
-      core.advancePlayPosition(deltaSeconds * 2);
+      instance.advancePlayPosition(deltaSeconds * 2);
       frameId = requestAnimationFrame(tick);
     };
 
@@ -45,11 +104,13 @@ export function PlaylistShell() {
       cancelAnimationFrame(frameId);
       interaction.destroy();
       renderer.destroy();
+      setCore(null);
     };
   }, []);
 
   return (
     <section className="playlist-shell" aria-label="Playlist">
+      <PlaylistToolbar core={core} />
       <div
         ref={hostRef}
         className="playlist-shell__surface"
