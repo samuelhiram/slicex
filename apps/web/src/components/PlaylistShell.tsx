@@ -433,9 +433,6 @@ function PlaylistToolbar({ core }: ToolbarProps) {
 export function PlaylistShell() {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const [core, setCore] = React.useState<PlaylistCore | null>(null);
-  const [status, setStatus] = React.useState<"loading" | "ready" | "error">(
-    "loading",
-  );
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -449,9 +446,7 @@ export function PlaylistShell() {
     setCore(instance);
     const interaction = createPlaylistInteractionController(host, instance);
     const renderer = createPlaylistRenderer(host, instance, {
-      onReady: () => setStatus("ready"),
       onError: (reason) => {
-        setStatus("error");
         setError(reason instanceof Error ? reason.message : "Renderer failed.");
       },
     });
@@ -484,13 +479,10 @@ export function PlaylistShell() {
         tabIndex={0}
       />
       <PlaylistContextMenuOverlay core={core} />
-      {status !== "ready" ? (
-        <div
-          className="playlist-shell__status"
-          role={status === "error" ? "alert" : "status"}
-        >
-          <strong>{status === "error" ? "Error" : "Cargando"}</strong>
-          <span>{status === "error" ? error : "Playlist"}</span>
+      {error ? (
+        <div className="playlist-shell__status" role="alert">
+          <strong>Error</strong>
+          <span>{error}</span>
         </div>
       ) : null}
     </section>
