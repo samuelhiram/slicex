@@ -651,6 +651,27 @@ export function createPlaylistRenderer(
   const foregroundTextLayer = new Container();
   let destroyed = false;
   let ready = false;
+  let appDisposed = false;
+
+  // Idempotent shutdown of the Pixi Application. Calling app.destroy twice
+  // (e.g. once from the React cleanup and again from the resolved init
+  // promise) corrupts shared globals in Pixi v8 and surfaces later as
+  // "Cannot read properties of null (reading 'geometry')" inside the
+  // batcher pipeline. This helper makes the order-of-operations safe.
+  const disposeApp = (): void => {
+    if (appDisposed) return;
+    appDisposed = true;
+    try {
+      app.stage.removeChild(root);
+    } catch {
+      // noop
+    }
+    try {
+      app.destroy(true);
+    } catch {
+      // noop
+    }
+  };
 
   root.eventMode = "none";
   timelineContainer.mask = timelineMask;
@@ -756,7 +777,9 @@ export function createPlaylistRenderer(
     })
     .then(() => {
       if (destroyed) {
-        app.destroy(true);
+        // React already tore the renderer down while init was in flight.
+        // Hand off to the idempotent disposer so we don't double-destroy.
+        disposeApp();
         return;
       }
 
@@ -790,6 +813,14 @@ export function createPlaylistRenderer(
       destroyed = true;
       subscription.unsubscribe();
       resizeObserver?.disconnect();
+      // If the Pixi app hasn't finished initialising yet, leave disposal to
+      // the .then() handler above. Touching app.stage / app.destroy before
+      // init() resolves leads to a double-destroy in Pixi v8 once the
+      // promise lands — that's what corrupts the batcher pipeline and
+      // surfaces as a null-geometry crash on the next mount.
+      if (!ready) {
+        return;
+      }
       sceneGraphics.clear();
       timelineMask.clear();
       timelineGridGraphics.clear();
@@ -800,18 +831,7 @@ export function createPlaylistRenderer(
       clearTextLayer(chromeTextLayer);
       foregroundGraphics.clear();
       clearTextLayer(foregroundTextLayer);
-
-      try {
-        app.stage.removeChild(root);
-      } catch {
-        // noop
-      }
-
-      try {
-        app.destroy(true);
-      } catch {
-        // noop
-      }
+      disposeApp();
     },
   };
 }
