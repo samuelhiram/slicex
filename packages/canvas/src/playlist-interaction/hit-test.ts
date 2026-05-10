@@ -5,16 +5,10 @@ import {
   type PlaylistMetrics,
   type PlaylistPoint,
   type PlaylistPresentation,
-  type PlaylistTrackMenuAction,
 } from "../playlist-core";
 
 export type PlaylistHit =
   | { kind: "empty" }
-  | {
-      kind: "context-menu";
-      action: PlaylistTrackMenuAction;
-      disabled: boolean;
-    }
   | { kind: "scrollbar-horizontal"; onThumb: boolean }
   | { kind: "scrollbar-vertical"; onThumb: boolean }
   | { kind: "track-header"; trackIndex: number; trackId: string }
@@ -93,24 +87,8 @@ export function hitTestPlaylist(
   point: PlaylistPoint,
   metrics: PlaylistMetrics,
 ): PlaylistHit {
-  const { contextMenu, playPosition, scrollbars, trackRows, visibleClipViews } =
+  const { playPosition, scrollbars, trackRows, visibleClipViews } =
     presentation;
-
-  if (contextMenu && pointInRect(point, contextMenu.rect)) {
-    const itemIndex = contextMenu.items.findIndex((item) =>
-      pointInRect(point, item.rect),
-    );
-
-    if (itemIndex >= 0) {
-      const item = contextMenu.items[itemIndex];
-
-      return {
-        kind: "context-menu",
-        action: item.action,
-        disabled: item.disabled,
-      };
-    }
-  }
 
   if (pointInRect(point, scrollbars.horizontal.trackRect)) {
     return {

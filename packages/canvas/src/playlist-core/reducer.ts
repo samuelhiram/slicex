@@ -73,6 +73,12 @@ export function playlistReducer(
       return setTrackHeight(state, action.trackIndex, action.height, metrics);
     case "REORDER_TRACK":
       return reorderTrack(state, action.fromIndex, action.toIndex);
+    case "MAKE_CLIPS_UNIQUE":
+      return makeClipsUnique(state, action.clipIds);
+    case "SET_CLIP_LABEL":
+      return setClipField(state, action.clipId, "label", action.label);
+    case "SET_CLIP_COLOR":
+      return setClipField(state, action.clipId, "color", action.color);
     case "PASTE_CLIPS":
       return pasteClips(state, action.entries, action.selectIds);
     case "SET_TOOL":
@@ -604,6 +610,45 @@ function reorderTrack(
   const [moved] = tracks.splice(fromIndex, 1);
   tracks.splice(clamped, 0, moved!);
   return { ...state, tracks };
+}
+
+function makeClipsUnique(
+  state: PlaylistState,
+  clipIds: string[],
+): PlaylistState {
+  if (clipIds.length === 0) {
+    return state;
+  }
+  const targets = new Set(clipIds);
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (!targets.has(clip.id)) {
+      return clip;
+    }
+    changed = true;
+    return { ...clip, sourceId: clip.id };
+  });
+  return changed ? { ...state, clips } : state;
+}
+
+function setClipField<K extends "label" | "color">(
+  state: PlaylistState,
+  clipId: string,
+  field: K,
+  value: string,
+): PlaylistState {
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId) {
+      return clip;
+    }
+    if (clip[field] === value) {
+      return clip;
+    }
+    changed = true;
+    return { ...clip, [field]: value };
+  });
+  return changed ? { ...state, clips } : state;
 }
 
 function deleteEmptyTrack(

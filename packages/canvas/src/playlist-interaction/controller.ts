@@ -130,7 +130,7 @@ function setCursor(
     return;
   }
 
-  if (hit.kind === "track-header" || hit.kind === "context-menu") {
+  if (hit.kind === "track-header") {
     host.style.cursor = "default";
     return;
   }
@@ -237,113 +237,9 @@ function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
   core.setHover(null);
 }
 
-function hasSelectedClipsOnTrack(
-  core: PlaylistCore,
-  trackIndex: number,
-): boolean {
-  const state = core.getState();
-  const trackId = getTrackIdByIndex(state, trackIndex);
-  const selected = new Set(state.selection.clipIds);
-
-  return state.clips.some(
-    (clip) => clip.trackId === trackId && selected.has(clip.id),
-  );
-}
-
-const TRACK_COLORS = [
-  "#e85d75",
-  "#46b871",
-  "#d9a441",
-  "#39a8c9",
-  "#c970d8",
-  "#b7d957",
-  "#f0703f",
-  "#8fd3a8",
-];
-
-function executeTrackMenuAction(
-  core: PlaylistCore,
-  action: PlaylistTrackMenuAction,
-): void {
-  const state = core.getState();
-  const menu = state.contextMenu;
-
-  if (!menu || menu.kind !== "track") {
-    return;
-  }
-
-  const trackIndex = menu.trackIndex;
-
-  if (action === "clear-track") {
-    core.clearTrackClips(trackIndex);
-    return;
-  }
-
-  if (action === "delete-selected") {
-    if (hasSelectedClipsOnTrack(core, trackIndex)) {
-      core.deleteSelectedClipsOnTrack(trackIndex);
-    }
-
-    core.closeContextMenu();
-    return;
-  }
-
-  if (action === "rename-track") {
-    const current =
-      core.getState().tracks[trackIndex]?.label ?? `Track ${trackIndex + 1}`;
-    const nextLabel =
-      typeof window === "undefined"
-        ? current
-        : window.prompt("Rename track", current);
-
-    if (nextLabel?.trim()) {
-      core.renameTrack(trackIndex, nextLabel.trim());
-      return;
-    }
-
-    core.closeContextMenu();
-    return;
-  }
-
-  if (action === "recolor-track") {
-    const current = core.getState().tracks[trackIndex]?.color ?? "#888888";
-    if (typeof document === "undefined") {
-      const idx = Math.max(0, TRACK_COLORS.indexOf(current));
-      core.recolorTrack(
-        trackIndex,
-        TRACK_COLORS[(idx + 1) % TRACK_COLORS.length],
-      );
-      return;
-    }
-    const input = document.createElement("input");
-    input.type = "color";
-    input.value = current;
-    input.style.position = "fixed";
-    input.style.opacity = "0";
-    input.style.pointerEvents = "none";
-    document.body.appendChild(input);
-    input.addEventListener("change", () => {
-      core.recolorTrack(trackIndex, input.value);
-      input.remove();
-    });
-    input.addEventListener("blur", () => input.remove(), { once: true });
-    input.click();
-    core.closeContextMenu();
-    return;
-  }
-
-  if (action === "insert-track-below") {
-    core.insertTrackBelow(trackIndex);
-    return;
-  }
-
-  if (action === "delete-empty-track") {
-    core.deleteEmptyTrack(trackIndex);
-    return;
-  }
-
-  core.closeContextMenu();
-}
+// Track / clip / background context menus are rendered as HTML overlays in
+// the React shell now; the controller just routes RMB events to the right
+// open* helper on PlaylistCore.
 
 export function createPlaylistInteractionController(
   host: PlaylistInteractionHost,
@@ -362,9 +258,10 @@ export function createPlaylistInteractionController(
     const point = resolvePoint(host, event);
     const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
 
-    if (state.contextMenu && hit.kind !== "context-menu") {
+    if (state.contextMenu) {
+      // The HTML menu overlay handles its own outside-click, but suppress the
+      // first LMB on the canvas so it doesn't act through the menu.
       core.closeContextMenu();
-
       if (event.button === 0) {
         event.preventDefault();
         return;
@@ -426,16 +323,33 @@ export function createPlaylistInteractionController(
         return;
       }
 
+      // Select tool (and stubs that fall back to it): RMB opens a context menu.
+      if (state.tool === "select" || state.tool === "slip" || state.tool === "slice") {
+        if (
+          hit.kind === "clip" ||
+          hit.kind === "resize-left" ||
+          hit.kind === "resize-right"
+        ) {
+          core.openClipContextMenu(hit.clip.id, point);
+          event.preventDefault();
+          return;
+        }
+        if (hit.kind === "empty") {
+          const time = Math.max(
+            0,
+            snapTime(screenXToTime(state, point.x, metrics), state, event.altKey),
+          );
+          const trackIndex = screenYToTrackIndex(state, point.y, metrics);
+          core.openBackgroundContextMenu(time, trackIndex, point);
+          event.preventDefault();
+          return;
+        }
+      }
+
       return;
     }
 
     if (event.button !== 0) {
-      return;
-    }
-
-    if (hit.kind === "context-menu") {
-      executeTrackMenuAction(core, hit.action);
-      event.preventDefault();
       return;
     }
 
@@ -881,6 +795,16 @@ export function createPlaylistInteractionController(
 
     if (cmd && !event.shiftKey && key === "b") {
       core.duplicateSelectionRight();
+      event.preventDefault();
+      return;
+    }
+
+    // Shift+C: FL Studio select-all-similar (every clip with the same source).
+    if (!cmd && event.shiftKey && key === "c") {
+      const focused = core.getState().selection.clipIds[0];
+      if (focused) {
+        core.selectAllSimilarClips(focused);
+      }
       event.preventDefault();
       return;
     }

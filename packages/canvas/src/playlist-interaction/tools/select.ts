@@ -50,22 +50,46 @@ export const selectTool: PlaylistTool = {
       const shift = event.shiftKey;
       const selected = new Set(state.selection.clipIds);
 
-      // Modifier-driven selection updates. Discrete clicks shouldn't initiate
-      // a clip-drag (FL Studio: ctrl/shift toggle/range only); plain click
-      // updates selection then starts a drag if the clip ends up selected.
       if (ctrl && shift) {
+        // Ctrl+Shift+click = additive add without removing existing selection.
         if (!selected.has(hit.clip.id)) {
           core.addClipsToSelection([hit.clip.id]);
         }
         return null;
       }
       if (ctrl) {
+        // Ctrl+click toggles a clip in the selection (no drag).
         core.toggleClipSelection(hit.clip.id);
         return null;
       }
       if (shift) {
-        core.extendClipSelection(hit.clip.id);
-        return null;
+        // Shift+drag = clone-drag (FL Studio): clone the targeted clips in
+        // place and start dragging the clones. If the hit clip wasn't
+        // selected, treat it as the only source.
+        const sourceIds = selected.has(hit.clip.id)
+          ? state.clips
+              .filter((candidate) => selected.has(candidate.id))
+              .map((c) => c.id)
+          : [hit.clip.id];
+        const newIds = core.cloneClipsInPlace(sourceIds);
+        if (newIds.length === 0) {
+          return null;
+        }
+        const newState = core.getState();
+        const newClips = newState.clips.filter((c) => newIds.includes(c.id));
+        const primary = newClips[0]!;
+        return {
+          kind: "clip-drag",
+          pointerId: event.pointerId,
+          primaryClipId: primary.id,
+          startPointerTime: screenXToTime(state, point.x, metrics),
+          startTrackIndex: getTrackIndexById(newState, primary.trackId),
+          originals: newClips.map((clip) => ({
+            id: clip.id,
+            start: clip.start,
+            trackIndex: getTrackIndexById(newState, clip.trackId),
+          })),
+        };
       }
 
       const draggingClips = selected.has(hit.clip.id)

@@ -61,6 +61,10 @@ interface PlaylistClipBase {
   label: string;
   color: string;
   muted?: boolean;
+  // Identity of the underlying source. Two clips share data when sourceId
+  // matches. createClip defaults this to the clip id; "Make unique" resets
+  // it to a fresh value so subsequent edits don't propagate.
+  sourceId?: string;
 }
 
 export interface PlaylistRegularClip extends PlaylistClipBase {
@@ -152,7 +156,25 @@ export interface PlaylistTrackContextMenu {
   position: PlaylistPoint;
 }
 
-export type PlaylistContextMenu = PlaylistTrackContextMenu | null;
+export interface PlaylistClipContextMenu {
+  kind: "clip";
+  clipId: string;
+  position: PlaylistPoint;
+}
+
+export interface PlaylistBackgroundContextMenu {
+  kind: "background";
+  // Beats coordinate where the right-click happened, used as the paste anchor.
+  time: number;
+  trackIndex: number;
+  position: PlaylistPoint;
+}
+
+export type PlaylistContextMenu =
+  | PlaylistTrackContextMenu
+  | PlaylistClipContextMenu
+  | PlaylistBackgroundContextMenu
+  | null;
 
 export type PlaylistHover =
   | { kind: "clip"; clipId: string }

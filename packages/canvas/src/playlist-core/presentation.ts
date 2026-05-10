@@ -1,9 +1,7 @@
 import {
   DEFAULT_PLAYLIST_METRICS,
-  type PlaylistAutomationClip,
   type PlaylistAutomationPoint,
   type PlaylistClip,
-  type PlaylistContextMenu,
   type PlaylistMetrics,
   type PlaylistPoint,
   type PlaylistRect,
@@ -14,7 +12,6 @@ import {
   getAutomationPointPosition,
   getClipRect,
   getClipTitleRect,
-  getContextMenuRect,
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
   getTrackByIndex,
@@ -122,19 +119,8 @@ export interface PlaylistScrollbarPresentation {
   thumbRect: PlaylistRect;
 }
 
-export interface PlaylistContextMenuItemPresentation {
-  action: PlaylistTrackMenuAction;
-  label: string;
-  rect: PlaylistRect;
-  disabled: boolean;
-}
-
-export interface PlaylistContextMenuPresentation {
-  rect: PlaylistRect;
-  trackIndex: number;
-  trackId: string;
-  items: PlaylistContextMenuItemPresentation[];
-}
+// Context menus are rendered as HTML overlays in the React shell, so the
+// presentation layer no longer pre-computes their layout.
 
 export interface PlaylistPlayPositionPresentation {
   time: number;
@@ -161,7 +147,6 @@ export interface PlaylistPresentation {
     horizontal: PlaylistScrollbarPresentation;
     vertical: PlaylistScrollbarPresentation;
   };
-  contextMenu: PlaylistContextMenuPresentation | null;
   playPosition: PlaylistPlayPositionPresentation;
   marquee: PlaylistMarqueePresentation | null;
   timeToScreenX: (time: number) => number;
@@ -519,52 +504,6 @@ function createRulerTicks(
   return ticks;
 }
 
-function createContextMenu(
-  state: PlaylistState,
-  metrics: PlaylistMetrics,
-  flagsByTrackId: Map<string, { hasClips: boolean; hasSelectedClips: boolean }>,
-): PlaylistContextMenuPresentation | null {
-  if (!state.contextMenu) {
-    return null;
-  }
-
-  const rect = getContextMenuRect(state, metrics);
-
-  if (!rect || state.contextMenu.kind !== "track") {
-    return null;
-  }
-
-  const trackIndex = state.contextMenu.trackIndex;
-  const trackId = getTrackIdByIndex(state, trackIndex);
-  const flags = flagsByTrackId.get(trackId) ?? {
-    hasClips: false,
-    hasSelectedClips: false,
-  };
-
-  return {
-    rect,
-    trackIndex,
-    trackId,
-    items: PLAYLIST_TRACK_MENU_ITEMS.map((item, index) => {
-      const itemRect = {
-        x: rect.x + 4,
-        y: rect.y + 4 + index * metrics.contextMenuItemHeight,
-        width: rect.width - 8,
-        height: metrics.contextMenuItemHeight,
-      };
-
-      return {
-        action: item.action,
-        label: item.label,
-        rect: itemRect,
-        disabled:
-          (item.action === "delete-selected" && !flags.hasSelectedClips) ||
-          (item.action === "delete-empty-track" && flags.hasClips),
-      };
-    }),
-  };
-}
-
 function createScrollbars(
   state: PlaylistState,
   metrics: PlaylistMetrics,
@@ -629,7 +568,6 @@ export function createPlaylistPresentation(
   const visibleClipViews = clipViews.filter((view) => view.isVisible);
   const rulerTicks = createRulerTicks(state, metrics);
   const scrollbars = createScrollbars(state, metrics);
-  const contextMenu = createContextMenu(state, metrics, flagsByTrackId);
 
   return {
     state,
@@ -642,7 +580,6 @@ export function createPlaylistPresentation(
     clipViewsById,
     rulerTicks,
     scrollbars,
-    contextMenu,
     playPosition: createPlayPosition(state, metrics),
     marquee: createMarquee(state),
     timeToScreenX: (time: number) => timeToScreenX(state, time, metrics),

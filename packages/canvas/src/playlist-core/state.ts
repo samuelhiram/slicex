@@ -52,6 +52,7 @@ export interface PlaylistCreateClipInput {
   label?: string;
   color?: string;
   muted?: boolean;
+  sourceId?: string;
   points?: PlaylistAutomationPoint[];
 }
 
@@ -416,6 +417,104 @@ export class PlaylistCore {
     return this.history.present.tracks[trackIndex]?.locked === true;
   }
 
+  // Clip metadata wrappers (undoable).
+  setClipLabel(clipId: string, label: string): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
+    this.dispatch({ type: "SET_CLIP_LABEL", clipId, label });
+  }
+
+  setClipColor(clipId: string, color: string): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
+    this.dispatch({ type: "SET_CLIP_COLOR", clipId, color });
+  }
+
+  makeClipUnique(clipId: string): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
+    this.dispatch({ type: "MAKE_CLIPS_UNIQUE", clipIds: [clipId] });
+  }
+
+  makeSelectionUnique(): void {
+    const ids = this.history.present.selection.clipIds.filter(
+      (id) => !this.isClipOnLockedTrack(id),
+    );
+    if (ids.length === 0) return;
+    this.dispatch({ type: "MAKE_CLIPS_UNIQUE", clipIds: ids });
+  }
+
+  // FL Studio: Shift+C selects every clip whose sourceId matches the focused clip.
+  selectAllSimilarClips(clipId: string): void {
+    const state = this.history.present;
+    const target = state.clips.find((clip) => clip.id === clipId);
+    if (!target) return;
+    const sourceId = target.sourceId ?? target.id;
+    const ids = state.clips
+      .filter((clip) => (clip.sourceId ?? clip.id) === sourceId)
+      .map((clip) => clip.id);
+    this.setSelection({ clipIds: ids, automationPointIds: [] });
+  }
+
+  selectClipSource(clipId: string): void {
+    // Currently equivalent to "select all similar"; kept as a separate verb so
+    // future phases can branch (e.g. focus the source in a Channel rack).
+    this.selectAllSimilarClips(clipId);
+  }
+
+  // Clone the selected clips in place (same start, same track) with fresh
+  // ids but matching sourceId. Returns the new clip ids and selects them.
+  // Used by Shift-drag clone-drag in the select tool.
+  cloneClipsInPlace(clipIds: string[]): string[] {
+    const state = this.history.present;
+    const ids = new Set(clipIds);
+    const sourceClips = state.clips.filter(
+      (clip) => ids.has(clip.id) && !this.isClipOnLockedTrack(clip.id),
+    );
+    if (sourceClips.length === 0) {
+      return [];
+    }
+    let working = [...state.clips];
+    const entries: { clip: PlaylistClip; trackIndex: number }[] = [];
+    for (const source of sourceClips) {
+      const id = makeClipId(working);
+      const newClip: PlaylistClip = {
+        ...cloneClip(source),
+        id,
+        sourceId: source.sourceId ?? source.id,
+      };
+      entries.push({
+        clip: newClip,
+        trackIndex: getTrackIndexById(state, source.trackId),
+      });
+      working = [...working, newClip];
+    }
+    const selectIds = entries.map((entry) => entry.clip.id);
+    this.dispatch({ type: "PASTE_CLIPS", entries, selectIds });
+    return selectIds;
+  }
+
+  // Context menu helpers used by the controller.
+  openClipContextMenu(clipId: string, position: PlaylistPoint): void {
+    this.dispatch({
+      type: "SET_CONTEXT_MENU",
+      contextMenu: { kind: "clip", clipId, position },
+    });
+  }
+
+  openBackgroundContextMenu(
+    time: number,
+    trackIndex: number,
+    position: PlaylistPoint,
+  ): void {
+    this.dispatch({
+      type: "SET_CONTEXT_MENU",
+      contextMenu: {
+        kind: "background",
+        time: Math.max(0, time),
+        trackIndex: Math.max(0, trackIndex),
+        position,
+      },
+    });
+  }
+
   // Clip CRUD used by the tool dispatchers (Draw, Paint, Delete, Mute).
   createClip(input: PlaylistCreateClipInput): string {
     const state = this.history.present;
@@ -433,6 +532,7 @@ export class PlaylistCore {
       label: input.label ?? "Clip",
       color: input.color ?? "#888888",
       muted: input.muted,
+      sourceId: input.sourceId ?? id,
     };
     const clip: PlaylistClip =
       baseClip.type === "automation"
@@ -591,6 +691,10 @@ export class PlaylistCore {
         ...cloneClip(entry.clip),
         id,
         start: Math.max(0, startTime + entry.startOffset),
+        // Pasted clips share the source of the originals (FL Studio: paste
+        // produces siblings, not unique copies). Falls back to the original
+        // id when the source itself had no explicit sourceId.
+        sourceId: entry.clip.sourceId ?? entry.clip.id,
       };
       newEntries.push({ clip: newClip, trackIndex });
       workingClips = [...workingClips, newClip];
@@ -628,6 +732,7 @@ export class PlaylistCore {
         ...cloneClip(clip),
         id,
         start: clip.start + span,
+        sourceId: clip.sourceId ?? clip.id,
       };
       newEntries.push({
         clip: newClip,

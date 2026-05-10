@@ -516,39 +516,6 @@ function drawClips(
   }
 }
 
-function drawContextMenu(
-  graphics: Graphics,
-  textLayer: Container,
-  presentation: PlaylistPresentation,
-): void {
-  if (!presentation.contextMenu) {
-    return;
-  }
-
-  const { rect, items } = presentation.contextMenu;
-
-  graphics
-    .roundRect(rect.x, rect.y, rect.width, rect.height, 4)
-    .fill({ color: COLORS.panelMenu, alpha: 0.98 })
-    .stroke({ color: COLORS.rowLine, width: 1 });
-
-  for (let index = 0; index < items.length; index += 1) {
-    const item = items[index];
-
-    if (index % 2 === 0) {
-      graphics
-        .rect(item.rect.x, item.rect.y, item.rect.width, item.rect.height)
-        .fill({ color: 0x252525, alpha: 0.72 });
-    }
-
-    addText(textLayer, item.label, item.rect.x + 8, item.rect.y + 7, {
-      color: item.disabled ? COLORS.disabled : COLORS.text,
-      size: 12,
-      weight: index <= 1 ? "700" : "500",
-    });
-  }
-}
-
 function drawScrollbars(
   graphics: Graphics,
   presentation: PlaylistPresentation,
@@ -717,7 +684,6 @@ export function createPlaylistRenderer(
     drawPlayPositionRulerMarker(chromeGraphics, presentation);
 
     drawScrollbars(foregroundGraphics, presentation);
-    drawContextMenu(foregroundGraphics, foregroundTextLayer, presentation);
 
     (app as any).render?.();
   };
