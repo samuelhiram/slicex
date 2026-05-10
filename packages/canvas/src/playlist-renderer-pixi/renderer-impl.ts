@@ -722,14 +722,23 @@ export function createPlaylistRenderer(
     const width = Math.max(1, Math.round(rect.width));
     const height = Math.max(1, Math.round(rect.height));
     const viewport = core.getPresentation().state.viewport;
+    const sizeChanged =
+      viewport.width !== width || viewport.height !== height;
 
     app.renderer.resize(width, height);
 
-    if (viewport.width !== width || viewport.height !== height) {
+    if (sizeChanged) {
+      // setViewportSize dispatches + notifies, which re-enters renderNow
+      // via the subscribe callback. No need to also call it directly.
       core.setViewportSize(width, height);
       return;
     }
 
+    // Size unchanged: nothing dispatches, so subscribe won't fire. Render
+    // explicitly so the first frame after init isn't skipped when the
+    // container already matches the model's initial viewport (1×1 from
+    // the demo when getBoundingClientRect briefly reports 0×0 during a
+    // StrictMode remount).
     renderNow();
   };
 
@@ -760,6 +769,16 @@ export function createPlaylistRenderer(
       ready = true;
       resizeObserver?.observe(container);
       resize();
+      // Catch a layout that wasn't ready during the initial resize call
+      // (StrictMode double-mount can land the .then() before the browser
+      // has paint-resolved the container's real size). One follow-up tick
+      // is enough — if the size has stabilized by then, the call is a
+      // cheap no-op via setViewportSize idempotency.
+      if (typeof requestAnimationFrame !== "undefined") {
+        requestAnimationFrame(() => {
+          if (!destroyed) resize();
+        });
+      }
       callbacks.onReady?.();
     })
     .catch((error: unknown) => {
