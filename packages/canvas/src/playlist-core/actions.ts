@@ -59,6 +59,19 @@ export type PlaylistAction =
   | { type: "MAKE_CLIPS_UNIQUE"; clipIds: string[] }
   | { type: "SET_CLIP_LABEL"; clipId: string; label: string }
   | { type: "SET_CLIP_COLOR"; clipId: string; color: string }
+  | { type: "SET_CLIP_CONTENT_OFFSET"; clipId: string; contentOffset: number }
+  | { type: "SET_CLIP_STRETCH_RATIO"; clipId: string; stretchRatio: number }
+  | {
+      type: "STRETCH_RESIZE_CLIP";
+      clipId: string;
+      edge: "left" | "right";
+      time: number;
+    }
+  | {
+      type: "SLICE_CLIPS_AT_TIME";
+      time: number;
+      newClips: PlaylistClip[];
+    }
   | {
       type: "PASTE_CLIPS";
       entries: { clip: PlaylistClip; trackIndex: number }[];
@@ -89,7 +102,9 @@ export type PlaylistAction =
   | { type: "INVERT_CLIP_SELECTION" }
   | { type: "SET_CLIPBOARD"; clipboard: PlaylistClipboard | null }
   | { type: "SET_SNAP_MODE"; mode: PlaylistSnapMode }
-  | { type: "TOGGLE_SNAP_NONE" };
+  | { type: "TOGGLE_SNAP_NONE" }
+  | { type: "SET_STRETCH_MODE"; enabled: boolean }
+  | { type: "TOGGLE_STRETCH_MODE" };
 
 export type PlaylistActionType = PlaylistAction["type"];
 
@@ -118,6 +133,10 @@ const UNDOABLE_ACTION_TYPES: ReadonlySet<PlaylistActionType> = new Set([
   "MAKE_CLIPS_UNIQUE",
   "SET_CLIP_LABEL",
   "SET_CLIP_COLOR",
+  "SET_CLIP_CONTENT_OFFSET",
+  "SET_CLIP_STRETCH_RATIO",
+  "STRETCH_RESIZE_CLIP",
+  "SLICE_CLIPS_AT_TIME",
 ] satisfies PlaylistActionType[]);
 
 export function isUndoableAction(action: PlaylistAction): boolean {

@@ -392,6 +392,31 @@ function drawClipLabel(
       weight: "700",
     },
   );
+
+  const ratio = clipView.clip.stretchRatio ?? 1;
+  const offset = clipView.clip.contentOffset ?? 0;
+  const tagY = clipView.rect.y + 4;
+
+  if (Math.abs(ratio - 1) > 0.001 && clipView.rect.width >= 60) {
+    const tagText = `×${ratio.toFixed(2).replace(/\.?0+$/, "")}`;
+    addText(
+      textLayer,
+      tagText,
+      clipView.rect.x + clipView.rect.width - 8 - tagText.length * 6,
+      tagY,
+      { color: COLORS.text, size: 10, weight: "700" },
+    );
+  }
+
+  if (Math.abs(offset) > 0.001 && clipView.rect.width >= 80) {
+    addText(
+      textLayer,
+      `↻${offset.toFixed(2).replace(/\.?0+$/, "")}`,
+      clipView.rect.x + 12,
+      tagY + 14,
+      { color: COLORS.textMuted, size: 10, weight: "600" },
+    );
+  }
 }
 
 function drawClipBody(

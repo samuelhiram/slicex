@@ -53,6 +53,7 @@ function createBaseState(): PlaylistState {
     playPosition: { time: 0, isRunning: false },
     tool: "select",
     clipboard: null,
+    stretchMode: false,
   };
 }
 

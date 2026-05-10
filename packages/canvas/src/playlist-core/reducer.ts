@@ -79,6 +79,36 @@ export function playlistReducer(
       return setClipField(state, action.clipId, "label", action.label);
     case "SET_CLIP_COLOR":
       return setClipField(state, action.clipId, "color", action.color);
+    case "SET_CLIP_CONTENT_OFFSET":
+      return setClipNumericField(
+        state,
+        action.clipId,
+        "contentOffset",
+        action.contentOffset,
+      );
+    case "SET_CLIP_STRETCH_RATIO":
+      return setClipNumericField(
+        state,
+        action.clipId,
+        "stretchRatio",
+        Math.max(0.01, action.stretchRatio),
+      );
+    case "STRETCH_RESIZE_CLIP":
+      return stretchResizeClip(
+        state,
+        action.clipId,
+        action.edge,
+        action.time,
+        metrics,
+      );
+    case "SLICE_CLIPS_AT_TIME":
+      return sliceClipsAtTime(state, action.time, action.newClips);
+    case "SET_STRETCH_MODE":
+      return state.stretchMode === action.enabled
+        ? state
+        : { ...state, stretchMode: action.enabled };
+    case "TOGGLE_STRETCH_MODE":
+      return { ...state, stretchMode: !state.stretchMode };
     case "PASTE_CLIPS":
       return pasteClips(state, action.entries, action.selectIds);
     case "SET_TOOL":
@@ -649,6 +679,93 @@ function setClipField<K extends "label" | "color">(
     return { ...clip, [field]: value };
   });
   return changed ? { ...state, clips } : state;
+}
+
+function setClipNumericField<K extends "contentOffset" | "stretchRatio">(
+  state: PlaylistState,
+  clipId: string,
+  field: K,
+  value: number,
+): PlaylistState {
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId) {
+      return clip;
+    }
+    if (clip[field] === value) {
+      return clip;
+    }
+    changed = true;
+    return { ...clip, [field]: value };
+  });
+  return changed ? { ...state, clips } : state;
+}
+
+function stretchResizeClip(
+  state: PlaylistState,
+  clipId: string,
+  edge: "left" | "right",
+  time: number,
+  metrics: PlaylistMetrics,
+): PlaylistState {
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId) {
+      return clip;
+    }
+    const oldDuration = clip.duration;
+    if (oldDuration <= 0) return clip;
+    const start = clip.start;
+    const end = clip.start + clip.duration;
+    let nextStart = start;
+    let nextDuration = oldDuration;
+    if (edge === "right") {
+      nextDuration = Math.max(metrics.minClipDuration, time - start);
+    } else {
+      nextStart = Math.min(end - metrics.minClipDuration, Math.max(0, time));
+      nextDuration = end - nextStart;
+    }
+    const factor = nextDuration / oldDuration;
+    if (!Number.isFinite(factor) || factor <= 0) return clip;
+    const baseRatio = clip.stretchRatio ?? 1;
+    return {
+      ...clip,
+      start: nextStart,
+      duration: nextDuration,
+      stretchRatio: baseRatio * factor,
+    };
+  });
+  return { ...state, clips };
+}
+
+function sliceClipsAtTime(
+  state: PlaylistState,
+  time: number,
+  newClips: import("./types").PlaylistClip[],
+): PlaylistState {
+  const newById = new Map(newClips.map((c) => [c.id, c] as const));
+  const adjusted: PlaylistState["clips"] = [];
+  for (const clip of state.clips) {
+    if (
+      time > clip.start + 1e-6 &&
+      time < clip.start + clip.duration - 1e-6
+    ) {
+      // Left half stays in place; its duration shrinks to (time - start).
+      adjusted.push({
+        ...clip,
+        duration: time - clip.start,
+      });
+    } else {
+      adjusted.push(clip);
+    }
+  }
+  // Append the right halves built by the wrapper.
+  return {
+    ...state,
+    clips: [
+      ...adjusted,
+      ...newClips.filter((c) => !state.clips.some((x) => x.id === c.id)),
+    ].map((clip) => newById.get(clip.id) ?? clip),
+  };
 }
 
 function deleteEmptyTrack(

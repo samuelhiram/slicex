@@ -1,10 +1,17 @@
-import { selectTool } from "./select";
-import type { PlaylistTool } from "./types";
+import type { PlaylistTool, ToolEnvironment } from "./types";
 
-// Slice tool stub — falls back to Select behaviour until Fase 6 lands the
-// real slice gesture (drag vertical to cut all clips intersected).
+// Slice tool — LMB drag draws a vertical guide; on release every clip whose
+// body crosses that x is split in two. Mirrors FL Studio's Slice tool (C).
 export const sliceTool: PlaylistTool = {
   id: "slice",
   cursor: "crosshair",
-  onPointerDown: selectTool.onPointerDown,
+  onPointerDown(env: ToolEnvironment) {
+    const { point, event } = env;
+    return {
+      kind: "slice-drag",
+      pointerId: event.pointerId,
+      startPoint: { ...point },
+      currentPoint: { ...point },
+    };
+  },
 };

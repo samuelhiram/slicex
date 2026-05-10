@@ -143,7 +143,7 @@ describe("Tools — onPointerDown dispatch", () => {
     expect(core.getState().viewport.pxPerBeat).toBeLessThan(before);
   });
 
-  it("Slip tool stub falls back to Select behaviour", () => {
+  it("Slip tool returns null on empty hit (nothing to slip)", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     const gesture = TOOLS.slip.onPointerDown({
       core,
@@ -152,10 +152,10 @@ describe("Tools — onPointerDown dispatch", () => {
       hit: emptyHit(core),
       event: createMockEvent(),
     });
-    expect(gesture?.kind).toBe("marquee");
+    expect(gesture).toBeNull();
   });
 
-  it("Slice tool stub falls back to Select behaviour", () => {
+  it("Slice tool always returns a slice-drag gesture", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     const gesture = TOOLS.slice.onPointerDown({
       core,
@@ -164,7 +164,7 @@ describe("Tools — onPointerDown dispatch", () => {
       hit: emptyHit(core),
       event: createMockEvent(),
     });
-    expect(gesture?.kind).toBe("marquee");
+    expect(gesture?.kind).toBe("slice-drag");
   });
 
   it("createClip via Draw tool resolves a track id from the hit row", () => {

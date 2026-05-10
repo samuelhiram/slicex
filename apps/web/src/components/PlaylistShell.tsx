@@ -361,6 +361,7 @@ function PlaylistContextMenuOverlay({ core }: { core: PlaylistCore | null }) {
 function PlaylistToolbar({ core }: ToolbarProps) {
   const [active, setActive] = React.useState<PlaylistToolId>("select");
   const [snapMode, setSnapMode] = React.useState<PlaylistSnapMode>("beat");
+  const [stretchMode, setStretchMode] = React.useState(false);
 
   React.useEffect(() => {
     if (!core) {
@@ -368,9 +369,11 @@ function PlaylistToolbar({ core }: ToolbarProps) {
     }
     setActive(core.getState().tool);
     setSnapMode(core.getState().snap.mode);
+    setStretchMode(core.getState().stretchMode);
     const sub = core.subscribe((state) => {
       setActive(state.tool);
       setSnapMode(state.snap.mode);
+      setStretchMode(state.stretchMode);
     });
     return () => sub.unsubscribe();
   }, [core]);
@@ -413,6 +416,16 @@ function PlaylistToolbar({ core }: ToolbarProps) {
           ))}
         </select>
       </label>
+      <button
+        type="button"
+        className="playlist-shell__tool"
+        data-active={stretchMode ? "true" : "false"}
+        title="Stretch mode — resize stretches content (Shift+M)"
+        onClick={() => core?.toggleStretchMode()}
+      >
+        <span className="playlist-shell__tool-label">Str</span>
+        <span className="playlist-shell__tool-hotkey">⇧M</span>
+      </button>
     </div>
   );
 }

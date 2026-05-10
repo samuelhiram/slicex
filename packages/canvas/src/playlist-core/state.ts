@@ -428,6 +428,82 @@ export class PlaylistCore {
     this.dispatch({ type: "SET_CLIP_COLOR", clipId, color });
   }
 
+  setClipContentOffset(clipId: string, contentOffset: number): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
+    this.dispatch({ type: "SET_CLIP_CONTENT_OFFSET", clipId, contentOffset });
+  }
+
+  setClipStretchRatio(clipId: string, stretchRatio: number): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
+    this.dispatch({ type: "SET_CLIP_STRETCH_RATIO", clipId, stretchRatio });
+  }
+
+  // Resize-with-stretch: scales the clip's stretchRatio by the duration
+  // change instead of cropping content. Used while stretchMode is on.
+  stretchResizeClip(
+    clipId: string,
+    edge: "left" | "right",
+    time: number,
+  ): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
+    this.dispatch({ type: "STRETCH_RESIZE_CLIP", clipId, edge, time });
+  }
+
+  // Slice every clip whose body crosses `time` (Slice tool drag / Insert key).
+  // Each affected clip becomes a left half (truncated in place) plus a right
+  // half pushed back into the state with a fresh id and a contentOffset that
+  // represents the drop-in time of the cut. Locked tracks are skipped.
+  sliceClipsAtTime(time: number): string[] {
+    const state = this.history.present;
+    const lockedTrackIds = new Set(
+      state.tracks
+        .filter((track) => track.locked === true)
+        .map((track) => track.id),
+    );
+    const candidates = state.clips.filter(
+      (clip) =>
+        !lockedTrackIds.has(clip.trackId) &&
+        time > clip.start + 1e-6 &&
+        time < clip.start + clip.duration - 1e-6,
+    );
+    if (candidates.length === 0) {
+      return [];
+    }
+    let working = [...state.clips];
+    const newClips: PlaylistClip[] = [];
+    for (const clip of candidates) {
+      const newId = makeClipId(working);
+      const baseOffset = clip.contentOffset ?? 0;
+      const stretch = clip.stretchRatio ?? 1;
+      const cutOffsetWithinContent = (time - clip.start) * stretch;
+      const right: PlaylistClip = {
+        ...cloneClip(clip),
+        id: newId,
+        start: time,
+        duration: clip.start + clip.duration - time,
+        sourceId: clip.sourceId ?? clip.id,
+        contentOffset: baseOffset + cutOffsetWithinContent,
+      };
+      newClips.push(right);
+      working = [...working, right];
+    }
+    this.dispatch({
+      type: "SLICE_CLIPS_AT_TIME",
+      time,
+      newClips,
+    });
+    return newClips.map((c) => c.id);
+  }
+
+  // Stretch mode toggle (UI flag, not undoable).
+  toggleStretchMode(): void {
+    this.dispatch({ type: "TOGGLE_STRETCH_MODE" });
+  }
+
+  setStretchMode(enabled: boolean): void {
+    this.dispatch({ type: "SET_STRETCH_MODE", enabled });
+  }
+
   makeClipUnique(clipId: string): void {
     if (this.isClipOnLockedTrack(clipId)) return;
     this.dispatch({ type: "MAKE_CLIPS_UNIQUE", clipIds: [clipId] });

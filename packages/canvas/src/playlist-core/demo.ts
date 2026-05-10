@@ -117,5 +117,6 @@ export function createDemoPlaylistState(): PlaylistState {
     },
     tool: "select",
     clipboard: null,
+    stretchMode: false,
   };
 }

@@ -65,6 +65,13 @@ interface PlaylistClipBase {
   // matches. createClip defaults this to the clip id; "Make unique" resets
   // it to a fresh value so subsequent edits don't propagate.
   sourceId?: string;
+  // Slip offset (beats): how far the inner content is shifted to the right
+  // relative to the clip start. start/duration stay fixed during a slip.
+  contentOffset?: number;
+  // Time-stretch factor applied to the inner content. 1 means no stretch,
+  // 2 means the content is twice as long as a 1x source, etc. The financial
+  // engine multiplies recurrence intervals by this ratio.
+  stretchRatio?: number;
 }
 
 export interface PlaylistRegularClip extends PlaylistClipBase {
@@ -196,6 +203,9 @@ export interface PlaylistState {
   playPosition: PlaylistPlayPosition;
   tool: PlaylistToolId;
   clipboard: PlaylistClipboard | null;
+  // FL Studio: when true, edge-resize stretches the clip content (multiplies
+  // stretchRatio) instead of cropping. Toggled by Shift+M.
+  stretchMode: boolean;
 }
 
 export interface PlaylistMetrics {

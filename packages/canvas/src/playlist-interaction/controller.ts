@@ -94,7 +94,12 @@ function setCursor(
     return;
   }
 
-  if (active?.kind === "paint-drag" || active?.kind === "delete-drag") {
+  if (
+    active?.kind === "paint-drag" ||
+    active?.kind === "delete-drag" ||
+    active?.kind === "slip-drag" ||
+    active?.kind === "slice-drag"
+  ) {
     host.style.cursor = getTool(toolId).cursor;
     return;
   }
@@ -467,7 +472,8 @@ export function createPlaylistInteractionController(
       gesture.kind === "clip-resize" ||
       gesture.kind === "automation-point-drag" ||
       gesture.kind === "paint-drag" ||
-      gesture.kind === "delete-drag"
+      gesture.kind === "delete-drag" ||
+      gesture.kind === "slip-drag"
     );
   }
 
@@ -542,7 +548,33 @@ export function createPlaylistInteractionController(
         state,
         event.altKey,
       );
-      core.resizeClip(gesture.clipId, gesture.edge, time);
+      if (state.stretchMode) {
+        core.stretchResizeClip(gesture.clipId, gesture.edge, time);
+      } else {
+        core.resizeClip(gesture.clipId, gesture.edge, time);
+      }
+      event.preventDefault();
+      return;
+    }
+
+    if (gesture.kind === "slip-drag") {
+      const currentTime = screenXToTime(state, point.x, metrics);
+      const deltaScreen = currentTime - gesture.startPointerTime;
+      // contentOffset is measured in content beats; one screen beat equals
+      // stretchRatio content beats, and the slip moves the content opposite
+      // to the cursor (drag right = content shifts left under the window).
+      const nextOffset =
+        gesture.startContentOffset - deltaScreen * gesture.startStretchRatio;
+      core.setClipContentOffset(gesture.clipId, nextOffset);
+      event.preventDefault();
+      return;
+    }
+
+    if (gesture.kind === "slice-drag") {
+      gesture.currentPoint = { ...point };
+      // Drag updates the marquee state so the renderer can draw a guide line
+      // without adding a new presentation field.
+      core.setMarquee({ start: gesture.startPoint, current: point });
       event.preventDefault();
       return;
     }
@@ -678,6 +710,20 @@ export function createPlaylistInteractionController(
       core.setMarquee(null);
     }
 
+    if (activeGesture.kind === "slice-drag") {
+      const state = core.getState();
+      // Snap the slice point to the active grid (Alt bypasses snap).
+      const time = snapTime(
+        screenXToTime(state, activeGesture.startPoint.x, metrics),
+        state,
+        event.altKey,
+      );
+      core.setMarquee(null);
+      if (time > 0) {
+        core.sliceClipsAtTime(time);
+      }
+    }
+
     if (
       activeGesture.kind === "clip-drag" ||
       activeGesture.kind === "clip-resize" ||
@@ -685,7 +731,8 @@ export function createPlaylistInteractionController(
       activeGesture.kind === "paint-drag" ||
       activeGesture.kind === "delete-drag" ||
       activeGesture.kind === "track-resize" ||
-      activeGesture.kind === "track-reorder"
+      activeGesture.kind === "track-reorder" ||
+      activeGesture.kind === "slip-drag"
     ) {
       core.endGesture();
     }
@@ -824,6 +871,25 @@ export function createPlaylistInteractionController(
 
     if (event.code === "Space") {
       core.setPlayPositionRunning(!core.getState().playPosition.isRunning);
+      event.preventDefault();
+      return;
+    }
+
+    // Insert: slice every visible clip at the playhead.
+    if (event.key === "Insert") {
+      core.sliceClipsAtTime(core.getState().playPosition.time);
+      event.preventDefault();
+      return;
+    }
+
+    // Shift+M: toggle FL Studio's stretch mode (resize stretches content).
+    if (
+      !cmd &&
+      event.shiftKey &&
+      !event.altKey &&
+      (event.key === "M" || event.key === "m")
+    ) {
+      core.toggleStretchMode();
       event.preventDefault();
       return;
     }

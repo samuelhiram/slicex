@@ -80,6 +80,20 @@ export type ActiveGesture =
       pointerId: number;
       fromIndex: number;
       currentIndex: number;
+    }
+  | {
+      kind: "slip-drag";
+      pointerId: number;
+      clipId: string;
+      startPointerTime: number;
+      startContentOffset: number;
+      startStretchRatio: number;
+    }
+  | {
+      kind: "slice-drag";
+      pointerId: number;
+      startPoint: PlaylistPoint;
+      currentPoint: PlaylistPoint;
     };
 
 export type ActiveGestureKind = ActiveGesture["kind"];

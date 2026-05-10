@@ -65,6 +65,7 @@ export function cloneState(state: PlaylistState): PlaylistState {
           span: state.clipboard.span,
         }
       : null,
+    stretchMode: state.stretchMode ?? false,
   };
 }
 
