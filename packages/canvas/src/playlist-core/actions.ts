@@ -3,6 +3,7 @@ import type {
   PlaylistClipboard,
   PlaylistContextMenu,
   PlaylistHover,
+  PlaylistMarker,
   PlaylistMarquee,
   PlaylistPoint,
   PlaylistSelection,
@@ -77,6 +78,9 @@ export type PlaylistAction =
       entries: { clip: PlaylistClip; trackIndex: number }[];
       selectIds: string[];
     }
+  | { type: "ADD_MARKER"; marker: PlaylistMarker }
+  | { type: "REMOVE_MARKER"; markerId: string }
+  | { type: "UPDATE_MARKER"; markerId: string; patch: Partial<PlaylistMarker> }
   // UI-only mutations (not undoable).
   | { type: "SET_SELECTION"; selection: Partial<PlaylistSelection> }
   | { type: "SET_MARQUEE"; marquee: PlaylistMarquee | null }
@@ -104,7 +108,15 @@ export type PlaylistAction =
   | { type: "SET_SNAP_MODE"; mode: PlaylistSnapMode }
   | { type: "TOGGLE_SNAP_NONE" }
   | { type: "SET_STRETCH_MODE"; enabled: boolean }
-  | { type: "TOGGLE_STRETCH_MODE" };
+  | { type: "TOGGLE_STRETCH_MODE" }
+  | {
+      type: "OPEN_MARKER_CONTEXT_MENU";
+      markerId: string;
+      position: PlaylistPoint;
+    }
+  | { type: "SET_TRANSPORT_MODE"; mode: "song" | "pattern" }
+  | { type: "TOGGLE_TRANSPORT_MODE" }
+  | { type: "TOGGLE_TRANSPORT_RECORDING" };
 
 export type PlaylistActionType = PlaylistAction["type"];
 
@@ -137,6 +149,9 @@ const UNDOABLE_ACTION_TYPES: ReadonlySet<PlaylistActionType> = new Set([
   "SET_CLIP_STRETCH_RATIO",
   "STRETCH_RESIZE_CLIP",
   "SLICE_CLIPS_AT_TIME",
+  "ADD_MARKER",
+  "REMOVE_MARKER",
+  "UPDATE_MARKER",
 ] satisfies PlaylistActionType[]);
 
 export function isUndoableAction(action: PlaylistAction): boolean {

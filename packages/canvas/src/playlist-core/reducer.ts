@@ -32,6 +32,12 @@ function hoversEqual(a: PlaylistHover, b: PlaylistHover): boolean {
       );
     case "track":
       return a.trackId === (b as { trackId: string }).trackId;
+    case "marker":
+      return a.markerId === (b as { markerId: string }).markerId;
+    default: {
+      const exhaustive: never = a;
+      return exhaustive;
+    }
   }
 }
 
@@ -131,6 +137,71 @@ export function playlistReducer(
         : { ...state, stretchMode: action.enabled };
     case "TOGGLE_STRETCH_MODE":
       return { ...state, stretchMode: !state.stretchMode };
+    case "ADD_MARKER":
+      if (state.markers.some((m) => m.id === action.marker.id)) {
+        return state;
+      }
+      return {
+        ...state,
+        markers: sortMarkers([...state.markers, { ...action.marker }]),
+      };
+    case "REMOVE_MARKER":
+      if (!state.markers.some((m) => m.id === action.markerId)) {
+        return state;
+      }
+      return {
+        ...state,
+        markers: state.markers.filter((m) => m.id !== action.markerId),
+      };
+    case "UPDATE_MARKER": {
+      let changed = false;
+      const next = state.markers.map((m) => {
+        if (m.id !== action.markerId) return m;
+        const merged = { ...m, ...action.patch, id: m.id };
+        if (
+          merged.time === m.time &&
+          merged.kind === m.kind &&
+          merged.label === m.label &&
+          merged.color === m.color &&
+          merged.timeSignatureNumerator === m.timeSignatureNumerator &&
+          merged.timeSignatureDenominator === m.timeSignatureDenominator
+        ) {
+          return m;
+        }
+        changed = true;
+        return merged;
+      });
+      if (!changed) return state;
+      return { ...state, markers: sortMarkers(next) };
+    }
+    case "OPEN_MARKER_CONTEXT_MENU":
+      return {
+        ...state,
+        contextMenu: {
+          kind: "marker",
+          markerId: action.markerId,
+          position: { ...action.position },
+        },
+      };
+    case "SET_TRANSPORT_MODE":
+      if (state.transport.mode === action.mode) return state;
+      return { ...state, transport: { ...state.transport, mode: action.mode } };
+    case "TOGGLE_TRANSPORT_MODE":
+      return {
+        ...state,
+        transport: {
+          ...state.transport,
+          mode: state.transport.mode === "song" ? "pattern" : "song",
+        },
+      };
+    case "TOGGLE_TRANSPORT_RECORDING":
+      return {
+        ...state,
+        transport: {
+          ...state.transport,
+          recording: !state.transport.recording,
+        },
+      };
     case "PASTE_CLIPS":
       return pasteClips(state, action.entries, action.selectIds);
     case "SET_TOOL":
@@ -790,6 +861,12 @@ function stretchResizeClip(
     };
   });
   return { ...state, clips };
+}
+
+function sortMarkers(
+  markers: import("./types").PlaylistMarker[],
+): import("./types").PlaylistMarker[] {
+  return [...markers].sort((a, b) => a.time - b.time);
 }
 
 function sliceClipsAtTime(

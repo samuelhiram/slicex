@@ -118,5 +118,11 @@ export function createDemoPlaylistState(): PlaylistState {
     tool: "select",
     clipboard: null,
     stretchMode: false,
+    markers: [
+      { id: "m-start", time: 0, kind: "start", label: "Start" },
+      { id: "m-loop-a", time: 16, kind: "loop", label: "Loop A" },
+      { id: "m-loop-b", time: 40, kind: "loop", label: "Loop B" },
+    ],
+    transport: { mode: "song", recording: false },
   };
 }

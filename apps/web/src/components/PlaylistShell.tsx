@@ -7,6 +7,7 @@ import {
   createPlaylistRenderer,
   type PlaylistContextMenu,
   type PlaylistCore,
+  type PlaylistMarkerKind,
   type PlaylistSnapMode,
   type PlaylistToolId,
 } from "@slicex/canvas";
@@ -252,6 +253,68 @@ function buildClipMenuItems(
   ];
 }
 
+const MARKER_KIND_OPTIONS: ReadonlyArray<{
+  kind: PlaylistMarkerKind;
+  label: string;
+}> = [
+  { kind: "label", label: "Label" },
+  { kind: "start", label: "Start" },
+  { kind: "loop", label: "Loop" },
+  { kind: "marker-loop", label: "Marker loop" },
+  { kind: "marker-skip", label: "Marker skip" },
+  { kind: "marker-pause", label: "Marker pause" },
+  { kind: "time-signature", label: "Time signature" },
+  { kind: "rec-start", label: "Recording start" },
+  { kind: "rec-stop", label: "Recording stop" },
+];
+
+function buildMarkerMenuItems(
+  core: PlaylistCore,
+  markerId: string,
+): MenuItemDef[] {
+  const marker = core.getState().markers.find((m) => m.id === markerId);
+  if (!marker) return [];
+  const close = () => core.closeContextMenu();
+  return [
+    {
+      label: "Rename marker",
+      onSelect: () => {
+        const next = window.prompt(
+          "Rename marker",
+          marker.label ?? "",
+        );
+        if (next != null) {
+          core.updateMarker(marker.id, { label: next.trim() || undefined });
+        }
+        close();
+      },
+    },
+    ...MARKER_KIND_OPTIONS.map<MenuItemDef>((option) => ({
+      label: `${option.kind === marker.kind ? "✓ " : "   "}${option.label}`,
+      onSelect: () => {
+        core.updateMarker(marker.id, { kind: option.kind });
+        close();
+      },
+    })),
+    { label: "", onSelect: () => {}, divider: true },
+    {
+      label: "Jump playhead here",
+      onSelect: () => {
+        core.setPlayPosition(marker.time);
+        close();
+      },
+    },
+    {
+      label: "Delete marker",
+      hotkey: "Del",
+      onSelect: () => {
+        core.removeMarker(marker.id);
+        close();
+      },
+    },
+  ];
+}
+
 function buildBackgroundMenuItems(
   core: PlaylistCore,
   time: number,
@@ -341,6 +404,8 @@ function PlaylistContextMenuOverlay({ core }: { core: PlaylistCore | null }) {
     items = buildClipMenuItems(core, menu.clipId);
   } else if (menu.kind === "background") {
     items = buildBackgroundMenuItems(core, menu.time, menu.trackIndex);
+  } else if (menu.kind === "marker") {
+    items = buildMarkerMenuItems(core, menu.markerId);
   }
 
   return (
@@ -362,6 +427,10 @@ function PlaylistToolbar({ core }: ToolbarProps) {
   const [active, setActive] = React.useState<PlaylistToolId>("select");
   const [snapMode, setSnapMode] = React.useState<PlaylistSnapMode>("beat");
   const [stretchMode, setStretchMode] = React.useState(false);
+  const [transportMode, setTransportMode] = React.useState<"song" | "pattern">(
+    "song",
+  );
+  const [recording, setRecording] = React.useState(false);
 
   React.useEffect(() => {
     if (!core) {
@@ -370,10 +439,14 @@ function PlaylistToolbar({ core }: ToolbarProps) {
     setActive(core.getState().tool);
     setSnapMode(core.getState().snap.mode);
     setStretchMode(core.getState().stretchMode);
+    setTransportMode(core.getState().transport.mode);
+    setRecording(core.getState().transport.recording);
     const sub = core.subscribe((state) => {
       setActive(state.tool);
       setSnapMode(state.snap.mode);
       setStretchMode(state.stretchMode);
+      setTransportMode(state.transport.mode);
+      setRecording(state.transport.recording);
     });
     return () => sub.unsubscribe();
   }, [core]);
@@ -425,6 +498,28 @@ function PlaylistToolbar({ core }: ToolbarProps) {
       >
         <span className="playlist-shell__tool-label">Str</span>
         <span className="playlist-shell__tool-hotkey">⇧M</span>
+      </button>
+      <button
+        type="button"
+        className="playlist-shell__tool"
+        data-active={transportMode === "pattern" ? "true" : "false"}
+        title={`Transport: ${transportMode === "song" ? "Song" : "Pattern"} (L)`}
+        onClick={() => core?.toggleTransportMode()}
+      >
+        <span className="playlist-shell__tool-label">
+          {transportMode === "song" ? "Sng" : "Pat"}
+        </span>
+        <span className="playlist-shell__tool-hotkey">L</span>
+      </button>
+      <button
+        type="button"
+        className="playlist-shell__tool"
+        data-active={recording ? "true" : "false"}
+        title="Toggle recording (R)"
+        onClick={() => core?.toggleTransportRecording()}
+      >
+        <span className="playlist-shell__tool-label">Rec</span>
+        <span className="playlist-shell__tool-hotkey">R</span>
       </button>
     </div>
   );

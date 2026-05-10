@@ -2,6 +2,7 @@ import {
   DEFAULT_PLAYLIST_METRICS,
   type PlaylistAutomationPoint,
   type PlaylistClip,
+  type PlaylistMarker,
   type PlaylistMetrics,
   type PlaylistPoint,
   type PlaylistRect,
@@ -9,6 +10,7 @@ import {
   type PlaylistTrack,
 } from "./types";
 import {
+  getActiveLoopRegion,
   getAutomationPointPosition,
   getClipTitleRect,
   getHorizontalScrollbarRect,
@@ -177,6 +179,22 @@ export interface PlaylistPlayPositionPresentation {
   isRunning: boolean;
 }
 
+export interface PlaylistMarkerPresentation {
+  marker: PlaylistMarker;
+  x: number;
+  hitRect: PlaylistRect; // clickable triangle area on the ruler
+  isVisible: boolean;
+}
+
+export interface PlaylistLoopRegionPresentation {
+  start: number; // beats
+  end: number; // beats
+  startX: number;
+  endX: number;
+  rect: PlaylistRect;
+  isVisible: boolean;
+}
+
 export interface PlaylistMarqueePresentation {
   rect: PlaylistRect;
 }
@@ -197,6 +215,8 @@ export interface PlaylistPresentation {
   };
   playPosition: PlaylistPlayPositionPresentation;
   marquee: PlaylistMarqueePresentation | null;
+  markerViews: PlaylistMarkerPresentation[];
+  loopRegion: PlaylistLoopRegionPresentation | null;
   timeToScreenX: (time: number) => number;
   screenXToTime: (screenX: number) => number;
   trackIndexToScreenY: (trackIndex: number) => number;
@@ -658,6 +678,57 @@ function createPlayPosition(
   };
 }
 
+function createMarkerViews(
+  state: PlaylistState,
+  metrics: PlaylistMetrics,
+): PlaylistMarkerPresentation[] {
+  const views: PlaylistMarkerPresentation[] = [];
+  const hitHalfWidth = 8;
+  for (const marker of state.markers ?? []) {
+    const x = timeToScreenX(state, marker.time, metrics);
+    const hitRect = {
+      x: x - hitHalfWidth,
+      y: 0,
+      width: hitHalfWidth * 2,
+      height: metrics.rulerHeight,
+    };
+    views.push({
+      marker,
+      x,
+      hitRect,
+      isVisible:
+        x + hitHalfWidth >= metrics.trackHeaderWidth &&
+        x - hitHalfWidth <= state.viewport.width,
+    });
+  }
+  return views;
+}
+
+function createLoopRegion(
+  state: PlaylistState,
+  metrics: PlaylistMetrics,
+): PlaylistLoopRegionPresentation | null {
+  const region = getActiveLoopRegion(state);
+  if (!region) return null;
+  const startX = timeToScreenX(state, region.start, metrics);
+  const endX = timeToScreenX(state, region.end, metrics);
+  const left = Math.max(metrics.trackHeaderWidth, Math.min(startX, endX));
+  const right = Math.max(left, Math.min(state.viewport.width, Math.max(startX, endX)));
+  return {
+    start: region.start,
+    end: region.end,
+    startX,
+    endX,
+    rect: {
+      x: left,
+      y: 0,
+      width: Math.max(0, right - left),
+      height: metrics.rulerHeight,
+    },
+    isVisible: right > metrics.trackHeaderWidth && left < state.viewport.width,
+  };
+}
+
 function createMarquee(
   state: PlaylistState,
 ): PlaylistMarqueePresentation | null {
@@ -709,6 +780,8 @@ export function createPlaylistPresentation(
     scrollbars,
     playPosition: createPlayPosition(state, metrics),
     marquee: createMarquee(state),
+    markerViews: createMarkerViews(state, metrics),
+    loopRegion: createLoopRegion(state, metrics),
     timeToScreenX: (time: number) => timeToScreenX(state, time, metrics),
     screenXToTime: (screenX: number) => screenXToTime(state, screenX, metrics),
     trackIndexToScreenY: (trackIndex: number) =>

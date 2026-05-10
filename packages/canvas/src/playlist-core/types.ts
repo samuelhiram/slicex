@@ -152,6 +152,40 @@ export interface PlaylistClipboard {
   span: number;
 }
 
+// FL Studio marker kinds. Sourced from playlist.htm Time markers section.
+export type PlaylistMarkerKind =
+  | "label"
+  | "start"
+  | "loop"
+  | "marker-loop"
+  | "marker-skip"
+  | "marker-pause"
+  | "time-signature"
+  | "rec-start"
+  | "rec-stop";
+
+export interface PlaylistMarker {
+  id: string;
+  time: number; // beats
+  kind: PlaylistMarkerKind;
+  label?: string;
+  color?: string;
+  // For kind === "time-signature": numerator / denominator of the new TS.
+  // For all other kinds these are undefined.
+  timeSignatureNumerator?: number;
+  timeSignatureDenominator?: number;
+}
+
+export interface PlaylistTransport {
+  // Song = play the full playlist. Pattern = play only the current pattern.
+  // We track the mode but the actual pattern-mode behaviour is not yet
+  // implemented (Fase 10 / 11). For now, this is a UI / model placeholder
+  // so the hotkey L is reversible.
+  mode: "song" | "pattern";
+  // Toggled by R. Visual indicator only until a recording backend lands.
+  recording: boolean;
+}
+
 export interface PlaylistMarquee {
   start: PlaylistPoint;
   current: PlaylistPoint;
@@ -177,10 +211,17 @@ export interface PlaylistBackgroundContextMenu {
   position: PlaylistPoint;
 }
 
+export interface PlaylistMarkerContextMenu {
+  kind: "marker";
+  markerId: string;
+  position: PlaylistPoint;
+}
+
 export type PlaylistContextMenu =
   | PlaylistTrackContextMenu
   | PlaylistClipContextMenu
   | PlaylistBackgroundContextMenu
+  | PlaylistMarkerContextMenu
   | null;
 
 export type PlaylistHover =
@@ -189,6 +230,7 @@ export type PlaylistHover =
   | { kind: "resize-right"; clipId: string }
   | { kind: "automation-point"; clipId: string; pointId: string }
   | { kind: "track"; trackId: string }
+  | { kind: "marker"; markerId: string }
   | null;
 
 export interface PlaylistState {
@@ -206,6 +248,10 @@ export interface PlaylistState {
   // FL Studio: when true, edge-resize stretches the clip content (multiplies
   // stretchRatio) instead of cropping. Toggled by Shift+M.
   stretchMode: boolean;
+  // FL Studio: timeline markers (labels, loop bounds, time signature changes,
+  // recording fences). Always sorted by `time` ascending after dispatch.
+  markers: PlaylistMarker[];
+  transport: PlaylistTransport;
 }
 
 export interface PlaylistMetrics {

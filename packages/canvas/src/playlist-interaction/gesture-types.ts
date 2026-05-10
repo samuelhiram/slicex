@@ -100,6 +100,13 @@ export type ActiveGesture =
       pointerId: number;
       startPoint: PlaylistPoint;
       currentPoint: PlaylistPoint;
+    }
+  | {
+      kind: "marker-drag";
+      pointerId: number;
+      markerId: string;
+      startTime: number;
+      startPointerTime: number;
     };
 
 export type ActiveGestureKind = ActiveGesture["kind"];

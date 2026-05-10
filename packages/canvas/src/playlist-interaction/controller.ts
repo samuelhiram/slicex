@@ -116,6 +116,11 @@ function setCursor(
     return;
   }
 
+  if (active?.kind === "marker-drag") {
+    host.style.cursor = "grabbing";
+    return;
+  }
+
   if (!hit) {
     host.style.cursor = "default";
     return;
@@ -134,6 +139,11 @@ function setCursor(
 
   if (hit.kind === "play-position-marker" || hit.kind === "ruler") {
     host.style.cursor = "ew-resize";
+    return;
+  }
+
+  if (hit.kind === "marker") {
+    host.style.cursor = "grab";
     return;
   }
 
@@ -228,6 +238,11 @@ function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
     return;
   }
 
+  if (hit.kind === "marker") {
+    core.setHover({ kind: "marker", markerId: hit.markerId });
+    return;
+  }
+
   if (hit.kind === "play-position-marker" || hit.kind === "ruler") {
     core.setHover(null);
     return;
@@ -297,6 +312,12 @@ export function createPlaylistInteractionController(
       }
       if (hit.kind === "track-header") {
         core.openTrackContextMenu(hit.trackIndex, point);
+        event.preventDefault();
+        return;
+      }
+
+      if (hit.kind === "marker") {
+        core.openMarkerContextMenu(hit.markerId, point);
         event.preventDefault();
         return;
       }
@@ -483,6 +504,24 @@ export function createPlaylistInteractionController(
       return;
     }
 
+    if (hit.kind === "marker") {
+      const marker = state.markers.find((m) => m.id === hit.markerId);
+      if (marker) {
+        activeGesture = {
+          kind: "marker-drag",
+          pointerId: event.pointerId,
+          markerId: marker.id,
+          startTime: marker.time,
+          startPointerTime: screenXToTime(state, point.x, metrics),
+        };
+        core.beginGesture();
+        host.setPointerCapture?.(event.pointerId);
+        setCursor(host, hit, activeGesture, state.tool);
+        event.preventDefault();
+        return;
+      }
+    }
+
     if (hit.kind === "play-position-marker" || hit.kind === "ruler") {
       core.setPlayPosition(
         snapTime(screenXToTime(state, point.x, metrics), state, event.altKey),
@@ -518,7 +557,8 @@ export function createPlaylistInteractionController(
       gesture.kind === "automation-point-drag" ||
       gesture.kind === "paint-drag" ||
       gesture.kind === "delete-drag" ||
-      gesture.kind === "slip-drag"
+      gesture.kind === "slip-drag" ||
+      gesture.kind === "marker-drag"
     );
   }
 
@@ -654,6 +694,15 @@ export function createPlaylistInteractionController(
       return;
     }
 
+    if (gesture.kind === "marker-drag") {
+      const currentTime = screenXToTime(state, point.x, metrics);
+      const raw = gesture.startTime + (currentTime - gesture.startPointerTime);
+      const snapped = snapTime(Math.max(0, raw), state, event.altKey, metrics);
+      core.updateMarker(gesture.markerId, { time: snapped });
+      event.preventDefault();
+      return;
+    }
+
     if (gesture.kind === "scrollbar-horizontal") {
       const delta =
         ((point.x - gesture.startPoint.x) / gesture.travel) *
@@ -773,7 +822,8 @@ export function createPlaylistInteractionController(
       activeGesture.kind === "delete-drag" ||
       activeGesture.kind === "track-resize" ||
       activeGesture.kind === "track-reorder" ||
-      activeGesture.kind === "slip-drag"
+      activeGesture.kind === "slip-drag" ||
+      activeGesture.kind === "marker-drag"
     ) {
       core.endGesture();
     }
@@ -919,6 +969,40 @@ export function createPlaylistInteractionController(
     // Insert: slice every visible clip at the playhead.
     if (event.key === "Insert") {
       core.sliceClipsAtTime(core.getState().playPosition.time);
+      event.preventDefault();
+      return;
+    }
+
+    // FL Studio marker hotkeys.
+    if (event.altKey && event.shiftKey && !cmd && key === "t") {
+      core.addTimeSignatureMarker(core.getState().playPosition.time);
+      event.preventDefault();
+      return;
+    }
+    if (event.altKey && !event.shiftKey && !cmd && key === "t") {
+      core.addMarker({ time: core.getState().playPosition.time });
+      event.preventDefault();
+      return;
+    }
+    if (cmd && !event.shiftKey && !event.altKey && key === "t") {
+      core.addAutoNamedMarker(core.getState().playPosition.time);
+      event.preventDefault();
+      return;
+    }
+
+    // FL Studio transport hotkeys.
+    if (event.key === "Home" && !cmd && !event.altKey && !event.shiftKey) {
+      core.setPlayPosition(0);
+      event.preventDefault();
+      return;
+    }
+    if (!cmd && !event.altKey && !event.shiftKey && key === "l") {
+      core.toggleTransportMode();
+      event.preventDefault();
+      return;
+    }
+    if (!cmd && !event.altKey && !event.shiftKey && key === "r") {
+      core.toggleTransportRecording();
       event.preventDefault();
       return;
     }

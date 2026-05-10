@@ -9,6 +9,7 @@ import {
 
 export type PlaylistHit =
   | { kind: "empty" }
+  | { kind: "marker"; markerId: string }
   | { kind: "scrollbar-horizontal"; onThumb: boolean }
   | { kind: "scrollbar-vertical"; onThumb: boolean }
   | { kind: "track-header"; trackIndex: number; trackId: string }
@@ -113,7 +114,17 @@ export function hitTestPlaylist(
     return { kind: "play-position-marker" };
   }
 
+  // Timeline markers live on the ruler. Walk in reverse so the topmost
+  // (drawn-last) marker wins when two are close together.
   if (point.y <= metrics.rulerHeight && point.x >= metrics.trackHeaderWidth) {
+    const markers = presentation.markerViews;
+    for (let i = markers.length - 1; i >= 0; i -= 1) {
+      const view = markers[i]!;
+      if (!view.isVisible) continue;
+      if (pointInRect(point, view.hitRect)) {
+        return { kind: "marker", markerId: view.marker.id };
+      }
+    }
     return { kind: "ruler" };
   }
 

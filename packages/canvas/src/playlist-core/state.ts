@@ -26,6 +26,8 @@ import {
   type PlaylistClipType,
   type PlaylistClipboard,
   type PlaylistContextMenu,
+  type PlaylistMarker,
+  type PlaylistMarkerKind,
   type PlaylistMarquee,
   type PlaylistMetrics,
   type PlaylistPoint,
@@ -37,7 +39,7 @@ import {
 } from "./types";
 import type { PlaylistPresentation } from "./presentation";
 import { createPlaylistPresentation } from "./presentation";
-import { makeClipId, makePointId } from "./state-track-helpers";
+import { makeClipId, makeMarkerId, makePointId } from "./state-track-helpers";
 import { cloneClip } from "./state-utils";
 import { normalizeState } from "./state-utils";
 
@@ -567,6 +569,79 @@ export class PlaylistCore {
     const selectIds = entries.map((entry) => entry.clip.id);
     this.dispatch({ type: "PASTE_CLIPS", entries, selectIds });
     return selectIds;
+  }
+
+  // Marker wrappers (undoable). IDs are auto-generated when not provided.
+  addMarker(input: {
+    time: number;
+    kind?: PlaylistMarkerKind;
+    label?: string;
+    color?: string;
+    id?: string;
+    timeSignatureNumerator?: number;
+    timeSignatureDenominator?: number;
+  }): string {
+    const state = this.history.present;
+    const id = input.id ?? makeMarkerId(state.markers);
+    const marker: PlaylistMarker = {
+      id,
+      time: Math.max(0, input.time),
+      kind: input.kind ?? "label",
+      label: input.label,
+      color: input.color,
+      timeSignatureNumerator: input.timeSignatureNumerator,
+      timeSignatureDenominator: input.timeSignatureDenominator,
+    };
+    this.dispatch({ type: "ADD_MARKER", marker });
+    return id;
+  }
+
+  // FL Studio: Ctrl+T inserts an auto-named marker.
+  addAutoNamedMarker(time: number): string {
+    const state = this.history.present;
+    const count =
+      state.markers.filter((m) => m.kind === "label").length + 1;
+    return this.addMarker({ time, kind: "label", label: `Marker ${count}` });
+  }
+
+  // Shift+Alt+T inserts a time-signature marker at the playhead.
+  addTimeSignatureMarker(
+    time: number,
+    numerator = 4,
+    denominator = 4,
+  ): string {
+    return this.addMarker({
+      time,
+      kind: "time-signature",
+      label: `${numerator}/${denominator}`,
+      timeSignatureNumerator: numerator,
+      timeSignatureDenominator: denominator,
+    });
+  }
+
+  removeMarker(markerId: string): void {
+    this.dispatch({ type: "REMOVE_MARKER", markerId });
+  }
+
+  updateMarker(markerId: string, patch: Partial<PlaylistMarker>): void {
+    this.dispatch({ type: "UPDATE_MARKER", markerId, patch });
+  }
+
+  openMarkerContextMenu(markerId: string, position: PlaylistPoint): void {
+    this.dispatch({ type: "OPEN_MARKER_CONTEXT_MENU", markerId, position });
+  }
+
+  // Transport wrappers (UI-only).
+  setTransportMode(mode: "song" | "pattern"): void {
+    this.dispatch({ type: "SET_TRANSPORT_MODE", mode });
+  }
+
+  toggleTransportMode(): void {
+    this.dispatch({ type: "TOGGLE_TRANSPORT_MODE" });
+  }
+
+  toggleTransportRecording(): void {
+    this.dispatch({ type: "TOGGLE_TRANSPORT_RECORDING" });
   }
 
   // Context menu helpers used by the controller.

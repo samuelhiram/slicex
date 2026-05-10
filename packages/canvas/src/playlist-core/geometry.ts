@@ -536,9 +536,9 @@ export function snapTime(
   return Math.max(0, Number(snapped.toFixed(4)));
 }
 
-// Snap to the nearest clip edge (start or end). Falls back to the raw value
-// when no candidate is within the tolerance window. Tolerance is derived
-// from the viewport's pxPerBeat so it stays visually consistent across zoom.
+// Snap to the nearest clip edge or marker. Falls back to the raw value when
+// no candidate is within the tolerance window. Tolerance is derived from
+// the viewport's pxPerBeat so it stays visually consistent across zoom.
 function snapTimeToEvents(value: number, state: PlaylistState): number {
   const tolerance =
     state.viewport.pxPerBeat > 0
@@ -564,7 +564,30 @@ function snapTimeToEvents(value: number, state: PlaylistState): number {
       bestPoint = end;
     }
   }
+  for (const marker of state.markers ?? []) {
+    const delta = Math.abs(marker.time - value);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      bestPoint = marker.time;
+    }
+  }
   return Math.max(0, Number(bestPoint.toFixed(4)));
+}
+
+// Returns the active loop region (between the two earliest "loop" markers).
+// FL Studio uses this for jump-back during playback; we also render a band
+// on the ruler. Null when fewer than two loop markers exist.
+export function getActiveLoopRegion(
+  state: PlaylistState,
+): { start: number; end: number } | null {
+  const loopMarkers = (state.markers ?? [])
+    .filter((m) => m.kind === "loop")
+    .sort((a, b) => a.time - b.time);
+  if (loopMarkers.length < 2) return null;
+  const start = loopMarkers[0]!.time;
+  const end = loopMarkers[1]!.time;
+  if (end <= start) return null;
+  return { start, end };
 }
 
 export function getContentEndBeat(state: PlaylistState): number {

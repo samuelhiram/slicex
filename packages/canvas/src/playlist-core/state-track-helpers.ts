@@ -72,3 +72,13 @@ export function makeClipId(clips: PlaylistClip[]): string {
 
   return id;
 }
+
+export function makeMarkerId(markers: { id: string }[]): string {
+  let index = markers.length + 1;
+  let id = `marker-${index}`;
+  while (markers.some((m) => m.id === id)) {
+    index += 1;
+    id = `marker-${index}`;
+  }
+  return id;
+}

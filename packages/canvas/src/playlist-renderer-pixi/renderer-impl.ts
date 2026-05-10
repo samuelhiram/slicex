@@ -36,7 +36,37 @@ const COLORS = {
   disabled: 0x6f6f6f,
   scrollbarTrack: 0x151515,
   scrollbarThumb: 0x5f5f5f,
+  markerLabel: 0xc9b977,
+  markerLoop: 0x6fd28a,
+  markerSkip: 0xe6a85a,
+  markerPause: 0xc975e0,
+  markerTimeSig: 0x7ec1ff,
+  markerRecording: 0xe85c5c,
+  loopRegion: 0x6fd28a,
+  recordingIndicator: 0xe85c5c,
 };
+
+function markerColor(kind: string): number {
+  switch (kind) {
+    case "loop":
+    case "marker-loop":
+      return COLORS.markerLoop;
+    case "marker-skip":
+      return COLORS.markerSkip;
+    case "marker-pause":
+      return COLORS.markerPause;
+    case "time-signature":
+      return COLORS.markerTimeSig;
+    case "rec-start":
+    case "rec-stop":
+      return COLORS.markerRecording;
+    case "start":
+      return COLORS.markerLoop;
+    case "label":
+    default:
+      return COLORS.markerLabel;
+  }
+}
 
 const CLIP_BODY_ALPHA = 1;
 const CLIP_BODY_ALPHA_MUTED = 0.28;
@@ -319,6 +349,57 @@ function drawTrackRows(
       graphics
         .rect(row.headerRect.x, row.headerRect.y, row.headerRect.width, 2)
         .fill({ color: COLORS.selected, alpha: 0.6 });
+    }
+  }
+}
+
+function drawLoopRegion(
+  graphics: Graphics,
+  presentation: PlaylistPresentation,
+): void {
+  const region = presentation.loopRegion;
+  if (!region || !region.isVisible) return;
+  const { rect } = region;
+  // Background tint on the ruler so the loop range is unmistakable.
+  graphics
+    .rect(rect.x, rect.y, rect.width, Math.max(2, rect.height - 6))
+    .fill({ color: COLORS.loopRegion, alpha: 0.18 });
+  graphics
+    .rect(rect.x, rect.y + rect.height - 4, rect.width, 3)
+    .fill({ color: COLORS.loopRegion, alpha: 0.7 });
+}
+
+function drawMarkers(
+  graphics: Graphics,
+  textLayer: Container,
+  presentation: PlaylistPresentation,
+): void {
+  const { metrics } = presentation;
+  for (const view of presentation.markerViews) {
+    if (!view.isVisible) continue;
+    if (view.x < metrics.trackHeaderWidth) continue;
+    const color = markerColor(view.marker.kind);
+    const baseY = 4;
+    // Flag-shaped triangle pointing down so the user sees where it anchors.
+    graphics
+      .moveTo(view.x, metrics.rulerHeight - 2)
+      .lineTo(view.x - 6, baseY)
+      .lineTo(view.x + 6, baseY)
+      .lineTo(view.x, metrics.rulerHeight - 2)
+      .fill({ color, alpha: 0.92 })
+      .stroke({ color: COLORS.text, width: 1, alpha: 0.7 });
+    // Vertical line down the timeline (subtle).
+    graphics
+      .moveTo(view.x + 0.5, metrics.rulerHeight)
+      .lineTo(view.x + 0.5, presentation.layout.sceneRect.height)
+      .stroke({ color, alpha: 0.18, width: 1 });
+    const label = view.marker.label;
+    if (label) {
+      addText(textLayer, label, view.x + 8, baseY + 1, {
+        color: COLORS.text,
+        size: 10,
+        weight: "600",
+      });
     }
   }
 }
@@ -732,6 +813,8 @@ export function createPlaylistRenderer(
 
     drawRulerChrome(chromeGraphics, chromeTextLayer, presentation);
     drawTrackRows(chromeGraphics, chromeTextLayer, presentation);
+    drawLoopRegion(chromeGraphics, presentation);
+    drawMarkers(chromeGraphics, chromeTextLayer, presentation);
     drawPlayPositionRulerMarker(chromeGraphics, presentation);
 
     drawScrollbars(foregroundGraphics, presentation);

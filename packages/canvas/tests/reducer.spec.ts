@@ -54,6 +54,8 @@ function createBaseState(): PlaylistState {
     tool: "select",
     clipboard: null,
     stretchMode: false,
+    markers: [],
+    transport: { mode: "song", recording: false },
   };
 }
 

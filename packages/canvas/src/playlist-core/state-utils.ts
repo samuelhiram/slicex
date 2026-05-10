@@ -66,6 +66,10 @@ export function cloneState(state: PlaylistState): PlaylistState {
         }
       : null,
     stretchMode: state.stretchMode ?? false,
+    markers: state.markers ? state.markers.map((m) => ({ ...m })) : [],
+    transport: state.transport
+      ? { ...state.transport }
+      : { mode: "song", recording: false },
   };
 }
 
