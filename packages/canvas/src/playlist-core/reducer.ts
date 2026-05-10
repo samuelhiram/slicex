@@ -87,6 +87,8 @@ export function playlistReducer(
       return deleteEmptyTrack(state, action.trackIndex);
     case "CREATE_CLIP":
       return createClip(state, action.clip, action.trackIndex);
+    case "CREATE_CLIPS_BATCH":
+      return createClipsBatch(state, action.entries);
     case "DELETE_CLIP":
       return deleteClip(state, action.clipId);
     case "TOGGLE_CLIP_MUTE":
@@ -666,6 +668,29 @@ function createClip(
   return {
     ...materialized,
     clips: [...materialized.clips, { ...clip, trackId }],
+  };
+}
+
+function createClipsBatch(
+  state: PlaylistState,
+  entries: { clip: import("./types").PlaylistClip; trackIndex: number }[],
+): PlaylistState {
+  if (entries.length === 0) return state;
+  const existing = new Set(state.clips.map((c) => c.id));
+  const fresh = entries.filter((entry) => !existing.has(entry.clip.id));
+  if (fresh.length === 0) return state;
+  const maxIndex = fresh.reduce(
+    (max, entry) => Math.max(max, Math.max(0, Math.floor(entry.trackIndex))),
+    state.tracks.length - 1,
+  );
+  const materialized = materializeTracksThrough(state, maxIndex);
+  const newClips = fresh.map((entry) => ({
+    ...entry.clip,
+    trackId: getTrackIdByIndex(materialized, entry.trackIndex),
+  }));
+  return {
+    ...materialized,
+    clips: [...materialized.clips, ...newClips],
   };
 }
 

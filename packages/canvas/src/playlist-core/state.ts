@@ -706,6 +706,52 @@ export class PlaylistCore {
     return id;
   }
 
+  // Brush-tool friendly batch creator: produces N clips in a single
+  // reducer pass + a single notify. Keeps paint-drag at 1 render per
+  // pointermove regardless of how many cells were filled. Returns the
+  // ids of the freshly created clips (preserving input order).
+  createClips(inputs: PlaylistCreateClipInput[]): string[] {
+    if (inputs.length === 0) return [];
+    const state = this.history.present;
+    let working = state.clips;
+    const entries: { clip: PlaylistClip; trackIndex: number }[] = [];
+    const ids: string[] = [];
+    for (const input of inputs) {
+      if (state.tracks[input.trackIndex]?.locked) {
+        continue;
+      }
+      const id = input.id ?? makeClipId(working);
+      const baseClip = {
+        id,
+        type: input.type ?? "pattern",
+        trackId: getTrackIdByIndex(state, input.trackIndex),
+        start: Math.max(0, input.start),
+        duration: Math.max(this.metrics.minClipDuration, input.duration),
+        label: input.label ?? "Clip",
+        color: input.color ?? "#888888",
+        muted: input.muted,
+        sourceId: input.sourceId ?? id,
+      };
+      const clip: PlaylistClip =
+        baseClip.type === "automation"
+          ? {
+              ...baseClip,
+              type: "automation",
+              points: input.points ?? [
+                { id: `${id}-pt-1`, time: 0, value: 0.5 },
+                { id: `${id}-pt-2`, time: baseClip.duration, value: 0.5 },
+              ],
+            }
+          : { ...baseClip, type: baseClip.type };
+      entries.push({ clip, trackIndex: input.trackIndex });
+      ids.push(id);
+      working = [...working, clip];
+    }
+    if (entries.length === 0) return [];
+    this.dispatch({ type: "CREATE_CLIPS_BATCH", entries });
+    return ids;
+  }
+
   deleteClip(clipId: string): void {
     if (this.isClipOnLockedTrack(clipId)) return;
     this.dispatch({ type: "DELETE_CLIP", clipId });

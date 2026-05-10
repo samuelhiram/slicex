@@ -4,6 +4,7 @@ import {
   type PlaylistCore,
   type PlaylistPresentation,
 } from "../playlist-core";
+import { createClipNodeRegistry } from "./clip-node-registry";
 
 export interface PlaylistRendererCallbacks {
   onReady?: () => void;
@@ -767,8 +768,21 @@ export function createPlaylistRenderer(
   const timelineMask = new Graphics();
   const timelineContainer = new Container();
   const timelineGridGraphics = new Graphics();
-  const clipGraphics = new Graphics();
-  const clipTextLayer = new Container();
+  // Per-clip cached scene graph. Each clip owns a small Container drawn in
+  // local coords; renderNow only diffs visual hashes and updates transforms.
+  // See clip-node-registry.ts (canon §3.8).
+  const clipsLayer = new Container();
+  clipsLayer.eventMode = "none";
+  const clipNodeRegistry = createClipNodeRegistry({
+    text: COLORS.text,
+    textMuted: COLORS.textMuted,
+    selected: COLORS.selected,
+    hover: COLORS.hover,
+    rowLine: COLORS.rowLine,
+    panel: COLORS.panel,
+    panelStrong: COLORS.panelStrong,
+    automationLine: COLORS.automationLine,
+  });
   const overlayGraphics = new Graphics();
   const chromeGraphics = new Graphics();
   const chromeTextLayer = new Container();
@@ -802,8 +816,7 @@ export function createPlaylistRenderer(
   timelineContainer.mask = timelineMask;
   timelineContainer.addChild(
     timelineGridGraphics,
-    clipGraphics,
-    clipTextLayer,
+    clipsLayer,
     overlayGraphics,
   );
   root.addChild(
@@ -826,8 +839,6 @@ export function createPlaylistRenderer(
     sceneGraphics.clear();
     timelineMask.clear();
     timelineGridGraphics.clear();
-    clipGraphics.clear();
-    clearTextLayer(clipTextLayer);
     overlayGraphics.clear();
     chromeGraphics.clear();
     clearTextLayer(chromeTextLayer);
@@ -847,7 +858,10 @@ export function createPlaylistRenderer(
       .fill({ color: 0xffffff });
 
     drawTimelineGrid(timelineGridGraphics, presentation);
-    drawClips(clipGraphics, clipTextLayer, overlayGraphics, presentation);
+    // Per-clip cached scene graph: each clip is a Container with its own
+    // Graphics + Text drawn once in local coords. Frame-to-frame work is
+    // just transform updates unless the clip's visual hash changed.
+    clipNodeRegistry.syncFrame(clipsLayer, presentation.visibleClipViews);
     drawTimelineOverlay(overlayGraphics, presentation);
 
     drawRulerChrome(chromeGraphics, chromeTextLayer, presentation);
@@ -951,8 +965,7 @@ export function createPlaylistRenderer(
       sceneGraphics.clear();
       timelineMask.clear();
       timelineGridGraphics.clear();
-      clipGraphics.clear();
-      disposeTextLayer(clipTextLayer);
+      clipNodeRegistry.destroy();
       overlayGraphics.clear();
       chromeGraphics.clear();
       disposeTextLayer(chromeTextLayer);

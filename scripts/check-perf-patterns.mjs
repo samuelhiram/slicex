@@ -34,6 +34,10 @@ const PIXI_CONSTRUCTOR_RE =
 const PIXI_CONSTRUCTOR_ALLOWED_FILES = new Set([
   // Renderer init owns all DisplayObjects.
   "packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts",
+  // Canonical per-element factory (canon §3.8). The registry creates
+  // Container/Graphics/Text on demand inside its own cache; the rest of
+  // the renderer goes through this module.
+  "packages/canvas/src/playlist-renderer-pixi/clip-node-registry.ts",
 ]);
 
 // Idempotency-required actions. The reducer cases for these must contain a

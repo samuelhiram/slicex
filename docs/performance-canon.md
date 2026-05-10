@@ -209,6 +209,46 @@ Tras 60 segundos de play, el conteo de Text/Sprite/Graphics en cada
 Container del renderer debe ser **constante**. No crece. Verificable
 con `perf-budget.spec.ts` (sección 5).
 
+### 3.8 Per-element factory + cached scene graph
+
+Para colecciones visibles (clips, futuros nodos similares) **nunca**
+hacer `Graphics.clear()` y re-emitir el batch entero por frame. El
+batcher de Pixi v8 reusa el mesh GPU cuando solo cambia la transform
+del Container, así que la regla es:
+
+1. **Cada elemento es un `Container` propio** con sus `Graphics`/`Text`
+   hijos.
+2. **El dibujo va en coordenadas locales** (origen 0,0). La posición
+   en pantalla se aplica con `container.x = ...; container.y = ...`.
+3. **Un registry/factory cachea los nodos por id**. En cada frame el
+   render hace `syncFrame(parent, views)`: para cada `view`, ensure
+   un node (creando si no existe), set position, diff el hash visual,
+   redibujar solo si cambió.
+4. **Nodos que salen del viewport** se ocultan con `visible = false`,
+   **no se destruyen**. El parented Container se reusa cuando vuelve.
+5. **`Text` nunca se destruye** durante la sesión (canon §3.1 +
+   TexturePool de Pixi v8). El registry lo orphana en su `destroy()`
+   final.
+
+Ejemplo canónico: `packages/canvas/src/playlist-renderer-pixi/
+clip-node-registry.ts`. El lint `check-perf-patterns.mjs` permite
+`new Container/Graphics/Text(` solo en archivos listados explícitamente
+como factories — `renderer-impl.ts` (init one-shot) y los
+`*-registry.ts` que implementan este patrón.
+
+### 3.9 Batch dispatch para gestures que generan N mutaciones por move
+
+Si un gesture puede crear/borrar/modificar **N elementos en un solo
+pointermove** (brush stroke, marquee delete, magic lasso), el handler
+**debe** agrupar las N mutaciones en una sola acción discriminada
+`*_BATCH` que el reducer ejecute en una pasada. Hacer `N` dispatches
+seguidos resulta en `N` `notify()` y por tanto `N` renderNow — eso
+mata el FPS aunque cada paso individual sea barato.
+
+Ejemplo canónico: `core.createClips([...])` → `CREATE_CLIPS_BATCH` →
+un único `notify()`. Mismo patrón aplica a futuros `DELETE_CLIPS_BATCH`,
+`MOVE_CLIPS_BATCH`, etc.
+
 ### 3.7 Brush stroke pattern (Paint y futuros tools de "pintar arrastrando")
 
 Cualquier tool que cree clips/cells por drag (Paint, futuros tools
@@ -272,6 +312,8 @@ a esta lista y a los tests de `perf-budget.spec.ts`.
 | `dispatch` × 10000 con state estable | < 100 ms (10 µs/dispatch) |
 | Brush path interpolación cubre todas las celdas snapped | sí, sin saltos |
 | Paint en track virtual produce clip visible | sí, track materializada |
+| `core.createClips([N])` dispara 1 notify, no N | 1 |
+| Bulk createClips × 500 entries | < 30 ms |
 
 Estos números **no se tocan para que pasen los tests**. Si un test
 falla, hay un bug de performance real que arreglar.
