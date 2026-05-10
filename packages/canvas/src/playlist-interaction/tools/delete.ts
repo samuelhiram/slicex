@@ -6,7 +6,8 @@ export const deleteTool: PlaylistTool = {
   id: "delete",
   cursor: "not-allowed",
   onPointerDown(env: ToolEnvironment) {
-    const { core, hit, event } = env;
+    const { core, point, hit, event } = env;
+    const deletedClipIds = new Set<string>();
 
     if (hit.kind === "automation-point") {
       core.removeAutomationPoint(hit.clip.id, hit.pointId);
@@ -19,12 +20,15 @@ export const deleteTool: PlaylistTool = {
       hit.kind === "resize-left" ||
       hit.kind === "resize-right"
     ) {
-      core.deleteClip(hit.clip.id);
+      deletedClipIds.add(hit.clip.id);
+      core.deleteClips([hit.clip.id]);
     }
 
     return {
       kind: "delete-drag",
       pointerId: event.pointerId,
+      lastPoint: { ...point },
+      deletedClipIds,
     };
   },
 };

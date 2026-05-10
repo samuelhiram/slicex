@@ -5,6 +5,7 @@ import {
   snapTime,
   type PlaylistAutomationPoint,
 } from "../../playlist-core";
+import { clipCreateTemplateFromSelection } from "./clip-template";
 import type { PlaylistTool, ToolEnvironment } from "./types";
 
 const DEFAULT_CLIP_DURATION_BEATS = 4;
@@ -75,13 +76,20 @@ export const drawTool: PlaylistTool = {
     const trackIndex = screenYToTrackIndex(state, point.y, metrics);
     const rawTime = screenXToTime(state, point.x, metrics);
     const start = Math.max(0, snapTime(rawTime, state, event.altKey));
-    const id = core.createClip({
-      trackIndex,
-      start,
-      duration: DEFAULT_CLIP_DURATION_BEATS,
+    const template = clipCreateTemplateFromSelection(state, {
       type: "pattern",
       label: "Clip",
       color: "#7aa6d8",
+      duration: DEFAULT_CLIP_DURATION_BEATS,
+    });
+    const id = core.createClip({
+      trackIndex,
+      start,
+      duration: template.duration,
+      type: template.type,
+      label: template.label,
+      color: template.color,
+      sourceId: template.sourceId,
     });
     core.setSelection({ clipIds: [id], automationPointIds: [] });
     return {

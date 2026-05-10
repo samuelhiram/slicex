@@ -4,6 +4,7 @@ import {
   snapTime,
 } from "../../playlist-core";
 import { brushSnapStep, buildBrushOcclusion } from "../brush";
+import { clipCreateTemplateFromSelection } from "./clip-template";
 import type { PlaylistTool, ToolEnvironment } from "./types";
 
 const DEFAULT_PAINT_DURATION_BEATS = 4;
@@ -28,15 +29,22 @@ export const paintTool: PlaylistTool = {
     );
     const snapStep = brushSnapStep(state, metrics);
     const occupied = buildBrushOcclusion(state, snapStep);
+    const template = clipCreateTemplateFromSelection(state, {
+      type: "pattern",
+      label: "Clip",
+      color: DEFAULT_PAINT_COLOR,
+      duration: DEFAULT_PAINT_DURATION_BEATS,
+    });
 
     if (!occupied.has(trackIndex, start, state)) {
       core.createClip({
         trackIndex,
         start,
-        duration: DEFAULT_PAINT_DURATION_BEATS,
-        type: "pattern",
-        label: "Clip",
-        color: DEFAULT_PAINT_COLOR,
+        duration: template.duration,
+        type: template.type,
+        label: template.label,
+        color: template.color,
+        sourceId: template.sourceId,
       });
       occupied.add(trackIndex, start, core.getState());
     }
@@ -48,8 +56,11 @@ export const paintTool: PlaylistTool = {
       lastSnappedStart: start,
       occupied,
       snapStep,
-      duration: DEFAULT_PAINT_DURATION_BEATS,
-      color: DEFAULT_PAINT_COLOR,
+      duration: template.duration,
+      color: template.color,
+      type: template.type,
+      label: template.label,
+      sourceId: template.sourceId,
     };
   },
 };

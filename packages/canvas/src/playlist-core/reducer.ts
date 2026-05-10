@@ -91,8 +91,12 @@ export function playlistReducer(
       return createClipsBatch(state, action.entries);
     case "DELETE_CLIP":
       return deleteClip(state, action.clipId);
+    case "DELETE_CLIPS_BATCH":
+      return deleteClipsBatch(state, action.clipIds);
     case "TOGGLE_CLIP_MUTE":
       return toggleClipMute(state, action.clipId);
+    case "SET_CLIPS_MUTED":
+      return setClipsMuted(state, action.clipIds, action.muted);
     case "TOGGLE_TRACK_MUTE":
       return toggleTrackFlag(state, action.trackIndex, "muted");
     case "TOGGLE_TRACK_SOLO":
@@ -741,6 +745,27 @@ function pasteClips(
   };
 }
 
+function deleteClipsBatch(
+  state: PlaylistState,
+  clipIds: string[],
+): PlaylistState {
+  if (clipIds.length === 0) {
+    return state;
+  }
+  const ids = new Set(clipIds);
+  if (!state.clips.some((clip) => ids.has(clip.id))) {
+    return state;
+  }
+  return {
+    ...state,
+    clips: state.clips.filter((clip) => !ids.has(clip.id)),
+    selection: {
+      clipIds: state.selection.clipIds.filter((id) => !ids.has(id)),
+      automationPointIds: state.selection.automationPointIds,
+    },
+  };
+}
+
 function toggleClipMute(state: PlaylistState, clipId: string): PlaylistState {
   let changed = false;
   const clips = state.clips.map((clip) => {
@@ -749,6 +774,29 @@ function toggleClipMute(state: PlaylistState, clipId: string): PlaylistState {
     }
     changed = true;
     return { ...clip, muted: !clip.muted };
+  });
+  return changed ? { ...state, clips } : state;
+}
+
+function setClipsMuted(
+  state: PlaylistState,
+  clipIds: string[],
+  muted: boolean,
+): PlaylistState {
+  if (clipIds.length === 0) {
+    return state;
+  }
+  const ids = new Set(clipIds);
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (!ids.has(clip.id)) {
+      return clip;
+    }
+    if ((clip.muted === true) === muted) {
+      return clip;
+    }
+    changed = true;
+    return { ...clip, muted: muted ? true : undefined };
   });
   return changed ? { ...state, clips } : state;
 }

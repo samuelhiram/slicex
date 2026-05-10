@@ -55,7 +55,9 @@ export type PlaylistAction =
       entries: { clip: PlaylistClip; trackIndex: number }[];
     }
   | { type: "DELETE_CLIP"; clipId: string }
+  | { type: "DELETE_CLIPS_BATCH"; clipIds: string[] }
   | { type: "TOGGLE_CLIP_MUTE"; clipId: string }
+  | { type: "SET_CLIPS_MUTED"; clipIds: string[]; muted: boolean }
   | { type: "TOGGLE_TRACK_MUTE"; trackIndex: number }
   | { type: "TOGGLE_TRACK_SOLO"; trackIndex: number }
   | { type: "TOGGLE_TRACK_LOCK"; trackIndex: number }
@@ -140,7 +142,9 @@ const UNDOABLE_ACTION_TYPES: ReadonlySet<PlaylistActionType> = new Set([
   "CREATE_CLIP",
   "CREATE_CLIPS_BATCH",
   "DELETE_CLIP",
+  "DELETE_CLIPS_BATCH",
   "TOGGLE_CLIP_MUTE",
+  "SET_CLIPS_MUTED",
   "PASTE_CLIPS",
   "TOGGLE_TRACK_MUTE",
   "TOGGLE_TRACK_SOLO",

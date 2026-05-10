@@ -1,4 +1,4 @@
-import type { PlaylistPoint } from "../playlist-core";
+import type { PlaylistClipType, PlaylistPoint } from "../playlist-core";
 import type { BrushOcclusion } from "./brush";
 
 export interface ClipDragOriginal {
@@ -81,10 +81,22 @@ export type ActiveGesture =
       duration: number;
       // Default visual color for painted clips.
       color: string;
+      type: PlaylistClipType;
+      label: string;
+      sourceId?: string;
     }
   | {
       kind: "delete-drag";
       pointerId: number;
+      lastPoint: PlaylistPoint;
+      deletedClipIds: Set<string>;
+    }
+  | {
+      kind: "mute-drag";
+      pointerId: number;
+      lastPoint: PlaylistPoint;
+      muted: boolean;
+      touchedClipIds: Set<string>;
     }
   | {
       kind: "track-resize";

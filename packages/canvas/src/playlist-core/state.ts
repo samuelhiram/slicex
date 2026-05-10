@@ -757,9 +757,21 @@ export class PlaylistCore {
     this.dispatch({ type: "DELETE_CLIP", clipId });
   }
 
+  deleteClips(clipIds: string[]): void {
+    const ids = clipIds.filter((id) => !this.isClipOnLockedTrack(id));
+    if (ids.length === 0) return;
+    this.dispatch({ type: "DELETE_CLIPS_BATCH", clipIds: ids });
+  }
+
   toggleClipMute(clipId: string): void {
     if (this.isClipOnLockedTrack(clipId)) return;
     this.dispatch({ type: "TOGGLE_CLIP_MUTE", clipId });
+  }
+
+  setClipsMuted(clipIds: string[], muted: boolean): void {
+    const ids = clipIds.filter((id) => !this.isClipOnLockedTrack(id));
+    if (ids.length === 0) return;
+    this.dispatch({ type: "SET_CLIPS_MUTED", clipIds: ids, muted });
   }
 
   // Selection helpers (UI-only, not undoable).

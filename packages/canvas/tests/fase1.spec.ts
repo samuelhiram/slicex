@@ -121,6 +121,24 @@ describe("Fase 1 — PlaylistCore wrappers", () => {
     ).toBeDefined();
   });
 
+  it("deleteClips removes a batch in one undoable step", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.deleteClips(["clip-drums-1", "clip-bass-1"]);
+    expect(
+      core.getState().clips.find((c) => c.id === "clip-drums-1"),
+    ).toBeUndefined();
+    expect(
+      core.getState().clips.find((c) => c.id === "clip-bass-1"),
+    ).toBeUndefined();
+    core.undo();
+    expect(
+      core.getState().clips.find((c) => c.id === "clip-drums-1"),
+    ).toBeDefined();
+    expect(
+      core.getState().clips.find((c) => c.id === "clip-bass-1"),
+    ).toBeDefined();
+  });
+
   it("toggleClipMute flips muted and is undoable", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     core.toggleClipMute("clip-drums-1");
@@ -130,6 +148,24 @@ describe("Fase 1 — PlaylistCore wrappers", () => {
     core.undo();
     expect(
       core.getState().clips.find((c) => c.id === "clip-drums-1")?.muted,
+    ).toBeFalsy();
+  });
+
+  it("setClipsMuted applies one target state to a batch", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setClipsMuted(["clip-drums-1", "clip-bass-1"], true);
+    expect(
+      core.getState().clips.find((c) => c.id === "clip-drums-1")?.muted,
+    ).toBe(true);
+    expect(
+      core.getState().clips.find((c) => c.id === "clip-bass-1")?.muted,
+    ).toBe(true);
+    core.setClipsMuted(["clip-drums-1", "clip-bass-1"], false);
+    expect(
+      core.getState().clips.find((c) => c.id === "clip-drums-1")?.muted,
+    ).toBeFalsy();
+    expect(
+      core.getState().clips.find((c) => c.id === "clip-bass-1")?.muted,
     ).toBeFalsy();
   });
 

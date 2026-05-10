@@ -99,7 +99,7 @@ describe("Tools — onPointerDown dispatch", () => {
     expect(core.getState().clips.find((c) => c.id === target.id)).toBeUndefined();
   });
 
-  it("Mute tool — clip hit toggles muted and returns null", () => {
+  it("Mute tool — clip hit sets a drag-wide target mute state", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     const target = core.getState().clips[0]!;
     const gesture = TOOLS.mute.onPointerDown({
@@ -109,10 +109,14 @@ describe("Tools — onPointerDown dispatch", () => {
       hit: clipHit(core, target.id),
       event: createMockEvent(),
     });
-    expect(gesture).toBeNull();
+    expect(gesture?.kind).toBe("mute-drag");
     expect(
       core.getState().clips.find((c) => c.id === target.id)?.muted,
     ).toBe(true);
+    if (gesture?.kind === "mute-drag") {
+      expect(gesture.muted).toBe(true);
+      expect(gesture.touchedClipIds.has(target.id)).toBe(true);
+    }
   });
 
   it("Zoom tool — LMB zooms in (pxPerBeat increases)", () => {
@@ -178,5 +182,41 @@ describe("Tools — onPointerDown dispatch", () => {
     });
     const created = core.getState().clips[core.getState().clips.length - 1]!;
     expect(created.trackId).toBe(getTrackIdByIndex(core.getState(), 1));
+  });
+
+  it("Draw tool uses the selected clip as the visual/source template", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setClipSelection(["clip-bass-1"]);
+    TOOLS.draw.onPointerDown({
+      core,
+      metrics: M,
+      point: { x: 900, y: M.rulerHeight + 6 * M.trackHeight + 10 },
+      hit: emptyHit(core),
+      event: createMockEvent(),
+    });
+    const created = core.getState().clips[core.getState().clips.length - 1]!;
+    const source = core.getState().clips.find((c) => c.id === "clip-bass-1")!;
+    expect(created.type).toBe(source.type);
+    expect(created.label).toBe(source.label);
+    expect(created.color).toBe(source.color);
+    expect(created.sourceId).toBe(source.id);
+  });
+
+  it("Paint tool uses the selected clip as the visual/source template", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setClipSelection(["clip-vocal-1"]);
+    TOOLS.paint.onPointerDown({
+      core,
+      metrics: M,
+      point: { x: 900, y: M.rulerHeight + 6 * M.trackHeight + 10 },
+      hit: emptyHit(core),
+      event: createMockEvent(),
+    });
+    const created = core.getState().clips[core.getState().clips.length - 1]!;
+    const source = core.getState().clips.find((c) => c.id === "clip-vocal-1")!;
+    expect(created.type).toBe(source.type);
+    expect(created.label).toBe(source.label);
+    expect(created.color).toBe(source.color);
+    expect(created.sourceId).toBe(source.id);
   });
 });

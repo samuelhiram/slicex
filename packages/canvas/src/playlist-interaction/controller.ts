@@ -19,6 +19,7 @@ import { interpolateBrushPath } from "./brush";
 import type {
   PlaylistCore,
   PlaylistPoint,
+  PlaylistRect,
   PlaylistToolId,
   PlaylistTrackMenuAction,
 } from "../playlist-core";
@@ -97,6 +98,7 @@ function setCursor(
   if (
     active?.kind === "paint-drag" ||
     active?.kind === "delete-drag" ||
+    active?.kind === "mute-drag" ||
     active?.kind === "slip-drag" ||
     active?.kind === "slice-drag"
   ) {
@@ -209,6 +211,94 @@ function selectClipsInMarquee(core: PlaylistCore, additive: boolean): void {
     .map((view) => view.clip.id);
 
   core.setClipSelection(clipIds, { additive });
+}
+
+function segmentIntersectsRect(
+  from: PlaylistPoint,
+  to: PlaylistPoint,
+  rect: PlaylistRect,
+): boolean {
+  const minX = rect.x;
+  const maxX = rect.x + rect.width;
+  const minY = rect.y;
+  const maxY = rect.y + rect.height;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  let t0 = 0;
+  let t1 = 1;
+  let p = -dx;
+  let q = from.x - minX;
+  if (p === 0) {
+    if (q < 0) return false;
+  } else {
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+  }
+  p = dx;
+  q = maxX - from.x;
+  if (p === 0) {
+    if (q < 0) return false;
+  } else {
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+  }
+  p = -dy;
+  q = from.y - minY;
+  if (p === 0) {
+    if (q < 0) return false;
+  } else {
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+  }
+  p = dy;
+  q = maxY - from.y;
+  if (p === 0) {
+    if (q < 0) return false;
+  } else {
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+  }
+  return true;
+}
+
+function clipIdsTouchedBySegment(
+  core: PlaylistCore,
+  from: PlaylistPoint,
+  to: PlaylistPoint,
+  seen: Set<string>,
+): string[] {
+  const ids: string[] = [];
+  for (const view of core.getPresentation().visibleClipViews) {
+    if (seen.has(view.clip.id)) continue;
+    if (!segmentIntersectsRect(from, to, view.rect)) continue;
+    seen.add(view.clip.id);
+    ids.push(view.clip.id);
+  }
+  return ids;
 }
 
 function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
@@ -326,6 +416,31 @@ export function createPlaylistInteractionController(
         return;
       }
 
+      // Draw, Paint and Mute tools: RMB on clips deletes; drag keeps deleting.
+      if (
+        (state.tool === "draw" ||
+          state.tool === "paint" ||
+          state.tool === "mute") &&
+        (hit.kind === "clip" ||
+          hit.kind === "automation-body" ||
+          hit.kind === "resize-left" ||
+          hit.kind === "resize-right")
+      ) {
+        const deletedClipIds = new Set<string>([hit.clip.id]);
+        core.beginGesture();
+        core.deleteClips([hit.clip.id]);
+        activeGesture = {
+          kind: "delete-drag",
+          pointerId: event.pointerId,
+          lastPoint: { ...point },
+          deletedClipIds,
+        };
+        host.setPointerCapture?.(event.pointerId);
+        setCursor(host, hit, activeGesture, state.tool);
+        event.preventDefault();
+        return;
+      }
+
       if (hit.kind === "automation-body") {
         const next = automationPointFromScreen(state, hit.clip, point, metrics);
         core.addAutomationPoint(
@@ -333,18 +448,6 @@ export function createPlaylistInteractionController(
           snapTime(next.time, state, event.altKey),
           next.value,
         );
-        event.preventDefault();
-        return;
-      }
-
-      // Draw and Paint tools: RMB on a clip deletes it (FL Studio behaviour).
-      if (
-        (state.tool === "draw" || state.tool === "paint") &&
-        (hit.kind === "clip" ||
-          hit.kind === "resize-left" ||
-          hit.kind === "resize-right")
-      ) {
-        core.deleteClip(hit.clip.id);
         event.preventDefault();
         return;
       }
@@ -555,6 +658,7 @@ export function createPlaylistInteractionController(
       gesture.kind === "automation-point-drag" ||
       gesture.kind === "paint-drag" ||
       gesture.kind === "delete-drag" ||
+      gesture.kind === "mute-drag" ||
       gesture.kind === "slip-drag" ||
       gesture.kind === "marker-drag"
     );
@@ -765,9 +869,10 @@ export function createPlaylistInteractionController(
               trackIndex: cell.trackIndex,
               start: cell.start,
               duration: gesture.duration,
-              type: "pattern",
-              label: "Clip",
+              type: gesture.type,
+              label: gesture.label,
               color: gesture.color,
+              sourceId: gesture.sourceId,
             })),
           );
         }
@@ -779,15 +884,31 @@ export function createPlaylistInteractionController(
     }
 
     if (gesture.kind === "delete-drag") {
-      const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
-      if (
-        hit.kind === "clip" ||
-        hit.kind === "automation-body" ||
-        hit.kind === "resize-left" ||
-        hit.kind === "resize-right"
-      ) {
-        core.deleteClip(hit.clip.id);
+      const ids = clipIdsTouchedBySegment(
+        core,
+        gesture.lastPoint,
+        point,
+        gesture.deletedClipIds,
+      );
+      if (ids.length > 0) {
+        core.deleteClips(ids);
       }
+      gesture.lastPoint = { ...point };
+      event.preventDefault();
+      return;
+    }
+
+    if (gesture.kind === "mute-drag") {
+      const ids = clipIdsTouchedBySegment(
+        core,
+        gesture.lastPoint,
+        point,
+        gesture.touchedClipIds,
+      );
+      if (ids.length > 0) {
+        core.setClipsMuted(ids, gesture.muted);
+      }
+      gesture.lastPoint = { ...point };
       event.preventDefault();
       return;
     }
@@ -823,7 +944,7 @@ export function createPlaylistInteractionController(
       const state = core.getState();
       // Snap the slice point to the active grid (Alt bypasses snap).
       const time = snapTime(
-        screenXToTime(state, activeGesture.startPoint.x, metrics),
+        screenXToTime(state, activeGesture.currentPoint.x, metrics),
         state,
         event.altKey,
       );
@@ -839,6 +960,7 @@ export function createPlaylistInteractionController(
       activeGesture.kind === "automation-point-drag" ||
       activeGesture.kind === "paint-drag" ||
       activeGesture.kind === "delete-drag" ||
+      activeGesture.kind === "mute-drag" ||
       activeGesture.kind === "track-resize" ||
       activeGesture.kind === "track-reorder" ||
       activeGesture.kind === "slip-drag" ||
@@ -928,6 +1050,12 @@ export function createPlaylistInteractionController(
 
     if (!cmd && event.shiftKey && (event.key === "I" || event.key === "i")) {
       core.invertClipSelection();
+      event.preventDefault();
+      return;
+    }
+
+    if (!cmd && event.altKey && key === "m") {
+      core.setClipsMuted(core.getState().selection.clipIds, !event.shiftKey);
       event.preventDefault();
       return;
     }
