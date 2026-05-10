@@ -45,7 +45,7 @@ function createBaseState(): PlaylistState {
       width: 1000,
       height: 600,
     },
-    snap: { enabled: true, step: 1 },
+    snap: { mode: "beat", lastActiveMode: "beat" },
     selection: { clipIds: [], automationPointIds: [] },
     marquee: null,
     contextMenu: null,

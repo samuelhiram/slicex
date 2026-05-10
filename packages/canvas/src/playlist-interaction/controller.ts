@@ -770,7 +770,14 @@ export function createPlaylistInteractionController(
       return;
     }
 
-    if (event.key === "Delete" || event.key === "Backspace") {
+    if (event.key === "Backspace") {
+      // FL Studio: Backspace toggles global snap None ↔ last mode.
+      core.toggleSnapNone();
+      event.preventDefault();
+      return;
+    }
+
+    if (event.key === "Delete") {
       core.removeSelected();
       event.preventDefault();
       return;

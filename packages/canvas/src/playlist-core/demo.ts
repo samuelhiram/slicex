@@ -101,8 +101,8 @@ export function createDemoPlaylistState(): PlaylistState {
       height: 1,
     },
     snap: {
-      enabled: true,
-      step: 1,
+      mode: "beat",
+      lastActiveMode: "beat",
     },
     selection: {
       clipIds: [],

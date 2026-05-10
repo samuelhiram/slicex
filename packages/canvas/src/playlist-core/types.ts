@@ -82,9 +82,39 @@ export interface PlaylistPlayPosition {
   isRunning: boolean;
 }
 
+// FL Studio snap modes. Sourced from the official Image-Line manual.
+// Mapping (assuming 4 beats per bar, 4 steps per beat — FL defaults):
+//   sixth-step  = 1/24 beat   sixth-beat  = 1/6 beat
+//   quarter-step= 1/16 beat   quarter-beat= 1/4 beat
+//   third-step  = 1/12 beat   third-beat  = 1/3 beat
+//   half-step   = 1/8 beat    half-beat   = 1/2 beat
+//   step        = 1/4 beat    beat        = 1 beat
+//   bar         = beatsPerBar (4)
+//   line        = bar         cell        = beat
+//   main        = beat (alias for the global default)
+//   none        = no snap     events      = snap to clip edges / markers
+export type PlaylistSnapMode =
+  | "main"
+  | "line"
+  | "cell"
+  | "none"
+  | "sixth-step"
+  | "quarter-step"
+  | "third-step"
+  | "half-step"
+  | "step"
+  | "sixth-beat"
+  | "quarter-beat"
+  | "third-beat"
+  | "half-beat"
+  | "beat"
+  | "bar"
+  | "events";
+
 export interface PlaylistSnap {
-  enabled: boolean;
-  step: number;
+  mode: PlaylistSnapMode;
+  // Remembered mode used by Backspace to restore after toggling to "none".
+  lastActiveMode: PlaylistSnapMode;
 }
 
 export interface PlaylistSelection {

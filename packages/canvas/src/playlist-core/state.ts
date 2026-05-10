@@ -30,6 +30,7 @@ import {
   type PlaylistMetrics,
   type PlaylistPoint,
   type PlaylistSelection,
+  type PlaylistSnapMode,
   type PlaylistState,
   type PlaylistStateListener,
   type PlaylistToolId,
@@ -326,6 +327,15 @@ export class PlaylistCore {
   // Tool selection (UI-only, not undoable).
   setTool(tool: PlaylistToolId): void {
     this.dispatch({ type: "SET_TOOL", tool });
+  }
+
+  // Snap mode (UI-only, not undoable).
+  setSnapMode(mode: PlaylistSnapMode): void {
+    this.dispatch({ type: "SET_SNAP_MODE", mode });
+  }
+
+  toggleSnapNone(): void {
+    this.dispatch({ type: "TOGGLE_SNAP_NONE" });
   }
 
   // Clip CRUD used by the tool dispatchers (Draw, Paint, Delete, Mute).

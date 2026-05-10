@@ -6,9 +6,55 @@ import {
   type PlaylistMetrics,
   type PlaylistPoint,
   type PlaylistRect,
+  type PlaylistSnapMode,
   type PlaylistState,
   type PlaylistTrack,
 } from "./types";
+
+const SNAP_EVENTS_TOLERANCE_PX = 8;
+const SNAP_EVENTS_FALLBACK_TOLERANCE_BEATS = 0.5;
+
+// Resolve the step (in beats) used by mode-driven snap. Returns 0 for
+// non-grid modes ("none" and "events") so callers can branch.
+export function snapStepBeats(
+  mode: PlaylistSnapMode,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  switch (mode) {
+    case "none":
+    case "events":
+      return 0;
+    case "main":
+    case "beat":
+    case "cell":
+      return 1;
+    case "line":
+    case "bar":
+      return metrics.beatsPerBar;
+    case "sixth-step":
+      return 1 / 24;
+    case "quarter-step":
+      return 1 / 16;
+    case "third-step":
+      return 1 / 12;
+    case "half-step":
+      return 1 / 8;
+    case "step":
+      return 1 / 4;
+    case "sixth-beat":
+      return 1 / 6;
+    case "quarter-beat":
+      return 1 / 4;
+    case "third-beat":
+      return 1 / 3;
+    case "half-beat":
+      return 1 / 2;
+    default: {
+      const exhaustive: never = mode;
+      return exhaustive;
+    }
+  }
+}
 
 export function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
@@ -320,13 +366,54 @@ export function snapTime(
   value: number,
   state: PlaylistState,
   ignoreSnap = false,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): number {
-  if (ignoreSnap || !state.snap.enabled || state.snap.step <= 0) {
+  if (ignoreSnap) {
     return Math.max(0, value);
   }
-
-  const snapped = Math.round(value / state.snap.step) * state.snap.step;
+  if (state.snap.mode === "none") {
+    return Math.max(0, value);
+  }
+  if (state.snap.mode === "events") {
+    return snapTimeToEvents(value, state);
+  }
+  const step = snapStepBeats(state.snap.mode, metrics);
+  if (step <= 0) {
+    return Math.max(0, value);
+  }
+  const snapped = Math.round(value / step) * step;
   return Math.max(0, Number(snapped.toFixed(4)));
+}
+
+// Snap to the nearest clip edge (start or end). Falls back to the raw value
+// when no candidate is within the tolerance window. Tolerance is derived
+// from the viewport's pxPerBeat so it stays visually consistent across zoom.
+function snapTimeToEvents(value: number, state: PlaylistState): number {
+  const tolerance =
+    state.viewport.pxPerBeat > 0
+      ? SNAP_EVENTS_TOLERANCE_PX / state.viewport.pxPerBeat
+      : SNAP_EVENTS_FALLBACK_TOLERANCE_BEATS;
+  let bestPoint = value;
+  let bestDelta = tolerance;
+  // Always include 0 (timeline origin) as a candidate.
+  if (Math.abs(value) < bestDelta) {
+    bestPoint = 0;
+    bestDelta = Math.abs(value);
+  }
+  for (const clip of state.clips) {
+    const startDelta = Math.abs(clip.start - value);
+    if (startDelta < bestDelta) {
+      bestDelta = startDelta;
+      bestPoint = clip.start;
+    }
+    const end = clip.start + clip.duration;
+    const endDelta = Math.abs(end - value);
+    if (endDelta < bestDelta) {
+      bestDelta = endDelta;
+      bestPoint = end;
+    }
+  }
+  return Math.max(0, Number(bestPoint.toFixed(4)));
 }
 
 export function getContentEndBeat(state: PlaylistState): number {

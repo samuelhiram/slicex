@@ -6,6 +6,7 @@ import type {
   PlaylistMarquee,
   PlaylistPoint,
   PlaylistSelection,
+  PlaylistSnapMode,
   PlaylistToolId,
   PlaylistViewport,
 } from "./types";
@@ -78,7 +79,9 @@ export type PlaylistAction =
   | { type: "SET_TOOL"; tool: PlaylistToolId }
   | { type: "SELECT_ALL_CLIPS" }
   | { type: "INVERT_CLIP_SELECTION" }
-  | { type: "SET_CLIPBOARD"; clipboard: PlaylistClipboard | null };
+  | { type: "SET_CLIPBOARD"; clipboard: PlaylistClipboard | null }
+  | { type: "SET_SNAP_MODE"; mode: PlaylistSnapMode }
+  | { type: "TOGGLE_SNAP_NONE" };
 
 export type PlaylistActionType = PlaylistAction["type"];
 

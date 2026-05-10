@@ -91,6 +91,34 @@ export function playlistReducer(
     }
     case "SET_CLIPBOARD":
       return { ...state, clipboard: action.clipboard };
+    case "SET_SNAP_MODE":
+      if (state.snap.mode === action.mode) {
+        return state;
+      }
+      return {
+        ...state,
+        snap: {
+          mode: action.mode,
+          lastActiveMode:
+            action.mode === "none" ? state.snap.lastActiveMode : action.mode,
+        },
+      };
+    case "TOGGLE_SNAP_NONE": {
+      if (state.snap.mode === "none") {
+        const restored =
+          state.snap.lastActiveMode === "none"
+            ? "beat"
+            : state.snap.lastActiveMode;
+        return {
+          ...state,
+          snap: { mode: restored, lastActiveMode: restored },
+        };
+      }
+      return {
+        ...state,
+        snap: { mode: "none", lastActiveMode: state.snap.mode },
+      };
+    }
     case "SET_SELECTION":
       return {
         ...state,

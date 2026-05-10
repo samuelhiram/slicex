@@ -6,8 +6,29 @@ import {
   createPlaylistInteractionController,
   createPlaylistRenderer,
   type PlaylistCore,
+  type PlaylistSnapMode,
   type PlaylistToolId,
 } from "@slicex/canvas";
+
+const SNAP_OPTIONS: ReadonlyArray<{ value: PlaylistSnapMode; label: string }> =
+  [
+    { value: "main", label: "Main" },
+    { value: "line", label: "Line" },
+    { value: "cell", label: "Cell" },
+    { value: "none", label: "None" },
+    { value: "sixth-step", label: "1/6 Step" },
+    { value: "quarter-step", label: "1/4 Step" },
+    { value: "third-step", label: "1/3 Step" },
+    { value: "half-step", label: "1/2 Step" },
+    { value: "step", label: "Step" },
+    { value: "sixth-beat", label: "1/6 Beat" },
+    { value: "quarter-beat", label: "1/4 Beat" },
+    { value: "third-beat", label: "1/3 Beat" },
+    { value: "half-beat", label: "1/2 Beat" },
+    { value: "beat", label: "Beat" },
+    { value: "bar", label: "Bar" },
+    { value: "events", label: "Events" },
+  ];
 
 const TOOL_BUTTONS: ReadonlyArray<{
   id: PlaylistToolId;
@@ -30,13 +51,18 @@ interface ToolbarProps {
 
 function PlaylistToolbar({ core }: ToolbarProps) {
   const [active, setActive] = React.useState<PlaylistToolId>("select");
+  const [snapMode, setSnapMode] = React.useState<PlaylistSnapMode>("beat");
 
   React.useEffect(() => {
     if (!core) {
       return undefined;
     }
     setActive(core.getState().tool);
-    const sub = core.subscribe((state) => setActive(state.tool));
+    setSnapMode(core.getState().snap.mode);
+    const sub = core.subscribe((state) => {
+      setActive(state.tool);
+      setSnapMode(state.snap.mode);
+    });
     return () => sub.unsubscribe();
   }, [core]);
 
@@ -59,6 +85,25 @@ function PlaylistToolbar({ core }: ToolbarProps) {
           </button>
         );
       })}
+      <label
+        className="playlist-shell__snap"
+        title="Snap mode (Backspace toggles None)"
+      >
+        <span className="playlist-shell__snap-label">Snap</span>
+        <select
+          value={snapMode}
+          onChange={(event) =>
+            core?.setSnapMode(event.target.value as PlaylistSnapMode)
+          }
+          className="playlist-shell__snap-select"
+        >
+          {SNAP_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
     </div>
   );
 }
