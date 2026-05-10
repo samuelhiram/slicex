@@ -90,38 +90,77 @@ function parseHexColor(value: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+// Text-instance pool, keyed per Container. Resetting the cursor at the start
+// of a frame lets addText reuse the previous frame's Text objects instead of
+// allocating new ones. Critical for perf: at 60 fps with the play head
+// running, the previous "destroy nothing" strategy leaked thousands of Text
+// objects per second (each one drags a GPU texture). Reuse keeps allocations
+// at zero in steady state and avoids the Pixi v8 TexturePool tear-down crash
+// that the old destroy-each-frame approach hit during StrictMode remounts.
+const TEXT_POOL_CURSOR = new WeakMap<Container, number>();
+
+interface TextStyleOptions {
+  size?: number;
+  color?: number;
+  weight?: string;
+}
+
+function applyTextStyle(label: Text, text: string, opts: TextStyleOptions): void {
+  if (label.text !== text) {
+    label.text = text;
+  }
+  const color = opts.color ?? COLORS.text;
+  const size = opts.size ?? 12;
+  const weight = (opts.weight ?? "500") as any;
+  const style = label.style;
+  if (style.fill !== color) style.fill = color;
+  if (style.fontSize !== size) style.fontSize = size;
+  if (style.fontWeight !== weight) style.fontWeight = weight;
+}
+
 function addText(
   layer: Container,
   text: string,
   x: number,
   y: number,
-  options: { size?: number; color?: number; weight?: string } = {},
+  options: TextStyleOptions = {},
 ): void {
-  const label = new Text({
-    text,
-    style: {
-      fill: options.color ?? COLORS.text,
-      fontFamily: "Segoe UI, Arial, sans-serif",
-      fontSize: options.size ?? 12,
-      fontWeight: (options.weight ?? "500") as any,
-      letterSpacing: 0,
-    },
-  });
-
-  label.eventMode = "none";
+  const cursor = TEXT_POOL_CURSOR.get(layer) ?? 0;
+  let label = layer.children[cursor] as Text | undefined;
+  if (label instanceof Text) {
+    applyTextStyle(label, text, options);
+    label.visible = true;
+  } else {
+    label = new Text({
+      text,
+      style: {
+        fill: options.color ?? COLORS.text,
+        fontFamily: "Segoe UI, Arial, sans-serif",
+        fontSize: options.size ?? 12,
+        fontWeight: (options.weight ?? "500") as any,
+        letterSpacing: 0,
+      },
+    });
+    label.eventMode = "none";
+    layer.addChild(label);
+  }
   label.x = Math.round(x);
   label.y = Math.round(y);
-  layer.addChild(label);
+  TEXT_POOL_CURSOR.set(layer, cursor + 1);
 }
 
-// Detach text children without calling .destroy() on them. Pixi v8 routes
-// Text destruction through a process-global TexturePool, and tearing down
-// an Application can leave that pool in a state where the next destroy()
-// call crashes with "Cannot read properties of undefined (reading 'push')".
-// Letting the orphaned Text instances be garbage-collected is safer (and
-// faster) for our 60 fps re-render pattern. A future polish phase can
-// introduce a Text instance pool to avoid the allocations entirely.
+// Reset the layer's pool cursor and hide any Text instances that the new
+// frame won't claim. Children stay parented so the next frame can grab them
+// in O(1).
 function clearTextLayer(layer: Container): void {
+  TEXT_POOL_CURSOR.set(layer, 0);
+  for (const child of layer.children) {
+    child.visible = false;
+  }
+}
+
+function disposeTextLayer(layer: Container): void {
+  TEXT_POOL_CURSOR.delete(layer);
   layer.removeChildren();
 }
 
@@ -913,12 +952,12 @@ export function createPlaylistRenderer(
       timelineMask.clear();
       timelineGridGraphics.clear();
       clipGraphics.clear();
-      clearTextLayer(clipTextLayer);
+      disposeTextLayer(clipTextLayer);
       overlayGraphics.clear();
       chromeGraphics.clear();
-      clearTextLayer(chromeTextLayer);
+      disposeTextLayer(chromeTextLayer);
       foregroundGraphics.clear();
-      clearTextLayer(foregroundTextLayer);
+      disposeTextLayer(foregroundTextLayer);
       disposeApp();
     },
   };
