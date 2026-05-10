@@ -66,6 +66,21 @@ export function isAutomationClip(
   return clip.type === "automation";
 }
 
+// FL Studio: a track is effectively muted when its mute flag is on, or when
+// any other track is soloed and this one is not.
+export function isTrackEffectivelyMuted(
+  state: PlaylistState,
+  track: PlaylistTrack,
+): boolean {
+  if (track.muted) {
+    return true;
+  }
+  if (track.soloed) {
+    return false;
+  }
+  return state.tracks.some((candidate) => candidate.soloed);
+}
+
 export function normalizeRect(rect: PlaylistRect): PlaylistRect {
   const x = Math.min(rect.x, rect.x + rect.width);
   const y = Math.min(rect.y, rect.y + rect.height);
@@ -268,6 +283,50 @@ export function screenXToTime(
   );
 }
 
+export function getTrackHeight(
+  track: PlaylistTrack,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  const raw = track.height ?? metrics.trackHeight;
+  return Math.max(
+    metrics.trackMinHeight,
+    Math.min(metrics.trackMaxHeight, raw),
+  );
+}
+
+// Top of the track row in scene coordinates (without ruler offset and without
+// viewport scroll). Real tracks accumulate their per-track heights; virtual
+// tracks beyond the materialised list use metrics.trackHeight.
+export function getTrackTopByIndex(
+  state: PlaylistState,
+  trackIndex: number,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  const idx = Math.max(0, Math.floor(trackIndex));
+  let y = 0;
+  const cap = Math.min(idx, state.tracks.length);
+  for (let i = 0; i < cap; i += 1) {
+    y += getTrackHeight(state.tracks[i]!, metrics);
+  }
+  if (idx > state.tracks.length) {
+    y += (idx - state.tracks.length) * metrics.trackHeight;
+  }
+  return y;
+}
+
+export function getTrackHeightByIndex(
+  state: PlaylistState,
+  trackIndex: number,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  const idx = Math.max(0, Math.floor(trackIndex));
+  const track = state.tracks[idx];
+  if (!track) {
+    return metrics.trackHeight;
+  }
+  return getTrackHeight(track, metrics);
+}
+
 export function trackIndexToScreenY(
   state: PlaylistState,
   trackIndex: number,
@@ -275,7 +334,7 @@ export function trackIndexToScreenY(
 ): number {
   return (
     metrics.rulerHeight +
-    trackIndex * metrics.trackHeight -
+    getTrackTopByIndex(state, trackIndex, metrics) -
     state.viewport.scrollY
   );
 }
@@ -285,11 +344,22 @@ export function screenYToTrackIndex(
   screenY: number,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): number {
-  const raw =
-    (screenY - metrics.rulerHeight + state.viewport.scrollY) /
-    metrics.trackHeight;
-
-  return Math.max(0, Math.floor(raw));
+  const localY = screenY - metrics.rulerHeight + state.viewport.scrollY;
+  if (localY <= 0) {
+    return 0;
+  }
+  let acc = 0;
+  for (let i = 0; i < state.tracks.length; i += 1) {
+    const h = getTrackHeight(state.tracks[i]!, metrics);
+    if (localY < acc + h) {
+      return i;
+    }
+    acc += h;
+  }
+  return (
+    state.tracks.length +
+    Math.max(0, Math.floor((localY - acc) / metrics.trackHeight))
+  );
 }
 
 export const worldToScreenX = timeToScreenX;
@@ -304,12 +374,13 @@ export function getClipRect(
 ): PlaylistRect {
   const trackIndex = getTrackIndexById(state, clip.trackId);
   const rowTop = trackIndexToScreenY(state, trackIndex, metrics);
+  const rowHeight = getTrackHeightByIndex(state, trackIndex, metrics);
 
   return {
     x: timeToScreenX(state, clip.start, metrics),
     y: rowTop + metrics.clipPaddingY,
     width: clip.duration * state.viewport.pxPerBeat,
-    height: metrics.trackHeight - metrics.clipPaddingY * 2,
+    height: rowHeight - metrics.clipPaddingY * 2,
   };
 }
 

@@ -39,6 +39,11 @@ export interface PlaylistTrack {
   id: string;
   label: string;
   color: string;
+  muted?: boolean;
+  soloed?: boolean;
+  locked?: boolean;
+  // Per-track height in px. Falls back to metrics.trackHeight when unset.
+  height?: number;
 }
 
 export interface PlaylistAutomationPoint {
@@ -175,6 +180,10 @@ export interface PlaylistMetrics {
   rulerHeight: number;
   trackHeaderWidth: number;
   trackHeight: number;
+  trackMinHeight: number;
+  trackMaxHeight: number;
+  trackResizeHandleSize: number;
+  trackButtonSize: number;
   clipPaddingY: number;
   clipTitleHeight: number;
   resizeHandleWidth: number;
@@ -199,6 +208,10 @@ export const DEFAULT_PLAYLIST_METRICS: PlaylistMetrics = {
   rulerHeight: 38,
   trackHeaderWidth: 148,
   trackHeight: 72,
+  trackMinHeight: 28,
+  trackMaxHeight: 280,
+  trackResizeHandleSize: 5,
+  trackButtonSize: 16,
   clipPaddingY: 7,
   clipTitleHeight: 20,
   resizeHandleWidth: 8,

@@ -3,6 +3,7 @@ import {
   clamp,
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
+  getTrackHeightByIndex,
   getTrackIdByIndex,
   getVerticalScrollbarRect,
   getVerticalScrollbarThumbRect,
@@ -98,6 +99,16 @@ function setCursor(
     return;
   }
 
+  if (active?.kind === "track-resize") {
+    host.style.cursor = "ns-resize";
+    return;
+  }
+
+  if (active?.kind === "track-reorder") {
+    host.style.cursor = "grabbing";
+    return;
+  }
+
   if (!hit) {
     host.style.cursor = "default";
     return;
@@ -121,6 +132,25 @@ function setCursor(
 
   if (hit.kind === "track-header" || hit.kind === "context-menu") {
     host.style.cursor = "default";
+    return;
+  }
+
+  if (
+    hit.kind === "track-mute-button" ||
+    hit.kind === "track-solo-button" ||
+    hit.kind === "track-lock-button"
+  ) {
+    host.style.cursor = "pointer";
+    return;
+  }
+
+  if (hit.kind === "track-resize-handle") {
+    host.style.cursor = "ns-resize";
+    return;
+  }
+
+  if (hit.kind === "track-reorder-handle") {
+    host.style.cursor = "grab";
     return;
   }
 
@@ -276,12 +306,29 @@ function executeTrackMenuAction(
   }
 
   if (action === "recolor-track") {
-    const current = core.getState().tracks[trackIndex]?.color;
-    const currentIndex = Math.max(0, TRACK_COLORS.indexOf(current ?? ""));
-    core.recolorTrack(
-      trackIndex,
-      TRACK_COLORS[(currentIndex + 1) % TRACK_COLORS.length],
-    );
+    const current = core.getState().tracks[trackIndex]?.color ?? "#888888";
+    if (typeof document === "undefined") {
+      const idx = Math.max(0, TRACK_COLORS.indexOf(current));
+      core.recolorTrack(
+        trackIndex,
+        TRACK_COLORS[(idx + 1) % TRACK_COLORS.length],
+      );
+      return;
+    }
+    const input = document.createElement("input");
+    input.type = "color";
+    input.value = current;
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    input.style.pointerEvents = "none";
+    document.body.appendChild(input);
+    input.addEventListener("change", () => {
+      core.recolorTrack(trackIndex, input.value);
+      input.remove();
+    });
+    input.addEventListener("blur", () => input.remove(), { once: true });
+    input.click();
+    core.closeContextMenu();
     return;
   }
 
@@ -412,6 +459,54 @@ export function createPlaylistInteractionController(
         startPoint: point,
         startScrollY: state.viewport.scrollY,
       };
+      host.setPointerCapture?.(event.pointerId);
+      setCursor(host, hit, activeGesture, state.tool);
+      event.preventDefault();
+      return;
+    }
+
+    if (hit.kind === "track-mute-button") {
+      core.toggleTrackMute(hit.trackIndex);
+      event.preventDefault();
+      return;
+    }
+
+    if (hit.kind === "track-solo-button") {
+      core.toggleTrackSolo(hit.trackIndex);
+      event.preventDefault();
+      return;
+    }
+
+    if (hit.kind === "track-lock-button") {
+      core.toggleTrackLock(hit.trackIndex);
+      event.preventDefault();
+      return;
+    }
+
+    if (hit.kind === "track-resize-handle") {
+      const startHeight = getTrackHeightByIndex(state, hit.trackIndex, metrics);
+      activeGesture = {
+        kind: "track-resize",
+        pointerId: event.pointerId,
+        trackIndex: hit.trackIndex,
+        startY: point.y,
+        startHeight,
+      };
+      core.beginGesture();
+      host.setPointerCapture?.(event.pointerId);
+      setCursor(host, hit, activeGesture, state.tool);
+      event.preventDefault();
+      return;
+    }
+
+    if (hit.kind === "track-reorder-handle") {
+      activeGesture = {
+        kind: "track-reorder",
+        pointerId: event.pointerId,
+        fromIndex: hit.trackIndex,
+        currentIndex: hit.trackIndex,
+      };
+      core.beginGesture();
       host.setPointerCapture?.(event.pointerId);
       setCursor(host, hit, activeGesture, state.tool);
       event.preventDefault();
@@ -639,6 +734,24 @@ export function createPlaylistInteractionController(
         core.deleteClip(hit.clip.id);
       }
       event.preventDefault();
+      return;
+    }
+
+    if (gesture.kind === "track-resize") {
+      const dy = point.y - gesture.startY;
+      core.setTrackHeight(gesture.trackIndex, gesture.startHeight + dy);
+      event.preventDefault();
+      return;
+    }
+
+    if (gesture.kind === "track-reorder") {
+      const targetIndex = screenYToTrackIndex(state, point.y, metrics);
+      if (targetIndex !== gesture.currentIndex) {
+        core.reorderTrack(gesture.currentIndex, targetIndex);
+        gesture.currentIndex = targetIndex;
+        gesture.fromIndex = targetIndex;
+      }
+      event.preventDefault();
     }
   };
 
@@ -656,7 +769,9 @@ export function createPlaylistInteractionController(
       activeGesture.kind === "clip-resize" ||
       activeGesture.kind === "automation-point-drag" ||
       activeGesture.kind === "paint-drag" ||
-      activeGesture.kind === "delete-drag"
+      activeGesture.kind === "delete-drag" ||
+      activeGesture.kind === "track-resize" ||
+      activeGesture.kind === "track-reorder"
     ) {
       core.endGesture();
     }

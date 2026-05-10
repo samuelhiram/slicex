@@ -18,11 +18,13 @@ import {
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
   getTrackByIndex,
+  getTrackHeight,
   getTrackIdByIndex,
   getTrackIndexById,
   getVerticalScrollbarRect,
   getVerticalScrollbarThumbRect,
   isAutomationClip,
+  isTrackEffectivelyMuted,
   normalizeRect,
   pointInRect,
   rectsIntersect,
@@ -63,12 +65,21 @@ export interface PlaylistLayoutPresentation {
   scrollbarCornerRect: PlaylistRect;
 }
 
+export interface PlaylistTrackHeaderButtons {
+  mute: PlaylistRect;
+  solo: PlaylistRect;
+  lock: PlaylistRect;
+}
+
 export interface PlaylistTrackRowPresentation {
   index: number;
   track: PlaylistTrack;
   rowRect: PlaylistRect;
   headerRect: PlaylistRect;
   stripRect: PlaylistRect;
+  buttons: PlaylistTrackHeaderButtons;
+  resizeHandleRect: PlaylistRect;
+  reorderHandleRect: PlaylistRect;
   isVirtual: boolean;
   hasClips: boolean;
   hasSelectedClips: boolean;
@@ -93,6 +104,10 @@ export interface PlaylistClipPresentation {
   isAutomation: boolean;
   selected: boolean;
   hovered: boolean;
+  // True when the clip OR its track should render as muted (clip.muted OR
+  // track.muted OR another track is soloed).
+  effectivelyMuted: boolean;
+  trackLocked: boolean;
 }
 
 export interface PlaylistRulerTickPresentation {
@@ -264,58 +279,126 @@ function createTrackRows(
   metrics: PlaylistMetrics,
   flagsByTrackId: Map<string, { hasClips: boolean; hasSelectedClips: boolean }>,
 ): PlaylistTrackRowPresentation[] {
-  const startIndex = Math.max(
-    0,
-    Math.floor(state.viewport.scrollY / metrics.trackHeight) -
-      metrics.trackOverscan,
-  );
-  const endIndex =
-    Math.ceil(
-      (state.viewport.scrollY + state.viewport.height - metrics.rulerHeight) /
-        metrics.trackHeight,
-    ) + metrics.trackOverscan;
-
+  // Build a list of indices visible in the viewport. We accumulate per-track
+  // height so each row can have its own height (FL Studio drag-resize).
+  const top = state.viewport.scrollY - metrics.trackOverscan * metrics.trackHeight;
+  const bottom =
+    state.viewport.scrollY +
+    state.viewport.height -
+    metrics.rulerHeight +
+    metrics.trackOverscan * metrics.trackHeight;
   const rows: PlaylistTrackRowPresentation[] = [];
 
-  for (let index = startIndex; index <= endIndex; index += 1) {
-    const track = getTrackByIndex(state, index);
-    const rowTop = trackIndexToScreenY(state, index, metrics);
-    const rowRect = {
-      x: metrics.trackHeaderWidth,
-      y: rowTop,
-      width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth),
-      height: metrics.trackHeight,
-    };
-    const headerRect = {
-      x: 0,
-      y: rowTop,
-      width: metrics.trackHeaderWidth,
-      height: metrics.trackHeight,
-    };
-    const stripRect = {
-      x: 0,
-      y: rowTop,
-      width: 5,
-      height: metrics.trackHeight,
-    };
-    const flags = flagsByTrackId.get(track.id) ?? {
-      hasClips: false,
-      hasSelectedClips: false,
-    };
-
-    rows.push({
-      index,
-      track,
-      rowRect,
-      headerRect,
-      stripRect,
-      isVirtual: index >= state.tracks.length,
-      hasClips: flags.hasClips,
-      hasSelectedClips: flags.hasSelectedClips,
-    });
+  let acc = 0;
+  let index = 0;
+  // Walk real tracks first, building rows that overlap the visible band.
+  for (; index < state.tracks.length; index += 1) {
+    const track = state.tracks[index]!;
+    const height = getTrackHeight(track, metrics);
+    if (acc + height >= top && acc <= bottom) {
+      rows.push(buildTrackRow(state, metrics, track, index, acc, height, flagsByTrackId));
+    }
+    acc += height;
+    if (acc > bottom) {
+      break;
+    }
+  }
+  // If the visible band extends past the materialised tracks, emit virtuals
+  // using the metrics default height.
+  while (acc <= bottom) {
+    const virtIndex = Math.max(index, state.tracks.length);
+    const track = getTrackByIndex(state, virtIndex);
+    const height = metrics.trackHeight;
+    rows.push(buildTrackRow(state, metrics, track, virtIndex, acc, height, flagsByTrackId));
+    acc += height;
+    index = virtIndex + 1;
   }
 
   return rows;
+}
+
+function buildTrackRow(
+  state: PlaylistState,
+  metrics: PlaylistMetrics,
+  track: PlaylistTrack,
+  index: number,
+  topInScene: number,
+  height: number,
+  flagsByTrackId: Map<string, { hasClips: boolean; hasSelectedClips: boolean }>,
+): PlaylistTrackRowPresentation {
+  const rowTop = metrics.rulerHeight + topInScene - state.viewport.scrollY;
+  const rowRect = {
+    x: metrics.trackHeaderWidth,
+    y: rowTop,
+    width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth),
+    height,
+  };
+  const headerRect = {
+    x: 0,
+    y: rowTop,
+    width: metrics.trackHeaderWidth,
+    height,
+  };
+  const stripRect = {
+    x: 0,
+    y: rowTop,
+    width: 5,
+    height,
+  };
+  const buttonSize = metrics.trackButtonSize;
+  const buttonGap = 4;
+  const buttonRow = rowTop + Math.max(2, height - buttonSize - 6);
+  const buttonsLeft = headerRect.x + 16;
+  const buttons: PlaylistTrackHeaderButtons = {
+    mute: {
+      x: buttonsLeft,
+      y: buttonRow,
+      width: buttonSize,
+      height: buttonSize,
+    },
+    solo: {
+      x: buttonsLeft + buttonSize + buttonGap,
+      y: buttonRow,
+      width: buttonSize,
+      height: buttonSize,
+    },
+    lock: {
+      x: buttonsLeft + (buttonSize + buttonGap) * 2,
+      y: buttonRow,
+      width: buttonSize,
+      height: buttonSize,
+    },
+  };
+  const reorderHandleRect = {
+    x: headerRect.x + headerRect.width - buttonSize - 6,
+    y: buttonRow,
+    width: buttonSize,
+    height: buttonSize,
+  };
+  const resizeHandleRect = {
+    x: 0,
+    y: rowTop + height - metrics.trackResizeHandleSize,
+    width: state.viewport.width,
+    height: metrics.trackResizeHandleSize * 2,
+  };
+  const flags = flagsByTrackId.get(track.id) ?? {
+    hasClips: false,
+    hasSelectedClips: false,
+  };
+
+  return {
+    index,
+    track,
+    rowRect,
+    headerRect,
+    stripRect,
+    buttons,
+    resizeHandleRect,
+    reorderHandleRect,
+    isVirtual: index >= state.tracks.length,
+    hasClips: flags.hasClips,
+    hasSelectedClips: flags.hasSelectedClips,
+  };
 }
 
 function createClipViews(
@@ -366,10 +449,15 @@ function createClipViews(
           selected: state.selection.automationPointIds.includes(point.id),
         }))
       : [];
+    const trackIndex = getTrackIndexById(state, clip.trackId);
+    const track = state.tracks[trackIndex];
+    const trackMuted = track ? isTrackEffectivelyMuted(state, track) : false;
+    const effectivelyMuted = clip.muted === true || trackMuted;
+    const trackLocked = track?.locked === true;
 
     return {
       clip,
-      trackIndex: getTrackIndexById(state, clip.trackId),
+      trackIndex,
       rect,
       titleRect,
       bodyRect,
@@ -393,6 +481,8 @@ function createClipViews(
         hoveredClipId != null &&
         hoveredClipId === clip.id &&
         state.hover?.kind !== "automation-point",
+      effectivelyMuted,
+      trackLocked,
     };
   });
 }

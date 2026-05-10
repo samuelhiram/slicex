@@ -248,7 +248,19 @@ export class PlaylistCore {
 
   // Track and clip mutations.
   moveClips(updates: PlaylistClipMoveUpdate[]): void {
-    this.dispatch({ type: "MOVE_CLIPS", updates });
+    const state = this.history.present;
+    const filtered = updates.filter((update) => {
+      const clip = state.clips.find((candidate) => candidate.id === update.id);
+      if (!clip) return false;
+      // Cannot move a clip that lives on a locked track.
+      const fromIndex = getTrackIndexById(state, clip.trackId);
+      if (state.tracks[fromIndex]?.locked) return false;
+      // Cannot drop onto a locked track either.
+      if (state.tracks[update.trackIndex]?.locked) return false;
+      return true;
+    });
+    if (filtered.length === 0) return;
+    this.dispatch({ type: "MOVE_CLIPS", updates: filtered });
   }
 
   clearTrackClips(trackIndex: number): void {
@@ -276,6 +288,7 @@ export class PlaylistCore {
   }
 
   resizeClip(clipId: string, edge: "left" | "right", time: number): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
     this.dispatch({ type: "RESIZE_CLIP", clipId, edge, time });
   }
 
@@ -321,7 +334,47 @@ export class PlaylistCore {
   }
 
   removeSelected(): void {
+    const state = this.history.present;
+    // Restrict removal to clips/points whose tracks are not locked. Currently
+    // automation points share the host clip's track, so the same check covers
+    // both clip ids and point ids.
+    const lockedClipIds = new Set(
+      state.clips
+        .filter((clip) => {
+          const idx = getTrackIndexById(state, clip.trackId);
+          return state.tracks[idx]?.locked === true;
+        })
+        .map((clip) => clip.id),
+    );
+    if (lockedClipIds.size === 0) {
+      this.dispatch({ type: "REMOVE_SELECTED" });
+      return;
+    }
+    const safeClipIds = state.selection.clipIds.filter(
+      (id) => !lockedClipIds.has(id),
+    );
+    if (
+      safeClipIds.length === state.selection.clipIds.length &&
+      state.selection.automationPointIds.length === 0
+    ) {
+      this.dispatch({ type: "REMOVE_SELECTED" });
+      return;
+    }
+    if (
+      safeClipIds.length === 0 &&
+      state.selection.automationPointIds.length === 0
+    ) {
+      return;
+    }
+    // Temporarily narrow selection to non-locked items, dispatch, then
+    // restore the original selection minus what was actually removed.
+    this.beginGesture();
+    this.setSelection({
+      clipIds: safeClipIds,
+      automationPointIds: state.selection.automationPointIds,
+    });
     this.dispatch({ type: "REMOVE_SELECTED" });
+    this.endGesture();
   }
 
   // Tool selection (UI-only, not undoable).
@@ -338,9 +391,37 @@ export class PlaylistCore {
     this.dispatch({ type: "TOGGLE_SNAP_NONE" });
   }
 
+  // Track flag wrappers (undoable).
+  toggleTrackMute(trackIndex: number): void {
+    this.dispatch({ type: "TOGGLE_TRACK_MUTE", trackIndex });
+  }
+
+  toggleTrackSolo(trackIndex: number): void {
+    this.dispatch({ type: "TOGGLE_TRACK_SOLO", trackIndex });
+  }
+
+  toggleTrackLock(trackIndex: number): void {
+    this.dispatch({ type: "TOGGLE_TRACK_LOCK", trackIndex });
+  }
+
+  setTrackHeight(trackIndex: number, height: number): void {
+    this.dispatch({ type: "SET_TRACK_HEIGHT", trackIndex, height });
+  }
+
+  reorderTrack(fromIndex: number, toIndex: number): void {
+    this.dispatch({ type: "REORDER_TRACK", fromIndex, toIndex });
+  }
+
+  isTrackLocked(trackIndex: number): boolean {
+    return this.history.present.tracks[trackIndex]?.locked === true;
+  }
+
   // Clip CRUD used by the tool dispatchers (Draw, Paint, Delete, Mute).
   createClip(input: PlaylistCreateClipInput): string {
     const state = this.history.present;
+    if (state.tracks[input.trackIndex]?.locked) {
+      return "";
+    }
     const trackId = getTrackIdByIndex(state, input.trackIndex);
     const id = input.id ?? makeClipId(state.clips);
     const baseClip = {
@@ -369,10 +450,12 @@ export class PlaylistCore {
   }
 
   deleteClip(clipId: string): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
     this.dispatch({ type: "DELETE_CLIP", clipId });
   }
 
   toggleClipMute(clipId: string): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
     this.dispatch({ type: "TOGGLE_CLIP_MUTE", clipId });
   }
 
@@ -559,6 +642,14 @@ export class PlaylistCore {
       selectIds,
     });
     return selectIds;
+  }
+
+  private isClipOnLockedTrack(clipId: string): boolean {
+    const state = this.history.present;
+    const clip = state.clips.find((candidate) => candidate.id === clipId);
+    if (!clip) return false;
+    const idx = getTrackIndexById(state, clip.trackId);
+    return state.tracks[idx]?.locked === true;
   }
 
   // Notify subscribers about the latest committed state.

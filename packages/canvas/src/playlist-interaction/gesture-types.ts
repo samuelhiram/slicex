@@ -67,6 +67,19 @@ export type ActiveGesture =
   | {
       kind: "delete-drag";
       pointerId: number;
+    }
+  | {
+      kind: "track-resize";
+      pointerId: number;
+      trackIndex: number;
+      startY: number;
+      startHeight: number;
+    }
+  | {
+      kind: "track-reorder";
+      pointerId: number;
+      fromIndex: number;
+      currentIndex: number;
     };
 
 export type ActiveGestureKind = ActiveGesture["kind"];

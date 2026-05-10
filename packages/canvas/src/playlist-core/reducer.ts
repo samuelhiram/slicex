@@ -63,6 +63,16 @@ export function playlistReducer(
       return deleteClip(state, action.clipId);
     case "TOGGLE_CLIP_MUTE":
       return toggleClipMute(state, action.clipId);
+    case "TOGGLE_TRACK_MUTE":
+      return toggleTrackFlag(state, action.trackIndex, "muted");
+    case "TOGGLE_TRACK_SOLO":
+      return toggleTrackFlag(state, action.trackIndex, "soloed");
+    case "TOGGLE_TRACK_LOCK":
+      return toggleTrackFlag(state, action.trackIndex, "locked");
+    case "SET_TRACK_HEIGHT":
+      return setTrackHeight(state, action.trackIndex, action.height, metrics);
+    case "REORDER_TRACK":
+      return reorderTrack(state, action.fromIndex, action.toIndex);
     case "PASTE_CLIPS":
       return pasteClips(state, action.entries, action.selectIds);
     case "SET_TOOL":
@@ -544,6 +554,56 @@ function toggleClipMute(state: PlaylistState, clipId: string): PlaylistState {
     return { ...clip, muted: !clip.muted };
   });
   return changed ? { ...state, clips } : state;
+}
+
+function toggleTrackFlag(
+  state: PlaylistState,
+  trackIndex: number,
+  flag: "muted" | "soloed" | "locked",
+): PlaylistState {
+  const materialized = materializeTracksThrough(state, trackIndex);
+  const tracks = materialized.tracks.map((track, index) =>
+    index === trackIndex ? { ...track, [flag]: !track[flag] } : track,
+  );
+  return { ...materialized, tracks };
+}
+
+function setTrackHeight(
+  state: PlaylistState,
+  trackIndex: number,
+  height: number,
+  metrics: PlaylistMetrics,
+): PlaylistState {
+  const materialized = materializeTracksThrough(state, trackIndex);
+  const clamped = Math.round(
+    Math.min(metrics.trackMaxHeight, Math.max(metrics.trackMinHeight, height)),
+  );
+  const tracks = materialized.tracks.map((track, index) =>
+    index === trackIndex ? { ...track, height: clamped } : track,
+  );
+  return { ...materialized, tracks };
+}
+
+function reorderTrack(
+  state: PlaylistState,
+  fromIndex: number,
+  toIndex: number,
+): PlaylistState {
+  if (
+    fromIndex === toIndex ||
+    fromIndex < 0 ||
+    fromIndex >= state.tracks.length
+  ) {
+    return state;
+  }
+  const clamped = Math.max(0, Math.min(toIndex, state.tracks.length - 1));
+  if (clamped === fromIndex) {
+    return state;
+  }
+  const tracks = [...state.tracks];
+  const [moved] = tracks.splice(fromIndex, 1);
+  tracks.splice(clamped, 0, moved!);
+  return { ...state, tracks };
 }
 
 function deleteEmptyTrack(

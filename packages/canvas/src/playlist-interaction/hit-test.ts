@@ -18,6 +18,31 @@ export type PlaylistHit =
   | { kind: "scrollbar-horizontal"; onThumb: boolean }
   | { kind: "scrollbar-vertical"; onThumb: boolean }
   | { kind: "track-header"; trackIndex: number; trackId: string }
+  | {
+      kind: "track-mute-button";
+      trackIndex: number;
+      trackId: string;
+    }
+  | {
+      kind: "track-solo-button";
+      trackIndex: number;
+      trackId: string;
+    }
+  | {
+      kind: "track-lock-button";
+      trackIndex: number;
+      trackId: string;
+    }
+  | {
+      kind: "track-reorder-handle";
+      trackIndex: number;
+      trackId: string;
+    }
+  | {
+      kind: "track-resize-handle";
+      trackIndex: number;
+      trackId: string;
+    }
   | { kind: "play-position-marker" }
   | { kind: "ruler" }
   | {
@@ -114,12 +139,55 @@ export function hitTestPlaylist(
     return { kind: "ruler" };
   }
 
+  if (point.y > metrics.rulerHeight) {
+    // Track-resize handle spans the full width to mimic FL Studio: drag the
+    // divisor between two tracks at any x (header or timeline).
+    const resizeRow = trackRows.find((candidate) =>
+      pointInRect(point, candidate.resizeHandleRect),
+    );
+    if (resizeRow) {
+      return {
+        kind: "track-resize-handle",
+        trackIndex: resizeRow.index,
+        trackId: resizeRow.track.id,
+      };
+    }
+  }
+
   if (point.x < metrics.trackHeaderWidth && point.y > metrics.rulerHeight) {
     const row = trackRows.find((candidate) =>
       pointInRect(point, candidate.headerRect),
     );
 
     if (row) {
+      if (pointInRect(point, row.buttons.mute)) {
+        return {
+          kind: "track-mute-button",
+          trackIndex: row.index,
+          trackId: row.track.id,
+        };
+      }
+      if (pointInRect(point, row.buttons.solo)) {
+        return {
+          kind: "track-solo-button",
+          trackIndex: row.index,
+          trackId: row.track.id,
+        };
+      }
+      if (pointInRect(point, row.buttons.lock)) {
+        return {
+          kind: "track-lock-button",
+          trackIndex: row.index,
+          trackId: row.track.id,
+        };
+      }
+      if (pointInRect(point, row.reorderHandleRect)) {
+        return {
+          kind: "track-reorder-handle",
+          trackIndex: row.index,
+          trackId: row.track.id,
+        };
+      }
       return {
         kind: "track-header",
         trackIndex: row.index,

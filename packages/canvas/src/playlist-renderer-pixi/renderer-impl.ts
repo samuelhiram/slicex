@@ -196,6 +196,41 @@ function drawTimelineGrid(
   }
 }
 
+function drawTrackHeaderButton(
+  graphics: Graphics,
+  textLayer: Container,
+  rect: { x: number; y: number; width: number; height: number },
+  letter: string,
+  active: boolean,
+  activeColor: number,
+): void {
+  graphics
+    .roundRect(rect.x, rect.y, rect.width, rect.height, 3)
+    .fill({
+      color: active ? activeColor : COLORS.panelStrong,
+      alpha: active ? 1 : 0.85,
+    })
+    .stroke({ color: COLORS.rowLine, width: 1, alpha: 0.7 });
+  addText(textLayer, letter, rect.x + rect.width / 2 - 3.5, rect.y + 1, {
+    color: active ? COLORS.text : COLORS.textMuted,
+    size: 11,
+    weight: "700",
+  });
+}
+
+function drawReorderHandle(
+  graphics: Graphics,
+  rect: { x: number; y: number; width: number; height: number },
+): void {
+  for (let i = 0; i < 3; i += 1) {
+    const y = rect.y + 4 + i * 4;
+    graphics
+      .moveTo(rect.x + 3, y)
+      .lineTo(rect.x + rect.width - 3, y)
+      .stroke({ color: COLORS.textMuted, width: 1, alpha: 0.7 });
+  }
+}
+
 function drawTrackRows(
   graphics: Graphics,
   textLayer: Container,
@@ -205,6 +240,10 @@ function drawTrackRows(
 
   for (const row of presentation.trackRows) {
     const color = parseHexColor(row.track.color, COLORS.textMuted);
+    const muted = row.track.muted === true;
+    const soloed = row.track.soloed === true;
+    const locked = row.track.locked === true;
+    const headerAlpha = muted ? 0.55 : 1;
 
     graphics
       .rect(
@@ -223,7 +262,7 @@ function drawTrackRows(
         row.stripRect.width,
         row.stripRect.height,
       )
-      .fill({ color });
+      .fill({ color, alpha: headerAlpha });
     graphics
       .moveTo(row.rowRect.x, row.rowRect.y + row.rowRect.height - 1)
       .lineTo(
@@ -239,21 +278,37 @@ function drawTrackRows(
       )
       .stroke({ color: COLORS.rowLine, width: 1.5 });
 
-    addText(textLayer, row.track.label, 16, row.rowRect.y + 13, {
-      color: COLORS.text,
+    addText(textLayer, row.track.label, 16, row.rowRect.y + 6, {
+      color: muted ? COLORS.textMuted : COLORS.text,
       size: 13,
       weight: row.isVirtual ? "500" : "700",
     });
-    addText(
+
+    drawTrackHeaderButton(
+      graphics,
       textLayer,
-      row.isVirtual ? "Empty" : `Track ${row.index + 1}`,
-      16,
-      row.rowRect.y + 34,
-      {
-        color: COLORS.textMuted,
-        size: 11,
-      },
+      row.buttons.mute,
+      "M",
+      muted,
+      COLORS.playPosition,
     );
+    drawTrackHeaderButton(
+      graphics,
+      textLayer,
+      row.buttons.solo,
+      "S",
+      soloed,
+      COLORS.selected,
+    );
+    drawTrackHeaderButton(
+      graphics,
+      textLayer,
+      row.buttons.lock,
+      "L",
+      locked,
+      COLORS.hover,
+    );
+    drawReorderHandle(graphics, row.reorderHandleRect);
 
     if (row.hasSelectedClips) {
       graphics
@@ -344,7 +399,7 @@ function drawClipBody(
   clipView: PlaylistClipPresentation,
 ): void {
   const color = parseHexColor(clipView.clip.color, 0x777777);
-  const muted = clipView.clip.muted === true;
+  const muted = clipView.effectivelyMuted;
   const bodyAlpha = muted ? CLIP_BODY_ALPHA_MUTED : CLIP_BODY_ALPHA;
 
   graphics

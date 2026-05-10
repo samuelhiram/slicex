@@ -51,6 +51,11 @@ export type PlaylistAction =
   | { type: "CREATE_CLIP"; clip: PlaylistClip }
   | { type: "DELETE_CLIP"; clipId: string }
   | { type: "TOGGLE_CLIP_MUTE"; clipId: string }
+  | { type: "TOGGLE_TRACK_MUTE"; trackIndex: number }
+  | { type: "TOGGLE_TRACK_SOLO"; trackIndex: number }
+  | { type: "TOGGLE_TRACK_LOCK"; trackIndex: number }
+  | { type: "SET_TRACK_HEIGHT"; trackIndex: number; height: number }
+  | { type: "REORDER_TRACK"; fromIndex: number; toIndex: number }
   | {
       type: "PASTE_CLIPS";
       entries: { clip: PlaylistClip; trackIndex: number }[];
@@ -102,6 +107,11 @@ const UNDOABLE_ACTION_TYPES: ReadonlySet<PlaylistActionType> = new Set([
   "DELETE_CLIP",
   "TOGGLE_CLIP_MUTE",
   "PASTE_CLIPS",
+  "TOGGLE_TRACK_MUTE",
+  "TOGGLE_TRACK_SOLO",
+  "TOGGLE_TRACK_LOCK",
+  "SET_TRACK_HEIGHT",
+  "REORDER_TRACK",
 ] satisfies PlaylistActionType[]);
 
 export function isUndoableAction(action: PlaylistAction): boolean {
