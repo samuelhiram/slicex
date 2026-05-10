@@ -442,30 +442,47 @@ export function PlaylistShell() {
       return undefined;
     }
 
-    const instance = createPlaylistCore(createDemoPlaylistState());
-    setCore(instance);
-    const interaction = createPlaylistInteractionController(host, instance);
-    const renderer = createPlaylistRenderer(host, instance, {
-      onError: (reason) => {
-        setError(reason instanceof Error ? reason.message : "Renderer failed.");
-      },
-    });
-    let frameId = 0;
+    // React 18 StrictMode mounts → unmounts → remounts synchronously in
+    // dev. Pixi v8 has process-global state (BatcherPipe / TexturePool /
+    // GraphicsContextSystem) that gets corrupted when a half-initialised
+    // Application is torn down, surfacing in the *next* mount as null
+    // geometry or undefined TexturePool entries. Defer creation by one
+    // animation frame so the first short-lived mount never builds a Pixi
+    // Application at all — the cleanup just cancels the pending init.
+    let cancelled = false;
+    let instance: PlaylistCore | null = null;
+    let interaction: ReturnType<
+      typeof createPlaylistInteractionController
+    > | null = null;
+    let renderer: ReturnType<typeof createPlaylistRenderer> | null = null;
+    let tickId = 0;
     let lastFrame = performance.now();
 
-    const tick = (now: number) => {
-      const deltaSeconds = Math.min(0.05, (now - lastFrame) / 1000);
-      lastFrame = now;
-      instance.advancePlayPosition(deltaSeconds * 2);
-      frameId = requestAnimationFrame(tick);
-    };
-
-    frameId = requestAnimationFrame(tick);
+    const initId = requestAnimationFrame(() => {
+      if (cancelled) return;
+      instance = createPlaylistCore(createDemoPlaylistState());
+      setCore(instance);
+      interaction = createPlaylistInteractionController(host, instance);
+      renderer = createPlaylistRenderer(host, instance, {
+        onError: (reason) => {
+          setError(reason instanceof Error ? reason.message : "Renderer failed.");
+        },
+      });
+      const tick = (now: number) => {
+        const deltaSeconds = Math.min(0.05, (now - lastFrame) / 1000);
+        lastFrame = now;
+        instance!.advancePlayPosition(deltaSeconds * 2);
+        tickId = requestAnimationFrame(tick);
+      };
+      tickId = requestAnimationFrame(tick);
+    });
 
     return () => {
-      cancelAnimationFrame(frameId);
-      interaction.destroy();
-      renderer.destroy();
+      cancelled = true;
+      cancelAnimationFrame(initId);
+      cancelAnimationFrame(tickId);
+      interaction?.destroy();
+      renderer?.destroy();
       setCore(null);
     };
   }, []);

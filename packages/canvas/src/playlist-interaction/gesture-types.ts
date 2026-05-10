@@ -51,12 +51,18 @@ export type ActiveGesture =
       pointerId: number;
       startPoint: PlaylistPoint;
       startScrollX: number;
+      // Captured at pointerdown so a drag is proportional even as the
+      // virtual content extent grows mid-gesture.
+      scrollableRange: number;
+      travel: number;
     }
   | {
       kind: "scrollbar-vertical";
       pointerId: number;
       startPoint: PlaylistPoint;
       startScrollY: number;
+      scrollableRange: number;
+      travel: number;
     }
   | {
       kind: "paint-drag";

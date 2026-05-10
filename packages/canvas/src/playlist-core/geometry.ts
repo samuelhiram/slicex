@@ -144,20 +144,92 @@ export function getVerticalScrollbarRect(
   };
 }
 
+// Total horizontal extent (in pixels) the timeline considers "addressable"
+// for scrollbar purposes. Grows with the content end and with however far
+// the user has already scrolled, so the timeline stays effectively infinite
+// but the thumb always represents an absolute position in [0, extent].
+export function getHorizontalContentExtent(
+  state: PlaylistState,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  const contentEndPx = getContentEndBeat(state) * state.viewport.pxPerBeat;
+  const viewportWidth = Math.max(
+    0,
+    state.viewport.width - metrics.trackHeaderWidth,
+  );
+  return Math.max(
+    contentEndPx + viewportWidth,
+    state.viewport.scrollX + viewportWidth,
+    viewportWidth,
+  );
+}
+
+export function getHorizontalScrollableRange(
+  state: PlaylistState,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  const viewportWidth = Math.max(
+    0,
+    state.viewport.width - metrics.trackHeaderWidth,
+  );
+  return Math.max(1, getHorizontalContentExtent(state, metrics) - viewportWidth);
+}
+
+export function getVerticalContentExtent(
+  state: PlaylistState,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  let totalHeight = 0;
+  for (const track of state.tracks) {
+    totalHeight += getTrackHeight(track, metrics);
+  }
+  // Buffer a few virtual tracks beyond materialised content so the thumb has
+  // somewhere to go for placing brand-new tracks.
+  const buffer = 4 * metrics.trackHeight;
+  const viewportHeight = Math.max(
+    0,
+    state.viewport.height - metrics.rulerHeight,
+  );
+  return Math.max(
+    totalHeight + buffer,
+    state.viewport.scrollY + viewportHeight,
+    viewportHeight,
+  );
+}
+
+export function getVerticalScrollableRange(
+  state: PlaylistState,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  const viewportHeight = Math.max(
+    0,
+    state.viewport.height - metrics.rulerHeight,
+  );
+  return Math.max(1, getVerticalContentExtent(state, metrics) - viewportHeight);
+}
+
 export function getHorizontalScrollbarThumbRect(
   state: PlaylistState,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): PlaylistRect {
   const track = getHorizontalScrollbarRect(state, metrics);
-  const width = clamp(track.width * 0.24, metrics.scrollbarThumbMin, track.width);
+  const extent = getHorizontalContentExtent(state, metrics);
+  const viewportWidth = Math.max(
+    0,
+    state.viewport.width - metrics.trackHeaderWidth,
+  );
+  const ratio = extent > 0 ? viewportWidth / extent : 1;
+  const width = clamp(
+    track.width * ratio,
+    metrics.scrollbarThumbMin,
+    track.width,
+  );
   const travel = Math.max(1, track.width - width);
-  const local =
-    ((state.viewport.scrollX % metrics.scrollbarVirtualRangePx) /
-      metrics.scrollbarVirtualRangePx) *
-    travel;
+  const scrollable = Math.max(1, extent - viewportWidth);
+  const positionRatio = clamp(state.viewport.scrollX / scrollable, 0, 1);
 
   return {
-    x: track.x + local,
+    x: track.x + positionRatio * travel,
     y: track.y + 2,
     width,
     height: Math.max(1, track.height - 4),
@@ -169,16 +241,24 @@ export function getVerticalScrollbarThumbRect(
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): PlaylistRect {
   const track = getVerticalScrollbarRect(state, metrics);
-  const height = clamp(track.height * 0.24, metrics.scrollbarThumbMin, track.height);
+  const extent = getVerticalContentExtent(state, metrics);
+  const viewportHeight = Math.max(
+    0,
+    state.viewport.height - metrics.rulerHeight,
+  );
+  const ratio = extent > 0 ? viewportHeight / extent : 1;
+  const height = clamp(
+    track.height * ratio,
+    metrics.scrollbarThumbMin,
+    track.height,
+  );
   const travel = Math.max(1, track.height - height);
-  const local =
-    ((state.viewport.scrollY % metrics.scrollbarVirtualRangePx) /
-      metrics.scrollbarVirtualRangePx) *
-    travel;
+  const scrollable = Math.max(1, extent - viewportHeight);
+  const positionRatio = clamp(state.viewport.scrollY / scrollable, 0, 1);
 
   return {
     x: track.x + 2,
-    y: track.y + local,
+    y: track.y + positionRatio * travel,
     width: Math.max(1, track.width - 4),
     height,
   };

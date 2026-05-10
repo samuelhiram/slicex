@@ -84,10 +84,15 @@ function addText(
   layer.addChild(label);
 }
 
+// Detach text children without calling .destroy() on them. Pixi v8 routes
+// Text destruction through a process-global TexturePool, and tearing down
+// an Application can leave that pool in a state where the next destroy()
+// call crashes with "Cannot read properties of undefined (reading 'push')".
+// Letting the orphaned Text instances be garbage-collected is safer (and
+// faster) for our 60 fps re-render pattern. A future polish phase can
+// introduce a Text instance pool to avoid the allocations entirely.
 function clearTextLayer(layer: Container): void {
-  for (const child of layer.removeChildren()) {
-    child.destroy();
-  }
+  layer.removeChildren();
 }
 
 function drawSceneBackground(

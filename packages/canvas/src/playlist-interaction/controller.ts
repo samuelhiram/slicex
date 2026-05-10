@@ -1,10 +1,12 @@
 import {
   automationPointFromScreen,
   clamp,
+  getHorizontalScrollableRange,
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
   getTrackHeightByIndex,
   getTrackIdByIndex,
+  getVerticalScrollableRange,
   getVerticalScrollbarRect,
   getVerticalScrollbarThumbRect,
   normalizeRect,
@@ -359,11 +361,34 @@ export function createPlaylistInteractionController(
     }
 
     if (hit.kind === "scrollbar-horizontal") {
+      const track = getHorizontalScrollbarRect(state, metrics);
+      let thumb = getHorizontalScrollbarThumbRect(state, metrics);
+      const scrollableRange = getHorizontalScrollableRange(state, metrics);
+      // Click on the track outside the thumb: page-jump so the thumb lands
+      // under the cursor, then start a drag from that new origin. Matches
+      // the standard browser scrollbar behaviour.
+      let startScrollX = state.viewport.scrollX;
+      let anchorPoint = point;
+      if (!hit.onThumb) {
+        const travelInit = Math.max(1, track.width - thumb.width);
+        const ratio = clamp(
+          (point.x - track.x - thumb.width / 2) / travelInit,
+          0,
+          1,
+        );
+        startScrollX = Math.max(0, ratio * scrollableRange);
+        core.updateViewport({ scrollX: startScrollX });
+        thumb = getHorizontalScrollbarThumbRect(core.getState(), metrics);
+        anchorPoint = { x: thumb.x + thumb.width / 2, y: point.y };
+      }
+      const travel = Math.max(1, track.width - thumb.width);
       activeGesture = {
         kind: "scrollbar-horizontal",
         pointerId: event.pointerId,
-        startPoint: point,
-        startScrollX: state.viewport.scrollX,
+        startPoint: anchorPoint,
+        startScrollX,
+        scrollableRange,
+        travel,
       };
       host.setPointerCapture?.(event.pointerId);
       setCursor(host, hit, activeGesture, state.tool);
@@ -372,11 +397,31 @@ export function createPlaylistInteractionController(
     }
 
     if (hit.kind === "scrollbar-vertical") {
+      const track = getVerticalScrollbarRect(state, metrics);
+      let thumb = getVerticalScrollbarThumbRect(state, metrics);
+      const scrollableRange = getVerticalScrollableRange(state, metrics);
+      let startScrollY = state.viewport.scrollY;
+      let anchorPoint = point;
+      if (!hit.onThumb) {
+        const travelInit = Math.max(1, track.height - thumb.height);
+        const ratio = clamp(
+          (point.y - track.y - thumb.height / 2) / travelInit,
+          0,
+          1,
+        );
+        startScrollY = Math.max(0, ratio * scrollableRange);
+        core.updateViewport({ scrollY: startScrollY });
+        thumb = getVerticalScrollbarThumbRect(core.getState(), metrics);
+        anchorPoint = { x: point.x, y: thumb.y + thumb.height / 2 };
+      }
+      const travel = Math.max(1, track.height - thumb.height);
       activeGesture = {
         kind: "scrollbar-vertical",
         pointerId: event.pointerId,
-        startPoint: point,
-        startScrollY: state.viewport.scrollY,
+        startPoint: anchorPoint,
+        startScrollY,
+        scrollableRange,
+        travel,
       };
       host.setPointerCapture?.(event.pointerId);
       setCursor(host, hit, activeGesture, state.tool);
@@ -610,27 +655,23 @@ export function createPlaylistInteractionController(
     }
 
     if (gesture.kind === "scrollbar-horizontal") {
-      const track = getHorizontalScrollbarRect(state, metrics);
-      const thumb = getHorizontalScrollbarThumbRect(state, metrics);
-      const travel = Math.max(1, track.width - thumb.width);
       const delta =
-        ((point.x - gesture.startPoint.x) / travel) *
-        metrics.scrollbarVirtualRangePx;
-
-      core.updateViewport({ scrollX: gesture.startScrollX + delta });
+        ((point.x - gesture.startPoint.x) / gesture.travel) *
+        gesture.scrollableRange;
+      core.updateViewport({
+        scrollX: Math.max(0, gesture.startScrollX + delta),
+      });
       event.preventDefault();
       return;
     }
 
     if (gesture.kind === "scrollbar-vertical") {
-      const track = getVerticalScrollbarRect(state, metrics);
-      const thumb = getVerticalScrollbarThumbRect(state, metrics);
-      const travel = Math.max(1, track.height - thumb.height);
       const delta =
-        ((point.y - gesture.startPoint.y) / travel) *
-        metrics.scrollbarVirtualRangePx;
-
-      core.updateViewport({ scrollY: gesture.startScrollY + delta });
+        ((point.y - gesture.startPoint.y) / gesture.travel) *
+        gesture.scrollableRange;
+      core.updateViewport({
+        scrollY: Math.max(0, gesture.startScrollY + delta),
+      });
       event.preventDefault();
       return;
     }
