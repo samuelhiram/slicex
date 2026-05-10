@@ -553,6 +553,8 @@ export function PlaylistShell() {
     let tickId = 0;
     let lastFrame = performance.now();
 
+    let unsubscribeTransport: (() => void) | null = null;
+
     const initId = requestAnimationFrame(() => {
       if (cancelled) return;
       instance = createPlaylistCore(createDemoPlaylistState());
@@ -563,19 +565,48 @@ export function PlaylistShell() {
           setError(reason instanceof Error ? reason.message : "Renderer failed.");
         },
       });
+
+      // Canon §3.5 + §3.10: only run the play-position rAF when playback
+      // is actually engaged. While paused there's no animation to advance,
+      // so cycling the rAF wastes a callback per frame even with the
+      // idempotent dispatch short-circuit.
       const tick = (now: number) => {
+        if (!instance || cancelled) return;
         const deltaSeconds = Math.min(0.05, (now - lastFrame) / 1000);
         lastFrame = now;
-        instance!.advancePlayPosition(deltaSeconds * 2);
+        instance.advancePlayPosition(deltaSeconds * 2);
         tickId = requestAnimationFrame(tick);
       };
-      tickId = requestAnimationFrame(tick);
+      const startTick = () => {
+        if (tickId !== 0 || cancelled) return;
+        lastFrame = performance.now();
+        tickId = requestAnimationFrame(tick);
+      };
+      const stopTick = () => {
+        if (tickId === 0) return;
+        cancelAnimationFrame(tickId);
+        tickId = 0;
+      };
+
+      let isRunning = instance.getState().playPosition.isRunning;
+      if (isRunning) startTick();
+      const sub = instance.subscribe((state) => {
+        const nextRunning = state.playPosition.isRunning;
+        if (nextRunning === isRunning) return;
+        isRunning = nextRunning;
+        if (nextRunning) startTick();
+        else stopTick();
+      });
+      unsubscribeTransport = () => {
+        sub.unsubscribe();
+        stopTick();
+      };
     });
 
     return () => {
       cancelled = true;
       cancelAnimationFrame(initId);
-      cancelAnimationFrame(tickId);
+      unsubscribeTransport?.();
       interaction?.destroy();
       renderer?.destroy();
       setCore(null);

@@ -829,16 +829,32 @@ export function createPlaylistRenderer(
     foregroundTextLayer,
   );
 
+  // Canon §3.10: coalesce notifications into a single rAF frame.
+  // dispatch() invokes notify() synchronously, so a fast burst (pointermove
+  // batch, brush stroke, scrollbar drag) used to produce one render per
+  // notify. Now every notify schedules at most one render per animation
+  // frame; if N notifies arrive within the same frame, the renderer reads
+  // the latest state and paints once.
+  let renderFrameId = 0;
+  let renderQueuedNow = false;
+  // Caches keyed on the inputs that actually affect each static layer.
+  // Layers fall back to their previous frame's geometry when the key
+  // hasn't changed — saves clear() + re-emit on every render.
+  let maskKey = "";
+  let gridKey = "";
+
   const renderNow = (): void => {
     if (!ready || destroyed) {
       return;
     }
+    renderQueuedNow = false;
+    renderFrameId = 0;
 
     const presentation = core.getPresentation();
+    const layout = presentation.layout;
+    const viewport = presentation.state.viewport;
 
     sceneGraphics.clear();
-    timelineMask.clear();
-    timelineGridGraphics.clear();
     overlayGraphics.clear();
     chromeGraphics.clear();
     clearTextLayer(chromeTextLayer);
@@ -848,16 +864,32 @@ export function createPlaylistRenderer(
     drawSceneBackground(sceneGraphics, presentation);
     drawTrackRowsBackground(sceneGraphics, presentation);
 
-    timelineMask
-      .rect(
-        presentation.layout.timelineRect.x,
-        presentation.layout.timelineRect.y,
-        presentation.layout.timelineRect.width,
-        presentation.layout.timelineRect.height,
-      )
-      .fill({ color: 0xffffff });
+    // Mask depends only on viewport size + header/ruler metrics. Skip the
+    // clear()+rect()+fill() unless those changed.
+    const nextMaskKey = `${layout.timelineRect.x}|${layout.timelineRect.y}|${layout.timelineRect.width}|${layout.timelineRect.height}`;
+    if (nextMaskKey !== maskKey) {
+      maskKey = nextMaskKey;
+      timelineMask.clear();
+      timelineMask
+        .rect(
+          layout.timelineRect.x,
+          layout.timelineRect.y,
+          layout.timelineRect.width,
+          layout.timelineRect.height,
+        )
+        .fill({ color: 0xffffff });
+    }
 
-    drawTimelineGrid(timelineGridGraphics, presentation);
+    // Grid only changes with zoom, horizontal scroll, viewport width, or
+    // total scene height. Hover/selection/etc. don't touch it.
+    const ticks = presentation.rulerTicks;
+    const nextGridKey = `${viewport.pxPerBeat}|${viewport.scrollX}|${viewport.width}|${layout.sceneRect.height}|${ticks.length}|${ticks[0]?.x ?? 0}`;
+    if (nextGridKey !== gridKey) {
+      gridKey = nextGridKey;
+      timelineGridGraphics.clear();
+      drawTimelineGrid(timelineGridGraphics, presentation);
+    }
+
     // Per-clip cached scene graph: each clip is a Container with its own
     // Graphics + Text drawn once in local coords. Frame-to-frame work is
     // just transform updates unless the clip's visual hash changed.
@@ -875,6 +907,16 @@ export function createPlaylistRenderer(
     (app as any).render?.();
   };
 
+  const requestRender = (): void => {
+    if (renderQueuedNow || renderFrameId !== 0 || destroyed) return;
+    if (typeof requestAnimationFrame === "undefined") {
+      renderQueuedNow = true;
+      renderNow();
+      return;
+    }
+    renderFrameId = requestAnimationFrame(() => renderNow());
+  };
+
   const resize = (): void => {
     if (!ready || destroyed) {
       return;
@@ -890,23 +932,22 @@ export function createPlaylistRenderer(
     app.renderer.resize(width, height);
 
     if (sizeChanged) {
-      // setViewportSize dispatches + notifies, which re-enters renderNow
-      // via the subscribe callback. No need to also call it directly.
+      // setViewportSize dispatches + notifies → requestRender via subscribe.
       core.setViewportSize(width, height);
       return;
     }
 
-    // Size unchanged: nothing dispatches, so subscribe won't fire. Render
-    // explicitly so the first frame after init isn't skipped when the
-    // container already matches the model's initial viewport (1×1 from
-    // the demo when getBoundingClientRect briefly reports 0×0 during a
-    // StrictMode remount).
-    renderNow();
+    // Size unchanged: nothing dispatches, so the subscribe path won't
+    // fire. Schedule a render anyway so the first frame after init isn't
+    // skipped when the container already matches the model's initial
+    // viewport (1×1 from the demo when getBoundingClientRect briefly
+    // reports 0×0 during a StrictMode remount).
+    requestRender();
   };
 
   const resizeObserver =
     typeof ResizeObserver !== "undefined" ? new ResizeObserver(resize) : null;
-  const subscription = core.subscribe(renderNow);
+  const subscription = core.subscribe(requestRender);
 
   void app
     .init({
@@ -961,6 +1002,10 @@ export function createPlaylistRenderer(
       // surfaces as a null-geometry crash on the next mount.
       if (!ready) {
         return;
+      }
+      if (renderFrameId !== 0 && typeof cancelAnimationFrame !== "undefined") {
+        cancelAnimationFrame(renderFrameId);
+        renderFrameId = 0;
       }
       sceneGraphics.clear();
       timelineMask.clear();

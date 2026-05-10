@@ -236,6 +236,53 @@ clip-node-registry.ts`. El lint `check-perf-patterns.mjs` permite
 como factories — `renderer-impl.ts` (init one-shot) y los
 `*-registry.ts` que implementan este patrón.
 
+### 3.10 rAF coalescing + dirty-layer caching en el renderer
+
+`dispatch()` invoca `notify()` síncronamente; durante un pointermove
+rápido o un tick activo, varios notifies pueden caer en el mismo frame
+del browser. El renderer **no** debe pintar uno por notify — debe
+coalescer todos los notifies del frame en un solo `renderNow()`.
+
+Patrón canónico (ver `renderer-impl.ts`):
+```ts
+let renderFrameId = 0;
+const requestRender = () => {
+  if (renderFrameId !== 0 || destroyed) return;
+  renderFrameId = requestAnimationFrame(() => {
+    renderFrameId = 0;
+    renderNow();
+  });
+};
+core.subscribe(requestRender);
+```
+
+Adicionalmente, **layers cuyas dependencias no cambian frame-a-frame**
+deben cachear su geometría:
+
+- `timelineMask` depende solo de `viewport.width/height` y métricas de
+  ruler/header. Se cachea por una key string; solo se redibuja al
+  cambiar.
+- `timelineGridGraphics` depende solo de `pxPerBeat`, `scrollX`,
+  `viewport.width`, `sceneRect.height`, y la lista de ticks. Hover /
+  selección / cualquier otra cosa **no** lo invalida.
+
+El patrón es: calcula un hash de las dependencies, comparalo con el
+hash del frame anterior, salta `clear()` + re-emit si no cambió.
+
+### 3.11 rAF idle stop
+
+Cualquier rAF tick que solo tenga sentido durante un estado activo
+(playback, drag, animación en curso) **debe** suscribirse al flag que
+lo activa y arrancar/parar el rAF en respuesta. NO mantener un tick
+"durmiente" que llama acciones idempotentes 60 Hz — aunque sean no-op
+en el reducer, el callback del rAF, la lectura de `performance.now()`
+y la entrada al dispatch suman.
+
+Ejemplo canónico: `PlaylistShell` se suscribe a
+`state.playPosition.isRunning`. El tick que llama
+`advancePlayPosition` solo arranca cuando `isRunning` pasa de false a
+true, y se cancela cuando vuelve a false.
+
 ### 3.9 Batch dispatch para gestures que generan N mutaciones por move
 
 Si un gesture puede crear/borrar/modificar **N elementos en un solo
@@ -314,6 +361,9 @@ a esta lista y a los tests de `perf-budget.spec.ts`.
 | Paint en track virtual produce clip visible | sí, track materializada |
 | `core.createClips([N])` dispara 1 notify, no N | 1 |
 | Bulk createClips × 500 entries | < 30 ms |
+| N notifies del mismo frame coalescen en 1 render | sí |
+| rAF idle stop: tick cancelado al pausar play | sí |
+| Mask / grid solo redibujan al cambiar sus deps | sí |
 
 Estos números **no se tocan para que pasen los tests**. Si un test
 falla, hay un bug de performance real que arreglar.
