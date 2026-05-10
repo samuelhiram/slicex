@@ -63,10 +63,34 @@ export function playlistReducer(
       return deleteClip(state, action.clipId);
     case "TOGGLE_CLIP_MUTE":
       return toggleClipMute(state, action.clipId);
+    case "PASTE_CLIPS":
+      return pasteClips(state, action.entries, action.selectIds);
     case "SET_TOOL":
       return state.tool === action.tool
         ? state
         : { ...state, tool: action.tool };
+    case "SELECT_ALL_CLIPS":
+      return {
+        ...state,
+        selection: {
+          clipIds: state.clips.map((clip) => clip.id),
+          automationPointIds: state.selection.automationPointIds,
+        },
+      };
+    case "INVERT_CLIP_SELECTION": {
+      const selected = new Set(state.selection.clipIds);
+      return {
+        ...state,
+        selection: {
+          clipIds: state.clips
+            .map((clip) => clip.id)
+            .filter((id) => !selected.has(id)),
+          automationPointIds: state.selection.automationPointIds,
+        },
+      };
+    }
+    case "SET_CLIPBOARD":
+      return { ...state, clipboard: action.clipboard };
     case "SET_SELECTION":
       return {
         ...state,
@@ -445,6 +469,39 @@ function deleteClip(state: PlaylistState, clipId: string): PlaylistState {
     selection: {
       clipIds: state.selection.clipIds.filter((id) => id !== clipId),
       automationPointIds: state.selection.automationPointIds,
+    },
+  };
+}
+
+function pasteClips(
+  state: PlaylistState,
+  entries: { clip: import("./types").PlaylistClip; trackIndex: number }[],
+  selectIds: string[],
+): PlaylistState {
+  if (entries.length === 0) {
+    return state;
+  }
+  const maxTrackIndex = entries.reduce(
+    (max, entry) => Math.max(max, Math.max(0, Math.floor(entry.trackIndex))),
+    state.tracks.length - 1,
+  );
+  const materialized = materializeTracksThrough(state, maxTrackIndex);
+  const existingIds = new Set(materialized.clips.map((clip) => clip.id));
+  const newClips = entries
+    .filter((entry) => !existingIds.has(entry.clip.id))
+    .map((entry) => ({
+      ...entry.clip,
+      trackId: getTrackIdByIndex(materialized, entry.trackIndex),
+    }));
+  if (newClips.length === 0) {
+    return materialized;
+  }
+  return {
+    ...materialized,
+    clips: [...materialized.clips, ...newClips],
+    selection: {
+      clipIds: [...selectIds],
+      automationPointIds: [],
     },
   };
 }

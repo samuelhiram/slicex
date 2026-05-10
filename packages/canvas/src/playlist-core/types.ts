@@ -92,6 +92,20 @@ export interface PlaylistSelection {
   automationPointIds: string[];
 }
 
+// Snapshot of clips on the clipboard. Each entry stores the source clip plus
+// the offset relative to a reference point (anchor) so paste/duplicate-right
+// can place them correctly.
+export interface PlaylistClipboardEntry {
+  clip: PlaylistClip;
+  startOffset: number;
+  trackOffset: number;
+}
+
+export interface PlaylistClipboard {
+  entries: PlaylistClipboardEntry[];
+  span: number;
+}
+
 export interface PlaylistMarquee {
   start: PlaylistPoint;
   current: PlaylistPoint;
@@ -124,6 +138,7 @@ export interface PlaylistState {
   hover: PlaylistHover;
   playPosition: PlaylistPlayPosition;
   tool: PlaylistToolId;
+  clipboard: PlaylistClipboard | null;
 }
 
 export interface PlaylistMetrics {

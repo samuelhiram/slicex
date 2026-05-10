@@ -18,6 +18,7 @@ export type ActiveGesture =
       kind: "marquee";
       pointerId: number;
       startPoint: PlaylistPoint;
+      additive: boolean;
     }
   | {
       kind: "clip-drag";

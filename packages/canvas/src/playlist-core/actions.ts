@@ -1,5 +1,6 @@
 import type {
   PlaylistClip,
+  PlaylistClipboard,
   PlaylistContextMenu,
   PlaylistHover,
   PlaylistMarquee,
@@ -49,6 +50,11 @@ export type PlaylistAction =
   | { type: "CREATE_CLIP"; clip: PlaylistClip }
   | { type: "DELETE_CLIP"; clipId: string }
   | { type: "TOGGLE_CLIP_MUTE"; clipId: string }
+  | {
+      type: "PASTE_CLIPS";
+      entries: { clip: PlaylistClip; trackIndex: number }[];
+      selectIds: string[];
+    }
   // UI-only mutations (not undoable).
   | { type: "SET_SELECTION"; selection: Partial<PlaylistSelection> }
   | { type: "SET_MARQUEE"; marquee: PlaylistMarquee | null }
@@ -69,7 +75,10 @@ export type PlaylistAction =
   | { type: "SET_PLAY_POSITION"; time: number }
   | { type: "SET_PLAY_RUNNING"; isRunning: boolean }
   | { type: "ADVANCE_PLAY_POSITION"; deltaTime: number }
-  | { type: "SET_TOOL"; tool: PlaylistToolId };
+  | { type: "SET_TOOL"; tool: PlaylistToolId }
+  | { type: "SELECT_ALL_CLIPS" }
+  | { type: "INVERT_CLIP_SELECTION" }
+  | { type: "SET_CLIPBOARD"; clipboard: PlaylistClipboard | null };
 
 export type PlaylistActionType = PlaylistAction["type"];
 
@@ -89,6 +98,7 @@ const UNDOABLE_ACTION_TYPES: ReadonlySet<PlaylistActionType> = new Set([
   "CREATE_CLIP",
   "DELETE_CLIP",
   "TOGGLE_CLIP_MUTE",
+  "PASTE_CLIPS",
 ] satisfies PlaylistActionType[]);
 
 export function isUndoableAction(action: PlaylistAction): boolean {

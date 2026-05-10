@@ -46,7 +46,28 @@ export const selectTool: PlaylistTool = {
     }
 
     if (hit.kind === "clip" || hit.kind === "automation-body") {
+      const ctrl = event.ctrlKey || event.metaKey;
+      const shift = event.shiftKey;
       const selected = new Set(state.selection.clipIds);
+
+      // Modifier-driven selection updates. Discrete clicks shouldn't initiate
+      // a clip-drag (FL Studio: ctrl/shift toggle/range only); plain click
+      // updates selection then starts a drag if the clip ends up selected.
+      if (ctrl && shift) {
+        if (!selected.has(hit.clip.id)) {
+          core.addClipsToSelection([hit.clip.id]);
+        }
+        return null;
+      }
+      if (ctrl) {
+        core.toggleClipSelection(hit.clip.id);
+        return null;
+      }
+      if (shift) {
+        core.extendClipSelection(hit.clip.id);
+        return null;
+      }
+
       const draggingClips = selected.has(hit.clip.id)
         ? state.clips.filter((candidate) => selected.has(candidate.id))
         : [hit.clip];
@@ -67,13 +88,17 @@ export const selectTool: PlaylistTool = {
       };
     }
 
-    // Empty timeline area: clear selection and start a marquee.
-    core.setSelection({ clipIds: [], automationPointIds: [] });
+    // Empty timeline area: marquee. Ctrl or Shift makes it additive.
+    const additive = event.ctrlKey || event.metaKey || event.shiftKey;
+    if (!additive) {
+      core.setSelection({ clipIds: [], automationPointIds: [] });
+    }
     core.setMarquee({ start: point, current: point });
     return {
       kind: "marquee",
       pointerId: event.pointerId,
       startPoint: point,
+      additive,
     };
   },
 };

@@ -145,7 +145,7 @@ function setCursor(
   host.style.cursor = getTool(toolId).cursor;
 }
 
-function selectClipsInMarquee(core: PlaylistCore): void {
+function selectClipsInMarquee(core: PlaylistCore, additive: boolean): void {
   const presentation = core.getPresentation();
   const marquee = presentation.state.marquee;
 
@@ -163,7 +163,7 @@ function selectClipsInMarquee(core: PlaylistCore): void {
     .filter((view) => rectsIntersect(rect, view.rect))
     .map((view) => view.clip.id);
 
-  core.setSelection({ clipIds, automationPointIds: [] });
+  core.setClipSelection(clipIds, { additive });
 }
 
 function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
@@ -490,7 +490,7 @@ export function createPlaylistInteractionController(
 
     if (gesture.kind === "marquee") {
       core.setMarquee({ start: gesture.startPoint, current: point });
-      selectClipsInMarquee(core);
+      selectClipsInMarquee(core, gesture.additive);
       event.preventDefault();
       return;
     }
@@ -710,8 +710,9 @@ export function createPlaylistInteractionController(
 
   const handleKeyDown = (event: KeyboardEvent): void => {
     const cmd = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
 
-    if (cmd && (event.key === "z" || event.key === "Z")) {
+    if (cmd && key === "z") {
       if (event.shiftKey) {
         core.redo();
       } else {
@@ -721,8 +722,50 @@ export function createPlaylistInteractionController(
       return;
     }
 
-    if (cmd && (event.key === "y" || event.key === "Y")) {
+    if (cmd && key === "y") {
       core.redo();
+      event.preventDefault();
+      return;
+    }
+
+    if (cmd && !event.shiftKey && key === "a") {
+      core.selectAllClips();
+      event.preventDefault();
+      return;
+    }
+
+    if (cmd && !event.shiftKey && key === "d") {
+      core.deselectAll();
+      event.preventDefault();
+      return;
+    }
+
+    if (!cmd && event.shiftKey && (event.key === "I" || event.key === "i")) {
+      core.invertClipSelection();
+      event.preventDefault();
+      return;
+    }
+
+    if (cmd && !event.shiftKey && key === "c") {
+      core.copyToClipboard();
+      event.preventDefault();
+      return;
+    }
+
+    if (cmd && !event.shiftKey && key === "x") {
+      core.cutSelection();
+      event.preventDefault();
+      return;
+    }
+
+    if (cmd && !event.shiftKey && key === "v") {
+      core.pasteClipboard();
+      event.preventDefault();
+      return;
+    }
+
+    if (cmd && !event.shiftKey && key === "b") {
+      core.duplicateSelectionRight();
       event.preventDefault();
       return;
     }

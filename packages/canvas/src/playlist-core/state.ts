@@ -3,7 +3,11 @@ import {
   type PlaylistAction,
   type PlaylistClipMoveUpdate,
 } from "./actions";
-import { getTrackIdByIndex, isAutomationClip } from "./geometry";
+import {
+  getTrackIdByIndex,
+  getTrackIndexById,
+  isAutomationClip,
+} from "./geometry";
 import {
   canRedo,
   canUndo,
@@ -20,6 +24,7 @@ import {
   type PlaylistAutomationPoint,
   type PlaylistClip,
   type PlaylistClipType,
+  type PlaylistClipboard,
   type PlaylistContextMenu,
   type PlaylistMarquee,
   type PlaylistMetrics,
@@ -32,6 +37,7 @@ import {
 import type { PlaylistPresentation } from "./presentation";
 import { createPlaylistPresentation } from "./presentation";
 import { makeClipId, makePointId } from "./state-track-helpers";
+import { cloneClip } from "./state-utils";
 import { normalizeState } from "./state-utils";
 
 export type { PlaylistClipMoveUpdate } from "./actions";
@@ -360,6 +366,191 @@ export class PlaylistCore {
     this.dispatch({ type: "TOGGLE_CLIP_MUTE", clipId });
   }
 
+  // Selection helpers (UI-only, not undoable).
+  selectAllClips(): void {
+    this.dispatch({ type: "SELECT_ALL_CLIPS" });
+  }
+
+  deselectAll(): void {
+    this.dispatch({
+      type: "SET_SELECTION",
+      selection: { clipIds: [], automationPointIds: [] },
+    });
+  }
+
+  invertClipSelection(): void {
+    this.dispatch({ type: "INVERT_CLIP_SELECTION" });
+  }
+
+  toggleClipSelection(clipId: string): void {
+    const current = this.history.present.selection.clipIds;
+    const next = current.includes(clipId)
+      ? current.filter((id) => id !== clipId)
+      : [...current, clipId];
+    this.setSelection({ clipIds: next, automationPointIds: [] });
+  }
+
+  addClipsToSelection(clipIds: string[]): void {
+    const current = new Set(this.history.present.selection.clipIds);
+    for (const id of clipIds) {
+      current.add(id);
+    }
+    this.setSelection({
+      clipIds: Array.from(current),
+      automationPointIds: [],
+    });
+  }
+
+  setClipSelection(clipIds: string[], options: { additive?: boolean } = {}): void {
+    if (options.additive) {
+      this.addClipsToSelection(clipIds);
+      return;
+    }
+    this.setSelection({
+      clipIds: [...clipIds],
+      automationPointIds: [],
+    });
+  }
+
+  // Range select between an anchor (first id in current selection, or the
+  // target if selection is empty) and the target, inclusive, ordered by start.
+  extendClipSelection(targetClipId: string): void {
+    const state = this.history.present;
+    const sorted = [...state.clips].sort((a, b) => a.start - b.start);
+    const anchor =
+      state.selection.clipIds.length > 0
+        ? state.selection.clipIds[0]!
+        : targetClipId;
+    const anchorIdx = sorted.findIndex((c) => c.id === anchor);
+    const targetIdx = sorted.findIndex((c) => c.id === targetClipId);
+    if (anchorIdx < 0 || targetIdx < 0) {
+      this.setSelection({
+        clipIds: [targetClipId],
+        automationPointIds: [],
+      });
+      return;
+    }
+    const [from, to] =
+      anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+    const clipIds = sorted.slice(from, to + 1).map((c) => c.id);
+    this.setSelection({ clipIds, automationPointIds: [] });
+  }
+
+  // Clipboard operations.
+  copyToClipboard(): boolean {
+    const state = this.history.present;
+    const ids = new Set(state.selection.clipIds);
+    const selected = state.clips.filter((clip) => ids.has(clip.id));
+    if (selected.length === 0) {
+      return false;
+    }
+    const minStart = selected.reduce(
+      (min, clip) => Math.min(min, clip.start),
+      Number.POSITIVE_INFINITY,
+    );
+    const maxEnd = selected.reduce(
+      (max, clip) => Math.max(max, clip.start + clip.duration),
+      0,
+    );
+    const trackIndices = selected.map((clip) =>
+      getTrackIndexById(state, clip.trackId),
+    );
+    const baseTrackIndex = Math.min(...trackIndices);
+    const clipboard: PlaylistClipboard = {
+      entries: selected.map((clip, i) => ({
+        clip: cloneClip(clip),
+        startOffset: clip.start - minStart,
+        trackOffset: trackIndices[i]! - baseTrackIndex,
+      })),
+      span: maxEnd - minStart,
+    };
+    this.dispatch({ type: "SET_CLIPBOARD", clipboard });
+    return true;
+  }
+
+  cutSelection(): boolean {
+    if (this.history.present.selection.clipIds.length === 0) {
+      return false;
+    }
+    this.beginGesture();
+    this.copyToClipboard();
+    this.removeSelected();
+    this.endGesture();
+    return true;
+  }
+
+  pasteClipboard(
+    options: { atTime?: number; atTrackIndex?: number } = {},
+  ): string[] {
+    const state = this.history.present;
+    if (!state.clipboard || state.clipboard.entries.length === 0) {
+      return [];
+    }
+    const startTime = options.atTime ?? state.playPosition.time;
+    const baseTrackIndex =
+      options.atTrackIndex ?? selectionBaseTrackIndex(state);
+    const newEntries: { clip: PlaylistClip; trackIndex: number }[] = [];
+    let workingClips = [...state.clips];
+    for (const entry of state.clipboard.entries) {
+      const id = makeClipId(workingClips);
+      const trackIndex = Math.max(0, baseTrackIndex + entry.trackOffset);
+      const newClip: PlaylistClip = {
+        ...cloneClip(entry.clip),
+        id,
+        start: Math.max(0, startTime + entry.startOffset),
+      };
+      newEntries.push({ clip: newClip, trackIndex });
+      workingClips = [...workingClips, newClip];
+    }
+    const selectIds = newEntries.map((entry) => entry.clip.id);
+    this.dispatch({
+      type: "PASTE_CLIPS",
+      entries: newEntries,
+      selectIds,
+    });
+    return selectIds;
+  }
+
+  duplicateSelectionRight(): string[] {
+    const state = this.history.present;
+    const ids = new Set(state.selection.clipIds);
+    const selected = state.clips.filter((clip) => ids.has(clip.id));
+    if (selected.length === 0) {
+      return [];
+    }
+    const minStart = selected.reduce(
+      (min, clip) => Math.min(min, clip.start),
+      Number.POSITIVE_INFINITY,
+    );
+    const maxEnd = selected.reduce(
+      (max, clip) => Math.max(max, clip.start + clip.duration),
+      0,
+    );
+    const span = maxEnd - minStart;
+    const newEntries: { clip: PlaylistClip; trackIndex: number }[] = [];
+    let workingClips = [...state.clips];
+    for (const clip of selected) {
+      const id = makeClipId(workingClips);
+      const newClip: PlaylistClip = {
+        ...cloneClip(clip),
+        id,
+        start: clip.start + span,
+      };
+      newEntries.push({
+        clip: newClip,
+        trackIndex: getTrackIndexById(state, clip.trackId),
+      });
+      workingClips = [...workingClips, newClip];
+    }
+    const selectIds = newEntries.map((entry) => entry.clip.id);
+    this.dispatch({
+      type: "PASTE_CLIPS",
+      entries: newEntries,
+      selectIds,
+    });
+    return selectIds;
+  }
+
   // Notify subscribers about the latest committed state.
   private notify(): void {
     this.presentationCache = null;
@@ -374,4 +565,20 @@ export function createPlaylistCore(
   options?: PlaylistCoreOptions,
 ): PlaylistCore {
   return new PlaylistCore(initialState, options);
+}
+
+function selectionBaseTrackIndex(state: PlaylistState): number {
+  if (state.selection.clipIds.length === 0) {
+    return 0;
+  }
+  let min = Number.POSITIVE_INFINITY;
+  for (const id of state.selection.clipIds) {
+    const clip = state.clips.find((c) => c.id === id);
+    if (!clip) continue;
+    const idx = getTrackIndexById(state, clip.trackId);
+    if (idx < min) {
+      min = idx;
+    }
+  }
+  return Number.isFinite(min) ? min : 0;
 }

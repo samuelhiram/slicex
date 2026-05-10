@@ -52,6 +52,7 @@ function createBaseState(): PlaylistState {
     hover: null,
     playPosition: { time: 0, isRunning: false },
     tool: "select",
+    clipboard: null,
   };
 }
 

@@ -55,6 +55,16 @@ export function cloneState(state: PlaylistState): PlaylistState {
     hover: state.hover ? { ...state.hover } : null,
     playPosition: { ...state.playPosition },
     tool: state.tool ?? "select",
+    clipboard: state.clipboard
+      ? {
+          entries: state.clipboard.entries.map((entry) => ({
+            clip: cloneClip(entry.clip),
+            startOffset: entry.startOffset,
+            trackOffset: entry.trackOffset,
+          })),
+          span: state.clipboard.span,
+        }
+      : null,
   };
 }
 
