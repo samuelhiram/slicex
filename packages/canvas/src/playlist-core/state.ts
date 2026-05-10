@@ -1,4 +1,20 @@
-import { clamp, getTrackIdByIndex, isAutomationClip } from "./geometry";
+import {
+  isUndoableAction,
+  type PlaylistAction,
+  type PlaylistClipMoveUpdate,
+} from "./actions";
+import { isAutomationClip } from "./geometry";
+import {
+  canRedo,
+  canUndo,
+  createHistory,
+  pushHistory,
+  redoHistory,
+  replacePresent,
+  undoHistory,
+  type History,
+} from "./history";
+import { playlistReducer } from "./reducer";
 import {
   DEFAULT_PLAYLIST_METRICS,
   type PlaylistContextMenu,
@@ -11,14 +27,14 @@ import {
 } from "./types";
 import type { PlaylistPresentation } from "./presentation";
 import { createPlaylistPresentation } from "./presentation";
-import {
-  createInsertedTrack,
-  makePointId,
-  materializeTracksThrough,
-} from "./state-track-helpers";
-import { normalizeState, sortAutomationPoints } from "./state-utils";
+import { makePointId } from "./state-track-helpers";
+import { normalizeState } from "./state-utils";
 
-// PlaylistCore is the mutable facade. Keep pure transforms in the helper modules.
+export type { PlaylistClipMoveUpdate } from "./actions";
+
+// PlaylistCore is the mutable facade backed by a pure reducer + history stack.
+// The public API mirrors the original mutator surface so consumers (controller,
+// shell) keep working unchanged. Internally each mutator dispatches an action.
 export interface PlaylistCoreOptions {
   metrics?: PlaylistMetrics;
 }
@@ -27,14 +43,8 @@ export interface PlaylistSubscription {
   unsubscribe: () => void;
 }
 
-export interface PlaylistClipMoveUpdate {
-  id: string;
-  start: number;
-  trackIndex: number;
-}
-
 export class PlaylistCore {
-  private state: PlaylistState;
+  private history: History<PlaylistState>;
 
   private readonly listeners = new Set<PlaylistStateListener>();
 
@@ -43,36 +53,39 @@ export class PlaylistCore {
     presentation: PlaylistPresentation;
   } | null = null;
 
+  private gestureDepth = 0;
+  private gestureSnapshot: PlaylistState | null = null;
+
   readonly metrics: PlaylistMetrics;
 
   constructor(initialState: PlaylistState, options: PlaylistCoreOptions = {}) {
     this.metrics = options.metrics ?? DEFAULT_PLAYLIST_METRICS;
-    this.state = normalizeState(initialState, this.metrics);
+    this.history = createHistory(normalizeState(initialState, this.metrics));
   }
 
   // Lifecycle and derived presentation.
   getState(): PlaylistState {
-    return this.state;
+    return this.history.present;
   }
 
   getPresentation(): PlaylistPresentation {
-    if (this.presentationCache?.state === this.state) {
+    if (this.presentationCache?.state === this.history.present) {
       return this.presentationCache.presentation;
     }
-
-    const presentation = createPlaylistPresentation(this.state, this.metrics);
+    const presentation = createPlaylistPresentation(
+      this.history.present,
+      this.metrics,
+    );
     this.presentationCache = {
-      state: this.state,
+      state: this.history.present,
       presentation,
     };
-
     return presentation;
   }
 
   // Subscription management.
   subscribe(listener: PlaylistStateListener): PlaylistSubscription {
     this.listeners.add(listener);
-
     return {
       unsubscribe: () => {
         this.listeners.delete(listener);
@@ -80,260 +93,167 @@ export class PlaylistCore {
     };
   }
 
+  // Generic dispatch — any caller (including future tools/gestures) can use this directly.
+  dispatch(action: PlaylistAction): void {
+    const previous = this.history.present;
+    const next = normalizeState(
+      playlistReducer(previous, action, this.metrics),
+      this.metrics,
+    );
+    if (next === previous) {
+      return;
+    }
+    if (isUndoableAction(action) && this.gestureDepth === 0) {
+      this.history = pushHistory(this.history, next);
+    } else {
+      this.history = replacePresent(this.history, next);
+    }
+    this.notify();
+  }
+
+  // Gesture brackets — coalesce many transient mutations into a single undo entry.
+  beginGesture(): void {
+    if (this.gestureDepth === 0) {
+      this.gestureSnapshot = this.history.present;
+    }
+    this.gestureDepth += 1;
+  }
+
+  endGesture(): void {
+    if (this.gestureDepth === 0) {
+      return;
+    }
+    this.gestureDepth -= 1;
+    if (this.gestureDepth > 0 || !this.gestureSnapshot) {
+      return;
+    }
+    const snapshot = this.gestureSnapshot;
+    this.gestureSnapshot = null;
+    if (snapshot === this.history.present) {
+      return;
+    }
+    this.history = {
+      past: [...this.history.past, snapshot],
+      present: this.history.present,
+      future: [],
+    };
+    this.notify();
+  }
+
+  // Undo / redo.
+  undo(): boolean {
+    if (!canUndo(this.history)) {
+      return false;
+    }
+    this.history = undoHistory(this.history);
+    this.gestureDepth = 0;
+    this.gestureSnapshot = null;
+    this.notify();
+    return true;
+  }
+
+  redo(): boolean {
+    if (!canRedo(this.history)) {
+      return false;
+    }
+    this.history = redoHistory(this.history);
+    this.gestureDepth = 0;
+    this.gestureSnapshot = null;
+    this.notify();
+    return true;
+  }
+
+  canUndo(): boolean {
+    return canUndo(this.history);
+  }
+
+  canRedo(): boolean {
+    return canRedo(this.history);
+  }
+
   // Viewport and selection.
   setViewportSize(width: number, height: number): void {
-    this.commit({
-      ...this.state,
-      viewport: {
-        ...this.state.viewport,
-        width: Math.max(1, Math.round(width)),
-        height: Math.max(1, Math.round(height)),
-      },
-    });
+    this.dispatch({ type: "SET_VIEWPORT_SIZE", width, height });
   }
 
   updateViewport(
     patch: Partial<PlaylistState["viewport"]>,
     options: { clamp?: boolean } = {},
   ): void {
-    const next = {
-      ...this.state,
-      viewport: {
-        ...this.state.viewport,
-        ...patch,
-      },
-    };
-
-    if (options.clamp === false) {
-      this.commit(next);
-      return;
-    }
-
-    this.commit(normalizeState(next, this.metrics));
+    this.dispatch({
+      type: "UPDATE_VIEWPORT",
+      patch,
+      clamp: options.clamp !== false,
+    });
   }
 
   setSelection(selection: Partial<PlaylistSelection>): void {
-    this.commit({
-      ...this.state,
-      selection: {
-        clipIds: selection.clipIds
-          ? [...selection.clipIds]
-          : this.state.selection.clipIds,
-        automationPointIds: selection.automationPointIds
-          ? [...selection.automationPointIds]
-          : this.state.selection.automationPointIds,
-      },
-    });
+    this.dispatch({ type: "SET_SELECTION", selection });
   }
 
   setMarquee(marquee: PlaylistMarquee | null): void {
-    this.commit({
-      ...this.state,
-      marquee: marquee
-        ? {
-            start: { ...marquee.start },
-            current: { ...marquee.current },
-          }
-        : null,
-    });
+    this.dispatch({ type: "SET_MARQUEE", marquee });
   }
 
   setContextMenu(contextMenu: PlaylistContextMenu): void {
-    this.commit({
-      ...this.state,
-      contextMenu: contextMenu
-        ? {
-            ...contextMenu,
-            position: { ...contextMenu.position },
-          }
-        : null,
-    });
+    this.dispatch({ type: "SET_CONTEXT_MENU", contextMenu });
   }
 
   openTrackContextMenu(trackIndex: number, position: PlaylistPoint): void {
-    const materialized = materializeTracksThrough(this.state, trackIndex);
-
-    this.commit({
-      ...materialized,
-      contextMenu: {
-        kind: "track",
-        trackIndex: Math.max(0, Math.floor(trackIndex)),
-        position: { ...position },
-      },
-    });
+    this.dispatch({ type: "OPEN_TRACK_CONTEXT_MENU", trackIndex, position });
   }
 
   closeContextMenu(): void {
-    this.setContextMenu(null);
+    this.dispatch({ type: "CLOSE_CONTEXT_MENU" });
   }
 
   setHover(hover: PlaylistState["hover"]): void {
-    this.commit({
-      ...this.state,
-      hover: hover ? { ...hover } : null,
-    });
+    this.dispatch({ type: "SET_HOVER", hover });
   }
 
   setPlayPosition(time: number): void {
-    this.commit({
-      ...this.state,
-      playPosition: {
-        ...this.state.playPosition,
-        time: Math.max(0, time),
-      },
-    });
+    this.dispatch({ type: "SET_PLAY_POSITION", time });
   }
 
   setPlayPositionRunning(isRunning: boolean): void {
-    this.commit({
-      ...this.state,
-      playPosition: {
-        ...this.state.playPosition,
-        isRunning,
-      },
-    });
+    this.dispatch({ type: "SET_PLAY_RUNNING", isRunning });
   }
 
   advancePlayPosition(deltaTime: number): void {
-    if (!this.state.playPosition.isRunning) {
-      return;
-    }
-
-    this.setPlayPosition(this.state.playPosition.time + Math.max(0, deltaTime));
+    this.dispatch({ type: "ADVANCE_PLAY_POSITION", deltaTime });
   }
 
   // Track and clip mutations.
   moveClips(updates: PlaylistClipMoveUpdate[]): void {
-    const byId = new Map(updates.map((update) => [update.id, update]));
-    const maxTrackIndex = updates.reduce(
-      (max, update) =>
-        Math.max(max, Math.max(0, Math.floor(update.trackIndex))),
-      this.state.tracks.length - 1,
-    );
-    const state = materializeTracksThrough(this.state, maxTrackIndex);
-    const clips = state.clips.map((clip) => {
-      const update = byId.get(clip.id);
-
-      if (!update) {
-        return clip;
-      }
-
-      return {
-        ...clip,
-        start: Math.max(0, update.start),
-        trackId: getTrackIdByIndex(state, update.trackIndex),
-      };
-    });
-
-    this.commit({ ...state, clips });
+    this.dispatch({ type: "MOVE_CLIPS", updates });
   }
 
   clearTrackClips(trackIndex: number): void {
-    const state = materializeTracksThrough(this.state, trackIndex);
-    const trackId = getTrackIdByIndex(state, trackIndex);
-    const removedIds = new Set(
-      state.clips
-        .filter((clip) => clip.trackId === trackId)
-        .map((clip) => clip.id),
-    );
-
-    this.commit({
-      ...state,
-      clips: state.clips.filter((clip) => clip.trackId !== trackId),
-      selection: {
-        clipIds: state.selection.clipIds.filter((id) => !removedIds.has(id)),
-        automationPointIds: state.selection.automationPointIds,
-      },
-      contextMenu: null,
-    });
+    this.dispatch({ type: "CLEAR_TRACK_CLIPS", trackIndex });
   }
 
   deleteSelectedClipsOnTrack(trackIndex: number): void {
-    const state = materializeTracksThrough(this.state, trackIndex);
-    const trackId = getTrackIdByIndex(state, trackIndex);
-    const selected = new Set(state.selection.clipIds);
-    const removedIds = new Set(
-      state.clips
-        .filter((clip) => clip.trackId === trackId && selected.has(clip.id))
-        .map((clip) => clip.id),
-    );
-
-    this.commit({
-      ...state,
-      clips: state.clips.filter((clip) => !removedIds.has(clip.id)),
-      selection: {
-        clipIds: state.selection.clipIds.filter((id) => !removedIds.has(id)),
-        automationPointIds: state.selection.automationPointIds,
-      },
-      contextMenu: null,
-    });
+    this.dispatch({ type: "DELETE_SELECTED_CLIPS_ON_TRACK", trackIndex });
   }
 
   renameTrack(trackIndex: number, label: string): void {
-    const state = materializeTracksThrough(this.state, trackIndex);
-    const tracks = state.tracks.map((track, index) =>
-      index === trackIndex ? { ...track, label } : track,
-    );
-
-    this.commit({ ...state, tracks, contextMenu: null });
+    this.dispatch({ type: "RENAME_TRACK", trackIndex, label });
   }
 
   recolorTrack(trackIndex: number, color: string): void {
-    const state = materializeTracksThrough(this.state, trackIndex);
-    const tracks = state.tracks.map((track, index) =>
-      index === trackIndex ? { ...track, color } : track,
-    );
-
-    this.commit({ ...state, tracks, contextMenu: null });
+    this.dispatch({ type: "RECOLOR_TRACK", trackIndex, color });
   }
 
   insertTrackBelow(trackIndex: number): void {
-    const state = materializeTracksThrough(this.state, trackIndex);
-    const tracks = [...state.tracks];
-    tracks.splice(trackIndex + 1, 0, createInsertedTrack(tracks, trackIndex));
-
-    this.commit({ ...state, tracks, contextMenu: null });
+    this.dispatch({ type: "INSERT_TRACK_BELOW", trackIndex });
   }
 
   deleteEmptyTrack(trackIndex: number): void {
-    const state = materializeTracksThrough(this.state, trackIndex);
-    const trackId = getTrackIdByIndex(state, trackIndex);
-
-    if (
-      state.clips.some((clip) => clip.trackId === trackId) ||
-      state.tracks.length <= 1
-    ) {
-      this.closeContextMenu();
-      return;
-    }
-
-    this.commit({
-      ...state,
-      tracks: state.tracks.filter((_, index) => index !== trackIndex),
-      contextMenu: null,
-    });
+    this.dispatch({ type: "DELETE_EMPTY_TRACK", trackIndex });
   }
 
-  // Automation mutations.
   resizeClip(clipId: string, edge: "left" | "right", time: number): void {
-    const clips = this.state.clips.map((clip) => {
-      if (clip.id !== clipId) {
-        return clip;
-      }
-
-      const start = clip.start;
-      const end = clip.start + clip.duration;
-
-      if (edge === "right") {
-        const nextEnd = Math.max(start + this.metrics.minClipDuration, time);
-        return { ...clip, duration: nextEnd - start };
-      }
-
-      const nextStart = clamp(time, 0, end - this.metrics.minClipDuration);
-      return { ...clip, start: nextStart, duration: end - nextStart };
-    });
-
-    this.commit({ ...this.state, clips });
+    this.dispatch({ type: "RESIZE_CLIP", clipId, edge, time });
   }
 
   moveAutomationPoint(
@@ -342,28 +262,13 @@ export class PlaylistCore {
     time: number,
     value: number,
   ): void {
-    const clips = this.state.clips.map((clip) => {
-      if (clip.id !== clipId || !isAutomationClip(clip)) {
-        return clip;
-      }
-
-      return {
-        ...clip,
-        points: sortAutomationPoints(
-          clip.points.map((point) =>
-            point.id === pointId
-              ? {
-                  ...point,
-                  time: clamp(time, 0, clip.duration),
-                  value: clamp(value, 0, 1),
-                }
-              : point,
-          ),
-        ),
-      };
+    this.dispatch({
+      type: "MOVE_AUTOMATION_POINT",
+      clipId,
+      pointId,
+      time,
+      value,
     });
-
-    this.commit({ ...this.state, clips });
   }
 
   addAutomationPoint(
@@ -371,100 +276,36 @@ export class PlaylistCore {
     time: number,
     value: number,
   ): string | null {
-    let createdId: string | null = null;
-    const clips = this.state.clips.map((clip) => {
-      if (clip.id !== clipId || !isAutomationClip(clip)) {
-        return clip;
-      }
-
-      createdId = makePointId(clip);
-
-      return {
-        ...clip,
-        points: sortAutomationPoints([
-          ...clip.points,
-          {
-            id: createdId,
-            time: clamp(time, 0, clip.duration),
-            value: clamp(value, 0, 1),
-          },
-        ]),
-      };
-    });
-
-    if (!createdId) {
+    const clip = this.history.present.clips.find(
+      (candidate) => candidate.id === clipId,
+    );
+    if (!clip || !isAutomationClip(clip)) {
       return null;
     }
-
-    this.commit({
-      ...this.state,
-      clips,
-      selection: { clipIds: [clipId], automationPointIds: [createdId] },
+    const pointId = makePointId(clip);
+    this.dispatch({
+      type: "ADD_AUTOMATION_POINT",
+      clipId,
+      pointId,
+      time,
+      value,
     });
-
-    return createdId;
+    return pointId;
   }
 
   removeAutomationPoint(clipId: string, pointId: string): void {
-    const clips = this.state.clips.map((clip) => {
-      if (clip.id !== clipId || !isAutomationClip(clip)) {
-        return clip;
-      }
-
-      if (clip.points.length <= 2) {
-        return clip;
-      }
-
-      return {
-        ...clip,
-        points: clip.points.filter((point) => point.id !== pointId),
-      };
-    });
-
-    this.commit({
-      ...this.state,
-      clips,
-      selection: {
-        clipIds: this.state.selection.clipIds,
-        automationPointIds: this.state.selection.automationPointIds.filter(
-          (id) => id !== pointId,
-        ),
-      },
-    });
+    this.dispatch({ type: "REMOVE_AUTOMATION_POINT", clipId, pointId });
   }
 
   removeSelected(): void {
-    const selectedClipIds = new Set(this.state.selection.clipIds);
-    const selectedPointIds = new Set(this.state.selection.automationPointIds);
-
-    const clips = this.state.clips
-      .filter((clip) => !selectedClipIds.has(clip.id))
-      .map((clip) => {
-        if (!isAutomationClip(clip)) {
-          return clip;
-        }
-
-        const nextPoints = clip.points.filter(
-          (point) => !selectedPointIds.has(point.id),
-        );
-
-        return nextPoints.length >= 2 ? { ...clip, points: nextPoints } : clip;
-      });
-
-    this.commit({
-      ...this.state,
-      clips,
-      selection: { clipIds: [], automationPointIds: [] },
-    });
+    this.dispatch({ type: "REMOVE_SELECTED" });
   }
 
-  // Commit and notify listeners.
-  private commit(nextState: PlaylistState): void {
-    this.state = normalizeState(nextState, this.metrics);
+  // Notify subscribers about the latest committed state.
+  private notify(): void {
     this.presentationCache = null;
-
     for (const listener of this.listeners) {
-      listener(this.state);
+      listener(this.history.present);
     }
   }
 }

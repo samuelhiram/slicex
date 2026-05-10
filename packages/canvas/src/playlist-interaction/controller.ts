@@ -491,6 +491,7 @@ export function createPlaylistInteractionController(
         originalTime: automationPoint.time,
         originalValue: automationPoint.value,
       };
+      core.beginGesture();
       host.setPointerCapture?.(event.pointerId);
       setCursor(host, hit, activeGesture);
       event.preventDefault();
@@ -505,6 +506,7 @@ export function createPlaylistInteractionController(
         clipId: hit.clip.id,
         edge: hit.kind === "resize-left" ? "left" : "right",
       };
+      core.beginGesture();
       host.setPointerCapture?.(event.pointerId);
       setCursor(host, hit, activeGesture);
       event.preventDefault();
@@ -530,6 +532,7 @@ export function createPlaylistInteractionController(
           trackIndex: getTrackIndexById(state, clip.trackId),
         })),
       };
+      core.beginGesture();
       host.setPointerCapture?.(event.pointerId);
       setCursor(host, hit, activeGesture);
       event.preventDefault();
@@ -689,6 +692,14 @@ export function createPlaylistInteractionController(
       core.setMarquee(null);
     }
 
+    if (
+      activeGesture.kind === "clip-drag" ||
+      activeGesture.kind === "clip-resize" ||
+      activeGesture.kind === "automation-point-drag"
+    ) {
+      core.endGesture();
+    }
+
     activeGesture = null;
     host.releasePointerCapture?.(event.pointerId);
     setCursor(
@@ -736,6 +747,24 @@ export function createPlaylistInteractionController(
   };
 
   const handleKeyDown = (event: KeyboardEvent): void => {
+    const cmd = event.ctrlKey || event.metaKey;
+
+    if (cmd && (event.key === "z" || event.key === "Z")) {
+      if (event.shiftKey) {
+        core.redo();
+      } else {
+        core.undo();
+      }
+      event.preventDefault();
+      return;
+    }
+
+    if (cmd && (event.key === "y" || event.key === "Y")) {
+      core.redo();
+      event.preventDefault();
+      return;
+    }
+
     if (event.key === "Delete" || event.key === "Backspace") {
       core.removeSelected();
       event.preventDefault();

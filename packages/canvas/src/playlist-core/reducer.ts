@@ -1,0 +1,435 @@
+import type { PlaylistAction } from "./actions";
+import {
+  clamp,
+  getMaxScrollX,
+  getMaxScrollY,
+  getTrackIdByIndex,
+  isAutomationClip,
+} from "./geometry";
+import {
+  createInsertedTrack,
+  materializeTracksThrough,
+} from "./state-track-helpers";
+import { sortAutomationPoints } from "./state-utils";
+import type { PlaylistMetrics, PlaylistState } from "./types";
+
+// Pure reducer. Same input + action always produces the same output.
+// Normalization (clamp viewport, sort points, etc.) runs after dispatch in PlaylistCore.
+export function playlistReducer(
+  state: PlaylistState,
+  action: PlaylistAction,
+  metrics: PlaylistMetrics,
+): PlaylistState {
+  switch (action.type) {
+    case "MOVE_CLIPS":
+      return moveClips(state, action.updates);
+    case "RESIZE_CLIP":
+      return resizeClip(state, action.clipId, action.edge, action.time, metrics);
+    case "ADD_AUTOMATION_POINT":
+      return addAutomationPoint(
+        state,
+        action.clipId,
+        action.pointId,
+        action.time,
+        action.value,
+      );
+    case "MOVE_AUTOMATION_POINT":
+      return moveAutomationPoint(
+        state,
+        action.clipId,
+        action.pointId,
+        action.time,
+        action.value,
+      );
+    case "REMOVE_AUTOMATION_POINT":
+      return removeAutomationPoint(state, action.clipId, action.pointId);
+    case "REMOVE_SELECTED":
+      return removeSelected(state);
+    case "CLEAR_TRACK_CLIPS":
+      return clearTrackClips(state, action.trackIndex);
+    case "DELETE_SELECTED_CLIPS_ON_TRACK":
+      return deleteSelectedClipsOnTrack(state, action.trackIndex);
+    case "RENAME_TRACK":
+      return renameTrack(state, action.trackIndex, action.label);
+    case "RECOLOR_TRACK":
+      return recolorTrack(state, action.trackIndex, action.color);
+    case "INSERT_TRACK_BELOW":
+      return insertTrackBelow(state, action.trackIndex);
+    case "DELETE_EMPTY_TRACK":
+      return deleteEmptyTrack(state, action.trackIndex);
+    case "SET_SELECTION":
+      return {
+        ...state,
+        selection: {
+          clipIds: action.selection.clipIds
+            ? [...action.selection.clipIds]
+            : state.selection.clipIds,
+          automationPointIds: action.selection.automationPointIds
+            ? [...action.selection.automationPointIds]
+            : state.selection.automationPointIds,
+        },
+      };
+    case "SET_MARQUEE":
+      return {
+        ...state,
+        marquee: action.marquee
+          ? {
+              start: { ...action.marquee.start },
+              current: { ...action.marquee.current },
+            }
+          : null,
+      };
+    case "SET_HOVER":
+      return { ...state, hover: action.hover ? { ...action.hover } : null };
+    case "SET_CONTEXT_MENU":
+      return {
+        ...state,
+        contextMenu: action.contextMenu
+          ? {
+              ...action.contextMenu,
+              position: { ...action.contextMenu.position },
+            }
+          : null,
+      };
+    case "OPEN_TRACK_CONTEXT_MENU": {
+      const materialized = materializeTracksThrough(state, action.trackIndex);
+      return {
+        ...materialized,
+        contextMenu: {
+          kind: "track",
+          trackIndex: Math.max(0, Math.floor(action.trackIndex)),
+          position: { ...action.position },
+        },
+      };
+    }
+    case "CLOSE_CONTEXT_MENU":
+      return { ...state, contextMenu: null };
+    case "SET_VIEWPORT_SIZE":
+      return {
+        ...state,
+        viewport: {
+          ...state.viewport,
+          width: Math.max(1, Math.round(action.width)),
+          height: Math.max(1, Math.round(action.height)),
+        },
+      };
+    case "UPDATE_VIEWPORT": {
+      const next: PlaylistState = {
+        ...state,
+        viewport: { ...state.viewport, ...action.patch },
+      };
+      if (!action.clamp) {
+        return next;
+      }
+      next.viewport.pxPerBeat = clamp(
+        next.viewport.pxPerBeat,
+        metrics.minPxPerBeat,
+        metrics.maxPxPerBeat,
+      );
+      next.viewport.scrollX = clamp(
+        next.viewport.scrollX,
+        0,
+        getMaxScrollX(next, metrics),
+      );
+      next.viewport.scrollY = clamp(
+        next.viewport.scrollY,
+        0,
+        getMaxScrollY(next, metrics),
+      );
+      return next;
+    }
+    case "SET_PLAY_POSITION":
+      return {
+        ...state,
+        playPosition: {
+          ...state.playPosition,
+          time: Math.max(0, action.time),
+        },
+      };
+    case "SET_PLAY_RUNNING":
+      return {
+        ...state,
+        playPosition: { ...state.playPosition, isRunning: action.isRunning },
+      };
+    case "ADVANCE_PLAY_POSITION":
+      if (!state.playPosition.isRunning) {
+        return state;
+      }
+      return {
+        ...state,
+        playPosition: {
+          ...state.playPosition,
+          time: Math.max(
+            0,
+            state.playPosition.time + Math.max(0, action.deltaTime),
+          ),
+        },
+      };
+    default: {
+      const exhaustive: never = action;
+      return exhaustive;
+    }
+  }
+}
+
+function moveClips(
+  state: PlaylistState,
+  updates: { id: string; start: number; trackIndex: number }[],
+): PlaylistState {
+  const byId = new Map(updates.map((update) => [update.id, update]));
+  const maxTrackIndex = updates.reduce(
+    (max, update) => Math.max(max, Math.max(0, Math.floor(update.trackIndex))),
+    state.tracks.length - 1,
+  );
+  const materialized = materializeTracksThrough(state, maxTrackIndex);
+  const clips = materialized.clips.map((clip) => {
+    const update = byId.get(clip.id);
+    if (!update) {
+      return clip;
+    }
+    return {
+      ...clip,
+      start: Math.max(0, update.start),
+      trackId: getTrackIdByIndex(materialized, update.trackIndex),
+    };
+  });
+  return { ...materialized, clips };
+}
+
+function resizeClip(
+  state: PlaylistState,
+  clipId: string,
+  edge: "left" | "right",
+  time: number,
+  metrics: PlaylistMetrics,
+): PlaylistState {
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId) {
+      return clip;
+    }
+    const start = clip.start;
+    const end = clip.start + clip.duration;
+    if (edge === "right") {
+      const nextEnd = Math.max(start + metrics.minClipDuration, time);
+      return { ...clip, duration: nextEnd - start };
+    }
+    const nextStart = clamp(time, 0, end - metrics.minClipDuration);
+    return { ...clip, start: nextStart, duration: end - nextStart };
+  });
+  return { ...state, clips };
+}
+
+function addAutomationPoint(
+  state: PlaylistState,
+  clipId: string,
+  pointId: string,
+  time: number,
+  value: number,
+): PlaylistState {
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId || !isAutomationClip(clip)) {
+      return clip;
+    }
+    return {
+      ...clip,
+      points: sortAutomationPoints([
+        ...clip.points,
+        {
+          id: pointId,
+          time: clamp(time, 0, clip.duration),
+          value: clamp(value, 0, 1),
+        },
+      ]),
+    };
+  });
+  return {
+    ...state,
+    clips,
+    selection: { clipIds: [clipId], automationPointIds: [pointId] },
+  };
+}
+
+function moveAutomationPoint(
+  state: PlaylistState,
+  clipId: string,
+  pointId: string,
+  time: number,
+  value: number,
+): PlaylistState {
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId || !isAutomationClip(clip)) {
+      return clip;
+    }
+    return {
+      ...clip,
+      points: sortAutomationPoints(
+        clip.points.map((point) =>
+          point.id === pointId
+            ? {
+                ...point,
+                time: clamp(time, 0, clip.duration),
+                value: clamp(value, 0, 1),
+              }
+            : point,
+        ),
+      ),
+    };
+  });
+  return { ...state, clips };
+}
+
+function removeAutomationPoint(
+  state: PlaylistState,
+  clipId: string,
+  pointId: string,
+): PlaylistState {
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId || !isAutomationClip(clip)) {
+      return clip;
+    }
+    if (clip.points.length <= 2) {
+      return clip;
+    }
+    return {
+      ...clip,
+      points: clip.points.filter((point) => point.id !== pointId),
+    };
+  });
+  return {
+    ...state,
+    clips,
+    selection: {
+      clipIds: state.selection.clipIds,
+      automationPointIds: state.selection.automationPointIds.filter(
+        (id) => id !== pointId,
+      ),
+    },
+  };
+}
+
+function removeSelected(state: PlaylistState): PlaylistState {
+  const selectedClipIds = new Set(state.selection.clipIds);
+  const selectedPointIds = new Set(state.selection.automationPointIds);
+  const clips = state.clips
+    .filter((clip) => !selectedClipIds.has(clip.id))
+    .map((clip) => {
+      if (!isAutomationClip(clip)) {
+        return clip;
+      }
+      const nextPoints = clip.points.filter(
+        (point) => !selectedPointIds.has(point.id),
+      );
+      return nextPoints.length >= 2 ? { ...clip, points: nextPoints } : clip;
+    });
+  return {
+    ...state,
+    clips,
+    selection: { clipIds: [], automationPointIds: [] },
+  };
+}
+
+function clearTrackClips(
+  state: PlaylistState,
+  trackIndex: number,
+): PlaylistState {
+  const materialized = materializeTracksThrough(state, trackIndex);
+  const trackId = getTrackIdByIndex(materialized, trackIndex);
+  const removedIds = new Set(
+    materialized.clips
+      .filter((clip) => clip.trackId === trackId)
+      .map((clip) => clip.id),
+  );
+  return {
+    ...materialized,
+    clips: materialized.clips.filter((clip) => clip.trackId !== trackId),
+    selection: {
+      clipIds: materialized.selection.clipIds.filter(
+        (id) => !removedIds.has(id),
+      ),
+      automationPointIds: materialized.selection.automationPointIds,
+    },
+    contextMenu: null,
+  };
+}
+
+function deleteSelectedClipsOnTrack(
+  state: PlaylistState,
+  trackIndex: number,
+): PlaylistState {
+  const materialized = materializeTracksThrough(state, trackIndex);
+  const trackId = getTrackIdByIndex(materialized, trackIndex);
+  const selected = new Set(materialized.selection.clipIds);
+  const removedIds = new Set(
+    materialized.clips
+      .filter((clip) => clip.trackId === trackId && selected.has(clip.id))
+      .map((clip) => clip.id),
+  );
+  return {
+    ...materialized,
+    clips: materialized.clips.filter((clip) => !removedIds.has(clip.id)),
+    selection: {
+      clipIds: materialized.selection.clipIds.filter(
+        (id) => !removedIds.has(id),
+      ),
+      automationPointIds: materialized.selection.automationPointIds,
+    },
+    contextMenu: null,
+  };
+}
+
+function renameTrack(
+  state: PlaylistState,
+  trackIndex: number,
+  label: string,
+): PlaylistState {
+  const materialized = materializeTracksThrough(state, trackIndex);
+  const tracks = materialized.tracks.map((track, index) =>
+    index === trackIndex ? { ...track, label } : track,
+  );
+  return { ...materialized, tracks, contextMenu: null };
+}
+
+function recolorTrack(
+  state: PlaylistState,
+  trackIndex: number,
+  color: string,
+): PlaylistState {
+  const materialized = materializeTracksThrough(state, trackIndex);
+  const tracks = materialized.tracks.map((track, index) =>
+    index === trackIndex ? { ...track, color } : track,
+  );
+  return { ...materialized, tracks, contextMenu: null };
+}
+
+function insertTrackBelow(
+  state: PlaylistState,
+  trackIndex: number,
+): PlaylistState {
+  const materialized = materializeTracksThrough(state, trackIndex);
+  const tracks = [...materialized.tracks];
+  tracks.splice(
+    trackIndex + 1,
+    0,
+    createInsertedTrack(tracks, trackIndex),
+  );
+  return { ...materialized, tracks, contextMenu: null };
+}
+
+function deleteEmptyTrack(
+  state: PlaylistState,
+  trackIndex: number,
+): PlaylistState {
+  const materialized = materializeTracksThrough(state, trackIndex);
+  const trackId = getTrackIdByIndex(materialized, trackIndex);
+  if (
+    materialized.clips.some((clip) => clip.trackId === trackId) ||
+    materialized.tracks.length <= 1
+  ) {
+    return { ...materialized, contextMenu: null };
+  }
+  return {
+    ...materialized,
+    tracks: materialized.tracks.filter((_, index) => index !== trackIndex),
+    contextMenu: null,
+  };
+}
