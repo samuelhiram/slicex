@@ -45,6 +45,7 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 
 ## Reglas que se aplican aquí
 
+- **Performance es regla dura, no aspiración.** Antes de escribir cualquier código que toque `playlist-core` (reducer), `playlist-interaction` (controller), `playlist-renderer-pixi` (renderer) o el shell React: leer [docs/performance-canon.md](docs/performance-canon.md) y aplicar el patrón obligatorio. El gate `check:arch` ejecuta [scripts/check-perf-patterns.mjs](scripts/check-perf-patterns.mjs) (lint estático de anti-patrones); los budgets viven en [packages/canvas/tests/perf-budget.spec.ts](packages/canvas/tests/perf-budget.spec.ts). Si el patrón cómodo contradice una regla, **buscar el patrón correcto, no relajar la regla**. Ninguna tolerancia se toca para hacer pasar tests — un budget que falla es síntoma correcto de un bug real.
 - **Sin deep imports** entre paquetes. Solo `@slicex/<pkg>` (no `@slicex/<pkg>/src/...`). Lo enforce [scripts/check-imports.mjs](scripts/check-imports.mjs).
 - **Sin mirrors `.js` junto a `.ts`/`.tsx`** en `src/` ni en tests. Lo enforce [scripts/check-js-siblings.mjs](scripts/check-js-siblings.mjs).
 - **`@slicex/core` no hace IO**. La lógica financiera vive ahí, sin React/Pixi/Prisma.

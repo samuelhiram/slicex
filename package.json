@@ -21,7 +21,7 @@
     "test:e2e": "playwright test",
     "test:e2e:static": "node scripts/e2e-static-server.js",
     "check": "pnpm -w -C . typecheck && pnpm -w -C . lint && pnpm -w -C . test:unit",
-    "check:arch": "node scripts/check-imports.mjs && node scripts/check-js-siblings.mjs",
+    "check:arch": "node scripts/check-imports.mjs && node scripts/check-js-siblings.mjs && node scripts/check-perf-patterns.mjs",
     "check:env": "node scripts/sync-env.mjs",
     "check:js-siblings": "node scripts/check-js-siblings.mjs",
     "check:fast": "pnpm -w -s run check:arch && pnpm -w -s run check:env",
