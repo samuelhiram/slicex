@@ -698,7 +698,11 @@ export class PlaylistCore {
             ],
           }
         : { ...baseClip, type: baseClip.type };
-    this.dispatch({ type: "CREATE_CLIP", clip });
+    this.dispatch({
+      type: "CREATE_CLIP",
+      clip,
+      trackIndex: input.trackIndex,
+    });
     return id;
   }
 

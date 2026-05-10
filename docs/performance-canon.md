@@ -209,6 +209,35 @@ Tras 60 segundos de play, el conteo de Text/Sprite/Graphics en cada
 Container del renderer debe ser **constante**. No crece. Verificable
 con `perf-budget.spec.ts` (sección 5).
 
+### 3.7 Brush stroke pattern (Paint y futuros tools de "pintar arrastrando")
+
+Cualquier tool que cree clips/cells por drag (Paint, futuros tools
+similares) **debe** componer los primitivos de
+`packages/canvas/src/playlist-interaction/brush.ts`:
+
+- `buildBrushOcclusion(state, snapStep)` — seed O(N) en pointerdown que
+  registra cada celda snapped que ya está cubierta por algún clip. La
+  consulta `has()` y la mutación `add()` son O(1). El tool **nunca**
+  debe re-escanear `state.clips` en cada pointermove para detectar
+  colisiones — eso es regresión §2.3.
+- `interpolateBrushPath(from, to, snapStep)` — devuelve la lista de
+  celdas snapped a lo largo del segmento, ya deduplicadas. Garantiza
+  que un pointermove rápido nunca salte celdas intermedias.
+- `brushSnapStep(state, metrics)` — resuelve el step canónico para la
+  brocha. Para modos no-grid (`none`, `events`) cae a 1 beat para que
+  la interpolación siga funcionando.
+
+El gesture asociado (e.g. `paint-drag`) **debe** persistir el
+`BrushOcclusion` y el `snapStep` en su payload para que `pointermove`
+no los recalcule. El controller dispatcha `CREATE_CLIP` por celda y
+agrega el resultado al occlusion antes de la siguiente iteración.
+
+Bug histórico que motivó el módulo: cuando paint pintaba más allá de
+las `state.tracks` materializadas, el clip se creaba con `trackId`
+virtual que el render filtraba como invisible. Ahora el reducer
+`CREATE_CLIP` recibe `trackIndex` y materializa la track antes de
+añadir el clip — anti-patrón estructuralmente imposible.
+
 ## 4. Lista canónica de acciones idempotentes
 
 Las siguientes acciones se disparan a alta frecuencia (rAF, pointermove,
@@ -241,6 +270,8 @@ a esta lista y a los tests de `perf-budget.spec.ts`.
 | `trackRows.length` con `scrollY=1_000_000` | < 40 |
 | Notify rate sobre 1000 dispatches idempotentes | == 0 |
 | `dispatch` × 10000 con state estable | < 100 ms (10 µs/dispatch) |
+| Brush path interpolación cubre todas las celdas snapped | sí, sin saltos |
+| Paint en track virtual produce clip visible | sí, track materializada |
 
 Estos números **no se tocan para que pasen los tests**. Si un test
 falla, hay un bug de performance real que arreglar.

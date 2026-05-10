@@ -49,7 +49,7 @@ export type PlaylistAction =
   | { type: "RECOLOR_TRACK"; trackIndex: number; color: string }
   | { type: "INSERT_TRACK_BELOW"; trackIndex: number }
   | { type: "DELETE_EMPTY_TRACK"; trackIndex: number }
-  | { type: "CREATE_CLIP"; clip: PlaylistClip }
+  | { type: "CREATE_CLIP"; clip: PlaylistClip; trackIndex: number }
   | { type: "DELETE_CLIP"; clipId: string }
   | { type: "TOGGLE_CLIP_MUTE"; clipId: string }
   | { type: "TOGGLE_TRACK_MUTE"; trackIndex: number }

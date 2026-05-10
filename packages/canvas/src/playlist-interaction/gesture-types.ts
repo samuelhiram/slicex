@@ -1,4 +1,5 @@
 import type { PlaylistPoint } from "../playlist-core";
+import type { BrushOcclusion } from "./brush";
 
 export interface ClipDragOriginal {
   id: string;
@@ -69,6 +70,17 @@ export type ActiveGesture =
       pointerId: number;
       lastTrackIndex: number;
       lastSnappedStart: number;
+      // Canon §3 brush pattern: O(1) occupied-cell lookup. Seeded with
+      // existing clip cells at pointerdown; the handler adds painted
+      // cells as it strokes.
+      occupied: BrushOcclusion;
+      // Snap step captured at gesture start so brush interpolation stays
+      // consistent even if the user changes snap mode mid-drag.
+      snapStep: number;
+      // Default duration applied to each painted clip.
+      duration: number;
+      // Default visual color for painted clips.
+      color: string;
     }
   | {
       kind: "delete-drag";

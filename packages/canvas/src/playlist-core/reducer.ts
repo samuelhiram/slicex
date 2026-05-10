@@ -86,7 +86,7 @@ export function playlistReducer(
     case "DELETE_EMPTY_TRACK":
       return deleteEmptyTrack(state, action.trackIndex);
     case "CREATE_CLIP":
-      return createClip(state, action.clip);
+      return createClip(state, action.clip, action.trackIndex);
     case "DELETE_CLIP":
       return deleteClip(state, action.clipId);
     case "TOGGLE_CLIP_MUTE":
@@ -652,11 +652,21 @@ function insertTrackBelow(
 function createClip(
   state: PlaylistState,
   clip: import("./types").PlaylistClip,
+  trackIndex: number,
 ): PlaylistState {
   if (state.clips.some((existing) => existing.id === clip.id)) {
     return state;
   }
-  return { ...state, clips: [...state.clips, clip] };
+  // Materialize the target track if it's still virtual. Without this, paint
+  // tool strokes onto virtual rows would create clips whose trackId never
+  // exists in state.tracks, leaving them invisible (filtered out by the
+  // presentation's trackIndexById lookup).
+  const materialized = materializeTracksThrough(state, trackIndex);
+  const trackId = getTrackIdByIndex(materialized, trackIndex);
+  return {
+    ...materialized,
+    clips: [...materialized.clips, { ...clip, trackId }],
+  };
 }
 
 function deleteClip(state: PlaylistState, clipId: string): PlaylistState {

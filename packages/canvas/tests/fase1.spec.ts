@@ -32,7 +32,11 @@ describe("Fase 1 — reducer additions", () => {
       label: "new",
       color: "#fff",
     };
-    const s1 = playlistReducer(s0, { type: "CREATE_CLIP", clip: newClip }, M);
+    const s1 = playlistReducer(
+      s0,
+      { type: "CREATE_CLIP", clip: newClip, trackIndex: 0 },
+      M,
+    );
     expect(s1.clips.find((c) => c.id === "c-new")).toBeDefined();
     expect(s1.clips.length).toBe(s0.clips.length + 1);
   });
@@ -48,7 +52,11 @@ describe("Fase 1 — reducer additions", () => {
       label: "x",
       color: "#fff",
     };
-    const s1 = playlistReducer(s0, { type: "CREATE_CLIP", clip: dup }, M);
+    const s1 = playlistReducer(
+      s0,
+      { type: "CREATE_CLIP", clip: dup, trackIndex: 0 },
+      M,
+    );
     expect(s1).toBe(s0);
   });
 

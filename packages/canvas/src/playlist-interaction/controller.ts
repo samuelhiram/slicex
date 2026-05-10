@@ -15,8 +15,8 @@ import {
   screenYToTrackIndex,
   snapTime,
 } from "../playlist-core";
+import { interpolateBrushPath } from "./brush";
 import type {
-  PlaylistClip,
   PlaylistCore,
   PlaylistPoint,
   PlaylistToolId,
@@ -45,8 +45,6 @@ const TOOL_HOTKEYS: Readonly<Record<string, PlaylistToolId>> = {
   E: "select",
   Z: "zoom",
 };
-
-const PAINT_DEFAULT_DURATION = 4;
 
 function resolvePoint(
   host: HTMLElement,
@@ -735,22 +733,37 @@ export function createPlaylistInteractionController(
         trackIndex !== gesture.lastTrackIndex ||
         start !== gesture.lastSnappedStart
       ) {
-        const trackId = getTrackIdByIndex(state, trackIndex);
-        const cellOccupied = state.clips.some(
-          (clip: PlaylistClip) =>
-            clip.trackId === trackId &&
-            start >= clip.start &&
-            start < clip.start + clip.duration,
+        // Brush stroke: interpolate every snapped cell along the path so a
+        // fast pointermove can't skip cells (canon §3 brush pattern).
+        const path = interpolateBrushPath(
+          {
+            trackIndex: gesture.lastTrackIndex,
+            start: gesture.lastSnappedStart,
+          },
+          { trackIndex, start },
+          gesture.snapStep,
         );
-        if (!cellOccupied) {
+        // Drop the first entry — it's where the previous frame already
+        // landed, so we don't double-paint the start cell.
+        for (let i = 1; i < path.length; i += 1) {
+          const cell = path[i]!;
+          const currentState = core.getState();
+          if (gesture.occupied.has(cell.trackIndex, cell.start, currentState)) {
+            continue;
+          }
           core.createClip({
-            trackIndex,
-            start,
-            duration: PAINT_DEFAULT_DURATION,
+            trackIndex: cell.trackIndex,
+            start: cell.start,
+            duration: gesture.duration,
             type: "pattern",
             label: "Clip",
-            color: "#7aa6d8",
+            color: gesture.color,
           });
+          gesture.occupied.add(
+            cell.trackIndex,
+            cell.start,
+            core.getState(),
+          );
         }
         gesture.lastTrackIndex = trackIndex;
         gesture.lastSnappedStart = start;
