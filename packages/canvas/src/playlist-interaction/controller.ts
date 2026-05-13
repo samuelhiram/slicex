@@ -1303,9 +1303,45 @@ export function createPlaylistInteractionController(
       return;
     }
 
+    // F5: arrow keys nudge the selection (or the playhead when nothing is
+    // selected). Modifier scaling matches FL Studio: Shift = ×4 step,
+    // Ctrl/Meta = 1 bar.
+    if (
+      event.key === "ArrowLeft" ||
+      event.key === "ArrowRight" ||
+      event.key === "ArrowUp" ||
+      event.key === "ArrowDown"
+    ) {
+      const horizontal =
+        event.key === "ArrowLeft" || event.key === "ArrowRight";
+      const dir =
+        event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
+      const hasSelection = core.getState().selection.clipIds.length > 0;
+      if (horizontal) {
+        const step = cmd ? metrics.beatsPerBar : event.shiftKey ? 4 : 1;
+        if (hasSelection) {
+          core.nudgeSelection(dir * step, 0);
+        } else {
+          core.nudgePlayPositionBy(dir * step);
+        }
+      } else {
+        // Vertical arrows only make sense with a selection.
+        if (hasSelection) {
+          core.nudgeSelection(0, dir);
+        }
+      }
+      event.preventDefault();
+      return;
+    }
+
     // FL Studio transport hotkeys.
     if (event.key === "Home" && !cmd && !event.altKey && !event.shiftKey) {
       core.setPlayPosition(0);
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "End" && !cmd && !event.altKey && !event.shiftKey) {
+      core.jumpToEnd();
       event.preventDefault();
       return;
     }

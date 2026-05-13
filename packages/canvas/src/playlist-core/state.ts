@@ -727,6 +727,44 @@ export class PlaylistCore {
     return getContentEndBeat(this.history.present);
   }
 
+  // Arrow-key nudge for the current clip selection. Expands the seeds
+  // through expandSelectionToGroups so a grouped clip drags its siblings.
+  // The reducer applies the same delta to every member (one undo entry).
+  nudgeSelection(deltaBeats: number, deltaTracks: number): void {
+    if (deltaBeats === 0 && deltaTracks === 0) return;
+    const state = this.history.present;
+    const seedIds = state.selection.clipIds;
+    if (seedIds.length === 0) return;
+    const expanded = this.expandSelectionToGroups(seedIds);
+    const clipById = new Map(state.clips.map((c) => [c.id, c] as const));
+    const updates: PlaylistClipMoveUpdate[] = [];
+    for (const id of expanded) {
+      const clip = clipById.get(id);
+      if (!clip) continue;
+      const currentTrack = getTrackIndexById(state, clip.trackId);
+      const targetTrack = Math.max(0, currentTrack + deltaTracks);
+      updates.push({
+        id,
+        start: Math.max(0, clip.start + deltaBeats),
+        trackIndex: targetTrack,
+      });
+    }
+    if (updates.length === 0) return;
+    this.moveClips(updates);
+  }
+
+  // Arrow-key nudge for the playhead. setPlayPosition is idempotent so a
+  // negative delta past zero clamps without notify if already at 0.
+  nudgePlayPositionBy(deltaBeats: number): void {
+    const next = this.history.present.playPosition.time + deltaBeats;
+    this.setPlayPosition(Math.max(0, next));
+  }
+
+  // End key: jump the playhead to the end of the last clip.
+  jumpToEnd(): void {
+    this.setPlayPosition(this.getContentEndTime());
+  }
+
   // Transport wrappers (UI-only).
   setTransportMode(mode: "song" | "pattern"): void {
     this.dispatch({ type: "SET_TRANSPORT_MODE", mode });
