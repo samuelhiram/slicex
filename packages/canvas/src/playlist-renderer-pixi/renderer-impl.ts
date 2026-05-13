@@ -1,10 +1,37 @@
-import { Application, Container, Graphics, Text } from "pixi.js";
-import {
-  type PlaylistClipPresentation,
-  type PlaylistCore,
-  type PlaylistPresentation,
-} from "../playlist-core";
+// Renderer-impl: orchestrator only.
+//
+// All DisplayObjects (Container/Graphics/Text) are created here in the init
+// block — that's the one place the static lint
+// (scripts/check-perf-patterns.mjs) allows `new Pixi*()` calls. Per-layer
+// draw routines live under ./layers and operate on pre-created Graphics
+// instances (canon §3.8).
+//
+// renderNow() is the rAF-coalesced frame painter: every notify from the
+// core schedules at most one render per animation frame, and the static
+// layers (mask, grid) keep a dirty-key cache so hover/selection updates
+// don't redraw them.
+import { Application, Container, Graphics } from "pixi.js";
+import type { PlaylistCore } from "../playlist-core";
 import { createClipNodeRegistry } from "./clip-node-registry";
+import { COLORS } from "./palette";
+import {
+  clearTextLayer,
+  disposeTextLayer,
+} from "./text-pool";
+import {
+  drawSceneBackground,
+  drawTrackRowsBackground,
+} from "./layers/background";
+import { drawRulerChrome, drawTimelineGrid } from "./layers/ruler";
+import { drawTrackRows } from "./layers/track-rows";
+import { drawMarkers } from "./layers/markers";
+import { drawLoopRegion } from "./layers/loop-region";
+import { drawPlayPositionRulerMarker } from "./layers/play-position";
+import { drawTimelineOverlay } from "./layers/overlay";
+import { drawScrollbars } from "./layers/scrollbars";
+import { drawSnapIndicator } from "./layers/snap-indicator";
+import { drawDropGhost } from "./layers/drop-ghost";
+import { drawTooltip } from "./layers/tooltip";
 
 export interface PlaylistRendererCallbacks {
   onReady?: () => void;
@@ -13,748 +40,6 @@ export interface PlaylistRendererCallbacks {
 
 export interface PlaylistRenderer {
   destroy: () => void;
-}
-
-const COLORS = {
-  background: 0x181818,
-  panel: 0x222222,
-  panelStrong: 0x2a2a2a,
-  panelHeaderA: 0x272727,
-  panelHeaderB: 0x242424,
-  panelMenu: 0x202020,
-  rowA: 0x1d1d1d,
-  rowB: 0x202020,
-  rowLine: 0x303030,
-  gridMinor: 0x2d2d2d,
-  gridMajor: 0x414141,
-  text: 0xf1f1e8,
-  textMuted: 0xb8b3a5,
-  selected: 0xf4d35e,
-  hover: 0xffffff,
-  playPosition: 0xf05d3b,
-  marquee: 0x9ecbff,
-  automationLine: 0x111111,
-  disabled: 0x6f6f6f,
-  scrollbarTrack: 0x151515,
-  scrollbarThumb: 0x5f5f5f,
-  markerLabel: 0xc9b977,
-  markerLoop: 0x6fd28a,
-  markerSkip: 0xe6a85a,
-  markerPause: 0xc975e0,
-  markerTimeSig: 0x7ec1ff,
-  markerRecording: 0xe85c5c,
-  loopRegion: 0x6fd28a,
-  recordingIndicator: 0xe85c5c,
-};
-
-function markerColor(kind: string): number {
-  switch (kind) {
-    case "loop":
-    case "marker-loop":
-      return COLORS.markerLoop;
-    case "marker-skip":
-      return COLORS.markerSkip;
-    case "marker-pause":
-      return COLORS.markerPause;
-    case "time-signature":
-      return COLORS.markerTimeSig;
-    case "rec-start":
-    case "rec-stop":
-      return COLORS.markerRecording;
-    case "start":
-      return COLORS.markerLoop;
-    case "label":
-    default:
-      return COLORS.markerLabel;
-  }
-}
-
-const CLIP_BODY_ALPHA = 1;
-const CLIP_BODY_ALPHA_MUTED = 0.28;
-const CLIP_TITLE_ALPHA = 0.34;
-const CLIP_RESIZE_ALPHA = 0.2;
-
-function parseHexColor(value: string, fallback: number): number {
-  const normalized = value.trim();
-
-  if (!normalized.startsWith("#")) {
-    return fallback;
-  }
-
-  const hex = normalized.slice(1);
-
-  if (hex.length !== 6) {
-    return fallback;
-  }
-
-  const parsed = Number.parseInt(hex, 16);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-// Text-instance pool, keyed per Container. Resetting the cursor at the start
-// of a frame lets addText reuse the previous frame's Text objects instead of
-// allocating new ones. Critical for perf: at 60 fps with the play head
-// running, the previous "destroy nothing" strategy leaked thousands of Text
-// objects per second (each one drags a GPU texture). Reuse keeps allocations
-// at zero in steady state and avoids the Pixi v8 TexturePool tear-down crash
-// that the old destroy-each-frame approach hit during StrictMode remounts.
-const TEXT_POOL_CURSOR = new WeakMap<Container, number>();
-
-interface TextStyleOptions {
-  size?: number;
-  color?: number;
-  weight?: string;
-}
-
-function applyTextStyle(label: Text, text: string, opts: TextStyleOptions): void {
-  if (label.text !== text) {
-    label.text = text;
-  }
-  const color = opts.color ?? COLORS.text;
-  const size = opts.size ?? 12;
-  const weight = (opts.weight ?? "500") as any;
-  const style = label.style;
-  if (style.fill !== color) style.fill = color;
-  if (style.fontSize !== size) style.fontSize = size;
-  if (style.fontWeight !== weight) style.fontWeight = weight;
-}
-
-function addText(
-  layer: Container,
-  text: string,
-  x: number,
-  y: number,
-  options: TextStyleOptions = {},
-): void {
-  const cursor = TEXT_POOL_CURSOR.get(layer) ?? 0;
-  let label = layer.children[cursor] as Text | undefined;
-  if (label instanceof Text) {
-    applyTextStyle(label, text, options);
-    label.visible = true;
-  } else {
-    label = new Text({
-      text,
-      style: {
-        fill: options.color ?? COLORS.text,
-        fontFamily: "Segoe UI, Arial, sans-serif",
-        fontSize: options.size ?? 12,
-        fontWeight: (options.weight ?? "500") as any,
-        letterSpacing: 0,
-      },
-    });
-    label.eventMode = "none";
-    layer.addChild(label);
-  }
-  label.x = Math.round(x);
-  label.y = Math.round(y);
-  TEXT_POOL_CURSOR.set(layer, cursor + 1);
-}
-
-// Reset the layer's pool cursor and hide any Text instances that the new
-// frame won't claim. Children stay parented so the next frame can grab them
-// in O(1).
-function clearTextLayer(layer: Container): void {
-  TEXT_POOL_CURSOR.set(layer, 0);
-  for (const child of layer.children) {
-    child.visible = false;
-  }
-}
-
-function disposeTextLayer(layer: Container): void {
-  TEXT_POOL_CURSOR.delete(layer);
-  layer.removeChildren();
-}
-
-function drawSceneBackground(
-  graphics: Graphics,
-  presentation: PlaylistPresentation,
-): void {
-  graphics
-    .rect(
-      presentation.layout.sceneRect.x,
-      presentation.layout.sceneRect.y,
-      presentation.layout.sceneRect.width,
-      presentation.layout.sceneRect.height,
-    )
-    .fill({ color: COLORS.background });
-}
-
-function drawRulerChrome(
-  graphics: Graphics,
-  textLayer: Container,
-  presentation: PlaylistPresentation,
-): void {
-  const { layout, metrics } = presentation;
-
-  graphics
-    .rect(
-      layout.trackHeaderRect.x,
-      layout.trackHeaderRect.y,
-      layout.trackHeaderRect.width,
-      layout.trackHeaderRect.height,
-    )
-    .fill({ color: COLORS.panel });
-  graphics
-    .rect(
-      layout.rulerRect.x,
-      layout.rulerRect.y,
-      layout.rulerRect.width,
-      layout.rulerRect.height,
-    )
-    .fill({ color: COLORS.panelStrong });
-  graphics
-    .rect(0, 0, layout.trackHeaderRect.width, layout.rulerRect.height)
-    .fill({ color: COLORS.panel });
-
-  graphics
-    .moveTo(0, metrics.rulerHeight - 1)
-    .lineTo(layout.sceneRect.width, metrics.rulerHeight - 1)
-    .stroke({ color: COLORS.rowLine, width: 1 });
-  graphics
-    .moveTo(metrics.trackHeaderWidth - 1, 0)
-    .lineTo(metrics.trackHeaderWidth - 1, layout.sceneRect.height)
-    .stroke({ color: COLORS.rowLine, width: 1 });
-
-  for (const tick of presentation.rulerTicks) {
-    graphics
-      .moveTo(tick.x, metrics.rulerHeight - (tick.isBar ? 15 : 8))
-      .lineTo(tick.x, metrics.rulerHeight)
-      .stroke({
-        color: tick.isBar ? COLORS.textMuted : COLORS.gridMajor,
-        width: 1,
-      });
-
-    if (tick.isBar && tick.label) {
-      addText(textLayer, tick.label, tick.x + 5, 10, {
-        color: COLORS.textMuted,
-        size: 11,
-        weight: "600",
-      });
-    }
-  }
-
-  addText(textLayer, "SliceX Playlist", 15, 11, {
-    color: COLORS.text,
-    size: 13,
-    weight: "700",
-  });
-}
-
-function drawTrackRowsBackground(
-  graphics: Graphics,
-  presentation: PlaylistPresentation,
-): void {
-  for (const row of presentation.trackRows) {
-    const rowColor = row.index % 2 === 0 ? COLORS.rowA : COLORS.rowB;
-
-    graphics
-      .rect(row.rowRect.x, row.rowRect.y, row.rowRect.width, row.rowRect.height)
-      .fill({ color: rowColor });
-  }
-}
-
-function drawTimelineGrid(
-  graphics: Graphics,
-  presentation: PlaylistPresentation,
-): void {
-  const { metrics, rulerTicks, layout } = presentation;
-
-  for (const tick of rulerTicks) {
-    graphics
-      .moveTo(tick.x, metrics.rulerHeight)
-      .lineTo(tick.x, layout.sceneRect.height)
-      .stroke({
-        alpha: tick.isBar ? 0.72 : 0.42,
-        color: tick.isBar ? COLORS.gridMajor : COLORS.gridMinor,
-        width: tick.isBar ? 1.25 : 1,
-      });
-  }
-}
-
-function drawTrackHeaderButton(
-  graphics: Graphics,
-  textLayer: Container,
-  rect: { x: number; y: number; width: number; height: number },
-  letter: string,
-  active: boolean,
-  activeColor: number,
-): void {
-  graphics
-    .roundRect(rect.x, rect.y, rect.width, rect.height, 3)
-    .fill({
-      color: active ? activeColor : COLORS.panelStrong,
-      alpha: active ? 1 : 0.85,
-    })
-    .stroke({ color: COLORS.rowLine, width: 1, alpha: 0.7 });
-  addText(textLayer, letter, rect.x + rect.width / 2 - 3.5, rect.y + 1, {
-    color: active ? COLORS.text : COLORS.textMuted,
-    size: 11,
-    weight: "700",
-  });
-}
-
-function drawReorderHandle(
-  graphics: Graphics,
-  rect: { x: number; y: number; width: number; height: number },
-): void {
-  for (let i = 0; i < 3; i += 1) {
-    const y = rect.y + 4 + i * 4;
-    graphics
-      .moveTo(rect.x + 3, y)
-      .lineTo(rect.x + rect.width - 3, y)
-      .stroke({ color: COLORS.textMuted, width: 1, alpha: 0.7 });
-  }
-}
-
-function drawTrackRows(
-  graphics: Graphics,
-  textLayer: Container,
-  presentation: PlaylistPresentation,
-): void {
-  const { metrics } = presentation;
-
-  for (const row of presentation.trackRows) {
-    const color = parseHexColor(row.track.color, COLORS.textMuted);
-    const muted = row.track.muted === true;
-    const soloed = row.track.soloed === true;
-    const locked = row.track.locked === true;
-    const headerAlpha = muted ? 0.55 : 1;
-
-    graphics
-      .rect(
-        row.headerRect.x,
-        row.headerRect.y,
-        row.headerRect.width,
-        row.headerRect.height,
-      )
-      .fill({
-        color: row.index % 2 === 0 ? COLORS.panelHeaderA : COLORS.panelHeaderB,
-      });
-    graphics
-      .rect(
-        row.stripRect.x,
-        row.stripRect.y,
-        row.stripRect.width,
-        row.stripRect.height,
-      )
-      .fill({ color, alpha: headerAlpha });
-    graphics
-      .moveTo(row.rowRect.x, row.rowRect.y + row.rowRect.height - 1)
-      .lineTo(
-        row.rowRect.x + row.rowRect.width,
-        row.rowRect.y + row.rowRect.height - 1,
-      )
-      .stroke({ color: COLORS.rowLine, width: 1 });
-    graphics
-      .moveTo(metrics.trackHeaderWidth - 0.5, row.rowRect.y)
-      .lineTo(
-        metrics.trackHeaderWidth - 0.5,
-        row.rowRect.y + row.rowRect.height,
-      )
-      .stroke({ color: COLORS.rowLine, width: 1.5 });
-
-    addText(textLayer, row.track.label, 16, row.rowRect.y + 6, {
-      color: muted ? COLORS.textMuted : COLORS.text,
-      size: 13,
-      weight: row.isVirtual ? "500" : "700",
-    });
-
-    drawTrackHeaderButton(
-      graphics,
-      textLayer,
-      row.buttons.mute,
-      "M",
-      muted,
-      COLORS.playPosition,
-    );
-    drawTrackHeaderButton(
-      graphics,
-      textLayer,
-      row.buttons.solo,
-      "S",
-      soloed,
-      COLORS.selected,
-    );
-    drawTrackHeaderButton(
-      graphics,
-      textLayer,
-      row.buttons.lock,
-      "L",
-      locked,
-      COLORS.hover,
-    );
-    drawReorderHandle(graphics, row.reorderHandleRect);
-
-    if (row.hasSelectedClips) {
-      graphics
-        .rect(row.headerRect.x, row.headerRect.y, row.headerRect.width, 2)
-        .fill({ color: COLORS.selected, alpha: 0.6 });
-    }
-  }
-}
-
-function drawLoopRegion(
-  graphics: Graphics,
-  presentation: PlaylistPresentation,
-): void {
-  const region = presentation.loopRegion;
-  if (!region || !region.isVisible) return;
-  const { rect } = region;
-  // Background tint on the ruler so the loop range is unmistakable.
-  graphics
-    .rect(rect.x, rect.y, rect.width, Math.max(2, rect.height - 6))
-    .fill({ color: COLORS.loopRegion, alpha: 0.18 });
-  graphics
-    .rect(rect.x, rect.y + rect.height - 4, rect.width, 3)
-    .fill({ color: COLORS.loopRegion, alpha: 0.7 });
-}
-
-function drawMarkers(
-  graphics: Graphics,
-  textLayer: Container,
-  presentation: PlaylistPresentation,
-): void {
-  const { metrics } = presentation;
-  for (const view of presentation.markerViews) {
-    if (!view.isVisible) continue;
-    if (view.x < metrics.trackHeaderWidth) continue;
-    const color = markerColor(view.marker.kind);
-    const baseY = 4;
-    // Flag-shaped triangle pointing down so the user sees where it anchors.
-    graphics
-      .moveTo(view.x, metrics.rulerHeight - 2)
-      .lineTo(view.x - 6, baseY)
-      .lineTo(view.x + 6, baseY)
-      .lineTo(view.x, metrics.rulerHeight - 2)
-      .fill({ color, alpha: 0.92 })
-      .stroke({ color: COLORS.text, width: 1, alpha: 0.7 });
-    // Vertical line down the timeline (subtle).
-    graphics
-      .moveTo(view.x + 0.5, metrics.rulerHeight)
-      .lineTo(view.x + 0.5, presentation.layout.sceneRect.height)
-      .stroke({ color, alpha: 0.18, width: 1 });
-    const label = view.marker.label;
-    if (label) {
-      addText(textLayer, label, view.x + 8, baseY + 1, {
-        color: COLORS.text,
-        size: 10,
-        weight: "600",
-      });
-    }
-  }
-}
-
-function drawPlayPositionRulerMarker(
-  graphics: Graphics,
-  presentation: PlaylistPresentation,
-): void {
-  const { metrics, playPosition } = presentation;
-
-  if (!playPosition.isVisible) {
-    return;
-  }
-
-  graphics
-    .roundRect(playPosition.x - 7, 3, 14, metrics.rulerHeight - 6, 3)
-    .fill({ color: COLORS.playPosition })
-    .stroke({ color: COLORS.text, width: 1, alpha: 0.8 });
-  graphics
-    .moveTo(playPosition.x - 7, metrics.rulerHeight - 1)
-    .lineTo(playPosition.x + 7, metrics.rulerHeight - 1)
-    .lineTo(playPosition.x, metrics.rulerHeight + 7)
-    .lineTo(playPosition.x - 7, metrics.rulerHeight - 1)
-    .fill({ color: COLORS.playPosition });
-}
-
-function drawAutomation(
-  graphics: Graphics,
-  clipView: PlaylistClipPresentation,
-): void {
-  if (clipView.automationPoints.length === 0) {
-    return;
-  }
-
-  const sortedPoints = clipView.automationPoints;
-  const first = sortedPoints[0];
-  graphics.moveTo(first.position.x, first.position.y);
-
-  for (const point of sortedPoints.slice(1)) {
-    graphics.lineTo(point.position.x, point.position.y);
-  }
-
-  graphics.stroke({ color: COLORS.automationLine, width: 4, alpha: 0.55 });
-  graphics.moveTo(first.position.x, first.position.y);
-
-  for (const point of sortedPoints.slice(1)) {
-    graphics.lineTo(point.position.x, point.position.y);
-  }
-
-  graphics.stroke({ color: COLORS.text, width: 2, alpha: 0.9 });
-
-  for (const point of sortedPoints) {
-    graphics
-      .circle(point.position.x, point.position.y, point.selected ? 6.5 : 5)
-      .fill({ color: point.selected ? COLORS.selected : COLORS.panelStrong })
-      .stroke({ color: COLORS.text, width: 1.5 });
-  }
-}
-
-function drawClipLabel(
-  textLayer: Container,
-  clipView: PlaylistClipPresentation,
-): void {
-  if (clipView.rect.width < 44 || clipView.rect.height < 24) {
-    return;
-  }
-
-  addText(
-    textLayer,
-    clipView.clip.label,
-    clipView.rect.x + 12,
-    clipView.rect.y + 4,
-    {
-      color: COLORS.text,
-      size: 12,
-      weight: "700",
-    },
-  );
-
-  const ratio = clipView.clip.stretchRatio ?? 1;
-  const offset = clipView.clip.contentOffset ?? 0;
-  const tagY = clipView.rect.y + 4;
-
-  if (Math.abs(ratio - 1) > 0.001 && clipView.rect.width >= 60) {
-    const tagText = `×${ratio.toFixed(2).replace(/\.?0+$/, "")}`;
-    addText(
-      textLayer,
-      tagText,
-      clipView.rect.x + clipView.rect.width - 8 - tagText.length * 6,
-      tagY,
-      { color: COLORS.text, size: 10, weight: "700" },
-    );
-  }
-
-  if (Math.abs(offset) > 0.001 && clipView.rect.width >= 80) {
-    addText(
-      textLayer,
-      `↻${offset.toFixed(2).replace(/\.?0+$/, "")}`,
-      clipView.rect.x + 12,
-      tagY + 14,
-      { color: COLORS.textMuted, size: 10, weight: "600" },
-    );
-  }
-}
-
-function drawClipBody(
-  graphics: Graphics,
-  clipView: PlaylistClipPresentation,
-): void {
-  const color = parseHexColor(clipView.clip.color, 0x777777);
-  const muted = clipView.effectivelyMuted;
-  const bodyAlpha = muted ? CLIP_BODY_ALPHA_MUTED : CLIP_BODY_ALPHA;
-
-  graphics
-    .roundRect(
-      clipView.rect.x,
-      clipView.rect.y,
-      clipView.rect.width,
-      clipView.rect.height,
-      4,
-    )
-    .fill({ color, alpha: bodyAlpha });
-  graphics
-    .rect(
-      clipView.titleRect.x,
-      clipView.titleRect.y,
-      clipView.titleRect.width,
-      clipView.titleRect.height,
-    )
-    .fill({
-      color: COLORS.panel,
-      alpha: muted ? CLIP_TITLE_ALPHA * 0.6 : CLIP_TITLE_ALPHA,
-    });
-
-  if (muted) {
-    // Diagonal-stripe overlay so the muted state is unambiguous even on
-    // colour-blind / low-contrast displays.
-    const step = 8;
-    const startOffset = clipView.rect.x - clipView.rect.height;
-    const totalWidth = clipView.rect.width + clipView.rect.height;
-    for (let offset = 0; offset <= totalWidth; offset += step) {
-      const x1 = startOffset + offset;
-      const y1 = clipView.rect.y;
-      const x2 = x1 + clipView.rect.height;
-      const y2 = clipView.rect.y + clipView.rect.height;
-      const clampedX1 = Math.max(clipView.rect.x, x1);
-      const clampedX2 = Math.min(
-        clipView.rect.x + clipView.rect.width,
-        x2,
-      );
-      if (clampedX1 >= clampedX2) {
-        continue;
-      }
-      graphics
-        .moveTo(clampedX1, y1 + (clampedX1 - x1))
-        .lineTo(clampedX2, y1 + (clampedX2 - x1))
-        .stroke({ color: COLORS.text, alpha: 0.18, width: 1 });
-    }
-  }
-}
-
-function drawClipOverlay(
-  graphics: Graphics,
-  clipView: PlaylistClipPresentation,
-): void {
-  graphics
-    .roundRect(
-      clipView.rect.x,
-      clipView.rect.y,
-      clipView.rect.width,
-      clipView.rect.height,
-      4,
-    )
-    .stroke({
-      color: clipView.selected
-        ? COLORS.selected
-        : clipView.hovered
-          ? COLORS.hover
-          : COLORS.rowLine,
-      width: clipView.selected ? 2 : 1,
-      alpha: clipView.hovered || clipView.selected ? 1 : 0.8,
-    });
-
-  graphics
-    .rect(
-      clipView.resizeLeftRect.x,
-      clipView.resizeLeftRect.y,
-      clipView.resizeLeftRect.width,
-      clipView.resizeLeftRect.height,
-    )
-    .fill({ color: COLORS.text, alpha: CLIP_RESIZE_ALPHA });
-  graphics
-    .rect(
-      clipView.resizeRightRect.x,
-      clipView.resizeRightRect.y,
-      clipView.resizeRightRect.width,
-      clipView.resizeRightRect.height,
-    )
-    .fill({ color: COLORS.text, alpha: CLIP_RESIZE_ALPHA });
-
-  if (clipView.isAutomation) {
-    drawAutomation(graphics, clipView);
-  }
-}
-
-function drawClip(
-  clipGraphics: Graphics,
-  clipTextLayer: Container,
-  overlayGraphics: Graphics,
-  clipView: PlaylistClipPresentation,
-): void {
-  drawClipBody(clipGraphics, clipView);
-  drawClipLabel(clipTextLayer, clipView);
-  drawClipOverlay(overlayGraphics, clipView);
-}
-
-function drawClips(
-  clipGraphics: Graphics,
-  clipTextLayer: Container,
-  overlayGraphics: Graphics,
-  presentation: PlaylistPresentation,
-): void {
-  for (const clipView of presentation.visibleClipViews) {
-    drawClip(clipGraphics, clipTextLayer, overlayGraphics, clipView);
-  }
-}
-
-function drawScrollbars(
-  graphics: Graphics,
-  presentation: PlaylistPresentation,
-): void {
-  const { horizontal, vertical } = presentation.scrollbars;
-
-  graphics
-    .rect(
-      horizontal.trackRect.x,
-      horizontal.trackRect.y,
-      horizontal.trackRect.width,
-      horizontal.trackRect.height,
-    )
-    .fill({ color: COLORS.scrollbarTrack, alpha: 0.96 })
-    .stroke({ color: COLORS.rowLine, width: 1 });
-  graphics
-    .roundRect(
-      horizontal.thumbRect.x,
-      horizontal.thumbRect.y,
-      horizontal.thumbRect.width,
-      horizontal.thumbRect.height,
-      4,
-    )
-    .fill({ color: COLORS.scrollbarThumb });
-
-  graphics
-    .rect(
-      vertical.trackRect.x,
-      vertical.trackRect.y,
-      vertical.trackRect.width,
-      vertical.trackRect.height,
-    )
-    .fill({ color: COLORS.scrollbarTrack, alpha: 0.96 })
-    .stroke({ color: COLORS.rowLine, width: 1 });
-  graphics
-    .roundRect(
-      vertical.thumbRect.x,
-      vertical.thumbRect.y,
-      vertical.thumbRect.width,
-      vertical.thumbRect.height,
-      4,
-    )
-    .fill({ color: COLORS.scrollbarThumb });
-
-  graphics
-    .rect(
-      presentation.layout.scrollbarCornerRect.x,
-      presentation.layout.scrollbarCornerRect.y,
-      presentation.layout.scrollbarCornerRect.width,
-      presentation.layout.scrollbarCornerRect.height,
-    )
-    .fill({ color: COLORS.panelStrong });
-}
-
-function drawTimelineOverlay(
-  graphics: Graphics,
-  presentation: PlaylistPresentation,
-): void {
-  const { metrics, playPosition, marquee, layout } = presentation;
-
-  if (playPosition.isVisible) {
-    graphics
-      .roundRect(playPosition.x - 7, 3, 14, metrics.rulerHeight - 6, 3)
-      .fill({ color: COLORS.playPosition })
-      .stroke({ color: COLORS.text, width: 1, alpha: 0.8 });
-    graphics
-      .moveTo(playPosition.x - 7, metrics.rulerHeight - 1)
-      .lineTo(playPosition.x + 7, metrics.rulerHeight - 1)
-      .lineTo(playPosition.x, metrics.rulerHeight + 7)
-      .lineTo(playPosition.x - 7, metrics.rulerHeight - 1)
-      .fill({ color: COLORS.playPosition });
-    graphics
-      .moveTo(playPosition.x + 0.5, 0)
-      .lineTo(playPosition.x + 0.5, layout.sceneRect.height)
-      .stroke({ color: COLORS.playPosition, width: 2 });
-  }
-
-  if (marquee) {
-    graphics
-      .rect(
-        marquee.rect.x,
-        marquee.rect.y,
-        marquee.rect.width,
-        marquee.rect.height,
-      )
-      .fill({ color: COLORS.marquee, alpha: 0.13 })
-      .stroke({ color: COLORS.marquee, width: 1.5, alpha: 0.75 });
-  }
 }
 
 export function createPlaylistRenderer(
@@ -784,10 +69,23 @@ export function createPlaylistRenderer(
     automationLine: COLORS.automationLine,
   });
   const overlayGraphics = new Graphics();
+  // Drag-preview ghost + snap indicator sit inside the timeline mask so they
+  // disappear behind the ruler/header instead of bleeding into the chrome.
+  const dropGhostGraphics = new Graphics();
+  const snapIndicatorGraphics = new Graphics();
   const chromeGraphics = new Graphics();
   const chromeTextLayer = new Container();
   const foregroundGraphics = new Graphics();
   const foregroundTextLayer = new Container();
+  // Tooltip layer — one Container with its own background Graphics + text
+  // pool, lives above the foreground so it's never clipped. F3 will wire
+  // the actual draw call; in F2 the layer exists but draws nothing.
+  const tooltipContainer = new Container();
+  tooltipContainer.eventMode = "none";
+  const tooltipBackground = new Graphics();
+  const tooltipTextLayer = new Container();
+  tooltipContainer.addChild(tooltipBackground, tooltipTextLayer);
+
   let destroyed = false;
   let ready = false;
   let appDisposed = false;
@@ -818,6 +116,8 @@ export function createPlaylistRenderer(
     timelineGridGraphics,
     clipsLayer,
     overlayGraphics,
+    dropGhostGraphics,
+    snapIndicatorGraphics,
   );
   root.addChild(
     sceneGraphics,
@@ -827,6 +127,7 @@ export function createPlaylistRenderer(
     chromeTextLayer,
     foregroundGraphics,
     foregroundTextLayer,
+    tooltipContainer,
   );
 
   // Canon §3.10: coalesce notifications into a single rAF frame.
@@ -856,10 +157,14 @@ export function createPlaylistRenderer(
 
     sceneGraphics.clear();
     overlayGraphics.clear();
+    dropGhostGraphics.clear();
+    snapIndicatorGraphics.clear();
     chromeGraphics.clear();
     clearTextLayer(chromeTextLayer);
     foregroundGraphics.clear();
     clearTextLayer(foregroundTextLayer);
+    tooltipBackground.clear();
+    clearTextLayer(tooltipTextLayer);
 
     drawSceneBackground(sceneGraphics, presentation);
     drawTrackRowsBackground(sceneGraphics, presentation);
@@ -895,6 +200,12 @@ export function createPlaylistRenderer(
     // just transform updates unless the clip's visual hash changed.
     clipNodeRegistry.syncFrame(clipsLayer, presentation.visibleClipViews);
     drawTimelineOverlay(overlayGraphics, presentation);
+    // F3 overlays: ghost outline at the snapped destination + vertical
+    // snap-indicator line. Both are no-ops until F3 lands; the Graphics
+    // layers exist now so the renderer-impl init stays the single source
+    // of DisplayObject creation.
+    drawDropGhost(dropGhostGraphics, presentation);
+    drawSnapIndicator(snapIndicatorGraphics, presentation);
 
     drawRulerChrome(chromeGraphics, chromeTextLayer, presentation);
     drawTrackRows(chromeGraphics, chromeTextLayer, presentation);
@@ -903,6 +214,15 @@ export function createPlaylistRenderer(
     drawPlayPositionRulerMarker(chromeGraphics, presentation);
 
     drawScrollbars(foregroundGraphics, presentation);
+
+    drawTooltip(
+      {
+        container: tooltipContainer,
+        background: tooltipBackground,
+        textLayer: tooltipTextLayer,
+      },
+      presentation,
+    );
 
     (app as any).render?.();
   };
@@ -1012,10 +332,14 @@ export function createPlaylistRenderer(
       timelineGridGraphics.clear();
       clipNodeRegistry.destroy();
       overlayGraphics.clear();
+      dropGhostGraphics.clear();
+      snapIndicatorGraphics.clear();
       chromeGraphics.clear();
       disposeTextLayer(chromeTextLayer);
       foregroundGraphics.clear();
       disposeTextLayer(foregroundTextLayer);
+      tooltipBackground.clear();
+      disposeTextLayer(tooltipTextLayer);
       disposeApp();
     },
   };

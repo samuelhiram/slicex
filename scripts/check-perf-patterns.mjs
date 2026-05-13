@@ -38,6 +38,10 @@ const PIXI_CONSTRUCTOR_ALLOWED_FILES = new Set([
   // Container/Graphics/Text on demand inside its own cache; the rest of
   // the renderer goes through this module.
   "packages/canvas/src/playlist-renderer-pixi/clip-node-registry.ts",
+  // Text pool — the canonical "addText reuses children, only `new Text(...)`
+  // when the pool is empty" factory (canon §3.1). Everything else in the
+  // renderer goes through addText() from this file.
+  "packages/canvas/src/playlist-renderer-pixi/text-pool.ts",
 ]);
 
 // Idempotency-required actions. The reducer cases for these must contain a
