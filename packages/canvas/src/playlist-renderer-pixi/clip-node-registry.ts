@@ -202,13 +202,21 @@ function drawClipOverlayLocal(
   const handleHeight =
     view.resizeLeftRect.height ?? view.titleRect.height ?? height;
 
+  // F10: outer-glow halo around selected clips. Drawn first so the
+  // crisper inner stroke sits on top. Reuses palette.selected so the
+  // halo stays in the SliceX accent.
+  if (view.selected) {
+    overlay
+      .roundRect(-2, -2, width + 4, height + 4, 5)
+      .stroke({ color: palette.selected, width: 1, alpha: 0.35 });
+  }
   overlay.roundRect(0, 0, width, height, 4).stroke({
     color: view.selected
       ? palette.selected
       : view.hovered
         ? palette.hover
         : palette.rowLine,
-    width: view.selected ? 2 : 1,
+    width: view.selected ? 2.5 : 1,
     alpha: view.hovered || view.selected ? 1 : 0.8,
   });
 

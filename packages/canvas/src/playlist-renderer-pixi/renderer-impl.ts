@@ -74,6 +74,10 @@ export function createPlaylistRenderer(
   const dropGhostGraphics = new Graphics();
   const snapIndicatorGraphics = new Graphics();
   const chromeGraphics = new Graphics();
+  // F10: recording pulse — top-edge band that breathes while the
+  // transport is recording. Its own Graphics so we can repaint just this
+  // layer on the rAF tick without touching the rest of chrome.
+  const recordingPulseGraphics = new Graphics();
   const chromeTextLayer = new Container();
   const foregroundGraphics = new Graphics();
   const foregroundTextLayer = new Container();
@@ -127,6 +131,7 @@ export function createPlaylistRenderer(
     chromeTextLayer,
     foregroundGraphics,
     foregroundTextLayer,
+    recordingPulseGraphics,
     tooltipContainer,
   );
 
@@ -215,6 +220,17 @@ export function createPlaylistRenderer(
 
     drawScrollbars(foregroundGraphics, presentation);
 
+    // F10: recording pulse — only emit when transport.recording is true.
+    // The alpha breathes between 0.5 and 1 with a sin over performance.now,
+    // so the strip looks alive even when the rest of the scene is static.
+    recordingPulseGraphics.clear();
+    if (presentation.state.transport.recording) {
+      const alpha = 0.5 + 0.5 * Math.sin(performance.now() / 250);
+      recordingPulseGraphics
+        .rect(0, 0, layout.sceneRect.width, 2)
+        .fill({ color: COLORS.recordingIndicator, alpha });
+    }
+
     drawTooltip(
       {
         container: tooltipContainer,
@@ -269,6 +285,28 @@ export function createPlaylistRenderer(
     typeof ResizeObserver !== "undefined" ? new ResizeObserver(resize) : null;
   const subscription = core.subscribe(requestRender);
 
+  // F10: dedicated rAF that keeps the recording pulse animating while
+  // transport.recording is true. Canon §3.11 — no idle tick: the loop
+  // only runs while recording, and stops the moment it flips back.
+  let recordingFrameId = 0;
+  let recordingActive = false;
+  const recordingTick = (): void => {
+    if (!recordingActive || destroyed) {
+      recordingFrameId = 0;
+      return;
+    }
+    requestRender();
+    recordingFrameId = requestAnimationFrame(recordingTick);
+  };
+  const recordingSubscription = core.subscribe((state) => {
+    const nextActive = state.transport.recording;
+    if (nextActive === recordingActive) return;
+    recordingActive = nextActive;
+    if (nextActive && recordingFrameId === 0 && typeof requestAnimationFrame !== "undefined") {
+      recordingFrameId = requestAnimationFrame(recordingTick);
+    }
+  });
+
   void app
     .init({
       antialias: true,
@@ -314,6 +352,15 @@ export function createPlaylistRenderer(
     destroy() {
       destroyed = true;
       subscription.unsubscribe();
+      recordingSubscription.unsubscribe();
+      recordingActive = false;
+      if (
+        recordingFrameId !== 0 &&
+        typeof cancelAnimationFrame !== "undefined"
+      ) {
+        cancelAnimationFrame(recordingFrameId);
+        recordingFrameId = 0;
+      }
       resizeObserver?.disconnect();
       // If the Pixi app hasn't finished initialising yet, leave disposal to
       // the .then() handler above. Touching app.stage / app.destroy before
@@ -335,6 +382,7 @@ export function createPlaylistRenderer(
       dropGhostGraphics.clear();
       snapIndicatorGraphics.clear();
       chromeGraphics.clear();
+      recordingPulseGraphics.clear();
       disposeTextLayer(chromeTextLayer);
       foregroundGraphics.clear();
       disposeTextLayer(foregroundTextLayer);

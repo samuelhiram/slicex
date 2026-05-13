@@ -129,5 +129,17 @@ export function drawTrackRows(
         .rect(row.headerRect.x, row.headerRect.y, row.headerRect.width, 2)
         .fill({ color: COLORS.selected, alpha: 0.6 });
     }
+
+    // F10: microtext "—" inside empty real tracks. Virtual rows already
+    // read as "empty" by virtue of having no label weight; we only mark
+    // materialised tracks with no clips so the user can tell a virtual
+    // row apart from a real-but-empty one.
+    if (!row.hasClips && !row.isVirtual) {
+      addText(textLayer, "—", row.headerRect.x + row.headerRect.width - 24, row.rowRect.y + 6, {
+        color: COLORS.textMuted,
+        size: 10,
+        weight: "500",
+      });
+    }
   }
 }
