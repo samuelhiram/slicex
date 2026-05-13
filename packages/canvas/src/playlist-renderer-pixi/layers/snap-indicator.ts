@@ -1,15 +1,19 @@
 // Snap indicator — vertical 1px line at the next snap point during drag.
 // The Graphics instance is created in renderer-impl init and reused; this
 // module emits draw commands when `presentation.snapIndicatorX` is non-null.
-//
-// Stub: F2 leaves this as a no-op so the refactor stays mechanical. F3 wires
-// the actual draw call.
 import type { Graphics } from "pixi.js";
 import type { PlaylistPresentation } from "../../playlist-core";
+import { COLORS } from "../palette";
 
 export function drawSnapIndicator(
-  _graphics: Graphics,
-  _presentation: PlaylistPresentation,
+  graphics: Graphics,
+  presentation: PlaylistPresentation,
 ): void {
-  // intentionally empty in F2; implemented in F3.
+  const x = presentation.snapIndicatorX;
+  if (x == null) return;
+  const { metrics, layout } = presentation;
+  graphics
+    .moveTo(Math.round(x) + 0.5, metrics.rulerHeight)
+    .lineTo(Math.round(x) + 0.5, layout.sceneRect.height)
+    .stroke({ color: COLORS.selected, width: 1, alpha: 0.55 });
 }

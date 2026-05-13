@@ -3,9 +3,14 @@
 // created in init. This module positions and updates them based on
 // `presentation.tooltipView`.
 //
-// Stub: F2 keeps this empty; F3 wires it.
+// Layout: anchor at (anchor.x + 12, anchor.y - 22). Pill height is fixed
+// at 18px, width derives from the text length (~6.2 px per char @ size 11
+// — close enough for the dark-theme pill and keeps us off Pixi's text
+// metrics, which require a render pass to be accurate).
 import type { Container, Graphics } from "pixi.js";
 import type { PlaylistPresentation } from "../../playlist-core";
+import { COLORS } from "../palette";
+import { addText } from "../text-pool";
 
 export interface TooltipContext {
   container: Container;
@@ -13,9 +18,34 @@ export interface TooltipContext {
   textLayer: Container;
 }
 
+const TOOLTIP_OFFSET_X = 12;
+const TOOLTIP_OFFSET_Y = -22;
+const TOOLTIP_HEIGHT = 18;
+const TOOLTIP_PADDING_X = 8;
+const TOOLTIP_CHAR_WIDTH = 6.2; // approximate advance for size-11 sans
+
 export function drawTooltip(
-  _ctx: TooltipContext,
-  _presentation: PlaylistPresentation,
+  ctx: TooltipContext,
+  presentation: PlaylistPresentation,
 ): void {
-  // intentionally empty in F2; implemented in F3.
+  const view = presentation.tooltipView;
+  if (!view) {
+    ctx.container.visible = false;
+    return;
+  }
+  ctx.container.visible = true;
+  const text = view.text;
+  const textWidth = Math.max(text.length, 1) * TOOLTIP_CHAR_WIDTH;
+  const pillWidth = textWidth + TOOLTIP_PADDING_X * 2;
+  const x = Math.round(view.x + TOOLTIP_OFFSET_X);
+  const y = Math.round(view.y + TOOLTIP_OFFSET_Y);
+  ctx.background
+    .roundRect(x, y, pillWidth, TOOLTIP_HEIGHT, 4)
+    .fill({ color: COLORS.panelStrong, alpha: 0.92 })
+    .stroke({ color: COLORS.text, width: 1, alpha: 0.4 });
+  addText(ctx.textLayer, text, x + TOOLTIP_PADDING_X, y + 3, {
+    color: COLORS.text,
+    size: 11,
+    weight: "600",
+  });
 }

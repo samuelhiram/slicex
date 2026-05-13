@@ -1,6 +1,7 @@
 import {
   automationPointFromScreen,
   clamp,
+  formatBarBeat,
   getHorizontalScrollableRange,
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
@@ -299,6 +300,52 @@ function clipIdsTouchedBySegment(
     ids.push(view.clip.id);
   }
   return ids;
+}
+
+// Pump the three F3 overlays (snap line / drop ghost / time tooltip) from a
+// single call site so the gesture handlers stay focused on their primary
+// mutations. `preview` may be null when the gesture only emits a snap/time
+// tooltip (play-position-drag). `tooltipTime` overrides the time shown in
+// the tooltip — used by play-position-drag where the meaningful time is the
+// playhead, not the inferred-from-preview value.
+function emitDragOverlays(
+  core: PlaylistCore,
+  state: import("../playlist-core").PlaylistState,
+  point: PlaylistPoint,
+  altKey: boolean,
+  preview:
+    | import("../playlist-core").PlaylistDragPreview
+    | null
+    | undefined,
+  tooltipTime?: number,
+): void {
+  const snapActive = state.snap.mode !== "none" && !altKey;
+  const snapTimeValue =
+    preview && preview.kind === "clip-move"
+      ? preview.previewStart
+      : preview && preview.kind === "clip-resize"
+        ? preview.edge === "right"
+          ? preview.previewStart + preview.previewDuration
+          : preview.previewStart
+        : preview && preview.kind === "marker"
+          ? preview.previewTime
+          : tooltipTime ?? 0;
+  core.setSnapHint({ time: snapTimeValue, visible: snapActive });
+  if (preview !== undefined) {
+    core.setDragPreview(preview);
+  }
+  const tooltipBeats = tooltipTime ?? snapTimeValue;
+  core.setTooltip({
+    kind: "time",
+    text: formatBarBeat(tooltipBeats, core.metrics.beatsPerBar),
+    anchor: point,
+  });
+}
+
+function clearDragOverlays(core: PlaylistCore): void {
+  core.clearSnapHint();
+  core.clearDragPreview();
+  core.clearTooltip();
 }
 
 function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
@@ -671,6 +718,23 @@ export function createPlaylistInteractionController(
     if (!activeGesture) {
       const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
       setHoverFromHit(core, hit);
+      // F3: hover on the ruler emits a B.B.T tooltip; everywhere else the
+      // tooltip is cleared. setTooltip short-circuits when the value
+      // doesn't change, so calling clearTooltip every pointermove is free
+      // when no tooltip was active.
+      if (hit.kind === "ruler" || hit.kind === "play-position-marker") {
+        const tooltipBeats = Math.max(
+          0,
+          screenXToTime(state, point.x, metrics),
+        );
+        core.setTooltip({
+          kind: "time",
+          text: formatBarBeat(tooltipBeats, metrics.beatsPerBar),
+          anchor: point,
+        });
+      } else {
+        core.clearTooltip();
+      }
       setCursor(host, hit, null, state.tool);
       return;
     }
@@ -713,18 +777,28 @@ export function createPlaylistInteractionController(
       const deltaTime = primaryStart - primary.start;
       const currentTrackIndex = screenYToTrackIndex(state, point.y, metrics);
       const trackDelta = currentTrackIndex - gesture.startTrackIndex;
+      const allMoves = gesture.originals.map((clip) => ({
+        id: clip.id,
+        start: clip.start + deltaTime,
+        trackIndex: clamp(
+          clip.trackIndex + trackDelta,
+          0,
+          Number.POSITIVE_INFINITY,
+        ),
+      }));
 
-      core.moveClips(
-        gesture.originals.map((clip) => ({
-          id: clip.id,
-          start: clip.start + deltaTime,
-          trackIndex: clamp(
-            clip.trackIndex + trackDelta,
-            0,
-            Number.POSITIVE_INFINITY,
-          ),
-        })),
-      );
+      core.moveClips(allMoves);
+      emitDragOverlays(core, state, point, event.altKey, {
+        kind: "clip-move",
+        primaryClipId: gesture.primaryClipId,
+        previewTrackIndex: clamp(
+          gesture.startTrackIndex + trackDelta,
+          0,
+          Number.POSITIVE_INFINITY,
+        ),
+        previewStart: primaryStart,
+        allMoves,
+      });
       event.preventDefault();
       return;
     }
@@ -739,6 +813,18 @@ export function createPlaylistInteractionController(
         core.stretchResizeClip(gesture.clipId, gesture.edge, time);
       } else {
         core.resizeClip(gesture.clipId, gesture.edge, time);
+      }
+      const clipAfter = core
+        .getState()
+        .clips.find((c) => c.id === gesture.clipId);
+      if (clipAfter) {
+        emitDragOverlays(core, state, point, event.altKey, {
+          kind: "clip-resize",
+          clipId: gesture.clipId,
+          edge: gesture.edge,
+          previewStart: clipAfter.start,
+          previewDuration: clipAfter.duration,
+        });
       }
       event.preventDefault();
       return;
@@ -789,9 +875,13 @@ export function createPlaylistInteractionController(
     }
 
     if (gesture.kind === "play-position-drag") {
-      core.setPlayPosition(
-        snapTime(screenXToTime(state, point.x, metrics), state, event.altKey),
+      const snapped = snapTime(
+        screenXToTime(state, point.x, metrics),
+        state,
+        event.altKey,
       );
+      core.setPlayPosition(snapped);
+      emitDragOverlays(core, state, point, event.altKey, null, snapped);
       event.preventDefault();
       return;
     }
@@ -801,6 +891,18 @@ export function createPlaylistInteractionController(
       const raw = gesture.startTime + (currentTime - gesture.startPointerTime);
       const snapped = snapTime(Math.max(0, raw), state, event.altKey, metrics);
       core.updateMarker(gesture.markerId, { time: snapped });
+      emitDragOverlays(
+        core,
+        state,
+        point,
+        event.altKey,
+        {
+          kind: "marker",
+          markerId: gesture.markerId,
+          previewTime: snapped,
+        },
+        snapped,
+      );
       event.preventDefault();
       return;
     }
@@ -968,6 +1070,11 @@ export function createPlaylistInteractionController(
     ) {
       core.endGesture();
     }
+
+    // F3: every gesture that emitted overlay state during the drag must
+    // clear it on release. play-position-drag isn't undoable so it's not
+    // in the list above, but it still sets snap/tooltip.
+    clearDragOverlays(core);
 
     activeGesture = null;
     host.releasePointerCapture?.(event.pointerId);
