@@ -155,6 +155,10 @@ export interface PlaylistClipPresentation {
   // track.muted OR another track is soloed).
   effectivelyMuted: boolean;
   trackLocked: boolean;
+  // Group membership pass-through, copied verbatim from clip.groupId. The
+  // renderer reads this to draw a small hover dot indicating that the clip
+  // belongs to a group; the controller never reads from here.
+  groupId: string | null;
 }
 
 export interface PlaylistRulerTickPresentation {
@@ -199,6 +203,22 @@ export interface PlaylistMarqueePresentation {
   rect: PlaylistRect;
 }
 
+// Drag preview rects in screen coordinates. Computed once per presentation
+// from state.dragPreview + cache lookups so the overlay renderer can paint
+// the ghost outline without touching state.clips again.
+export interface PlaylistDragPreviewView {
+  rects: PlaylistRect[];
+  primaryRect: PlaylistRect | null;
+}
+
+// Floating tooltip in screen coords. The renderer pill consumes this verbatim.
+export interface PlaylistTooltipView {
+  kind: "time" | "ratio" | "offset";
+  text: string;
+  x: number;
+  y: number;
+}
+
 export interface PlaylistPresentation {
   state: PlaylistState;
   metrics: PlaylistMetrics;
@@ -217,6 +237,13 @@ export interface PlaylistPresentation {
   marquee: PlaylistMarqueePresentation | null;
   markerViews: PlaylistMarkerPresentation[];
   loopRegion: PlaylistLoopRegionPresentation | null;
+  // Drag/resize overlay rects (Fase 8 / F3). Null when no gesture is active.
+  dragPreviewView: PlaylistDragPreviewView | null;
+  // Snap indicator vertical line position in screen X (Fase 8 / F3). Null
+  // when no gesture is active, or when snap is off / Alt is held.
+  snapIndicatorX: number | null;
+  // Floating tooltip near the cursor (Fase 8 / F3). Null when not visible.
+  tooltipView: PlaylistTooltipView | null;
   timeToScreenX: (time: number) => number;
   screenXToTime: (screenX: number) => number;
   trackIndexToScreenY: (trackIndex: number) => number;
@@ -610,10 +637,105 @@ function createClipViews(
         state.hover?.kind !== "automation-point",
       effectivelyMuted,
       trackLocked,
+      groupId: clip.groupId ?? null,
     });
   }
 
   return views;
+}
+
+function createDragPreviewView(
+  state: PlaylistState,
+  metrics: PlaylistMetrics,
+  cache: TrackLayoutCache,
+): PlaylistDragPreviewView | null {
+  const preview = state.dragPreview;
+  if (!preview) return null;
+  const pxPerBeat = state.viewport.pxPerBeat;
+  const headerOffset = metrics.trackHeaderWidth - state.viewport.scrollX;
+  const rulerOffset = metrics.rulerHeight - state.viewport.scrollY;
+  const clipById = new Map(state.clips.map((c) => [c.id, c] as const));
+  const buildRect = (
+    start: number,
+    duration: number,
+    trackIndex: number,
+  ): PlaylistRect | null => {
+    const top =
+      trackIndex < cache.trackTops.length
+        ? cache.trackTops[trackIndex]!
+        : cache.trackTops.length > 0
+          ? cache.trackTops[cache.trackTops.length - 1]! +
+            cache.trackHeights[cache.trackHeights.length - 1]! +
+            (trackIndex - cache.trackTops.length) * metrics.trackHeight
+          : trackIndex * metrics.trackHeight;
+    const height =
+      trackIndex < cache.trackHeights.length
+        ? cache.trackHeights[trackIndex]!
+        : metrics.trackHeight;
+    return {
+      x: headerOffset + start * pxPerBeat,
+      y: rulerOffset + top + metrics.clipPaddingY,
+      width: Math.max(0, duration * pxPerBeat),
+      height: Math.max(0, height - metrics.clipPaddingY * 2),
+    };
+  };
+  if (preview.kind === "clip-move") {
+    const rects: PlaylistRect[] = [];
+    let primary: PlaylistRect | null = null;
+    for (const move of preview.allMoves) {
+      const clip = clipById.get(move.id);
+      if (!clip) continue;
+      const rect = buildRect(move.start, clip.duration, move.trackIndex);
+      if (!rect) continue;
+      rects.push(rect);
+      if (move.id === preview.primaryClipId) {
+        primary = rect;
+      }
+    }
+    return { rects, primaryRect: primary };
+  }
+  if (preview.kind === "clip-resize") {
+    const clip = clipById.get(preview.clipId);
+    if (!clip) return { rects: [], primaryRect: null };
+    const trackIndex = cache.trackIndexById.get(clip.trackId);
+    if (trackIndex === undefined) return { rects: [], primaryRect: null };
+    const rect = buildRect(
+      preview.previewStart,
+      preview.previewDuration,
+      trackIndex,
+    );
+    return { rects: rect ? [rect] : [], primaryRect: rect };
+  }
+  // Marker preview is a 1-d line on the ruler; renderer reads x directly
+  // from snapIndicatorX, so we return an empty rect bundle here.
+  return { rects: [], primaryRect: null };
+}
+
+function createTooltipView(state: PlaylistState): PlaylistTooltipView | null {
+  if (!state.tooltip) return null;
+  return {
+    kind: state.tooltip.kind,
+    text: state.tooltip.text,
+    // Renderer applies the +12/-22 offset itself so the anchor here stays a
+    // raw cursor coordinate, easy to compare against in tests.
+    x: state.tooltip.anchor.x,
+    y: state.tooltip.anchor.y,
+  };
+}
+
+function createSnapIndicatorX(
+  state: PlaylistState,
+  metrics: PlaylistMetrics,
+): number | null {
+  const hint = state.snapHint;
+  if (!hint || !hint.visible) return null;
+  const x = timeToScreenX(state, hint.time, metrics);
+  // Cull when the snap line would fall outside the timeline panel; the
+  // renderer just skips the draw call rather than clamp / clip.
+  if (x < metrics.trackHeaderWidth || x > state.viewport.width) {
+    return null;
+  }
+  return x;
 }
 
 function createRulerTicks(
@@ -782,6 +904,9 @@ export function createPlaylistPresentation(
     marquee: createMarquee(state),
     markerViews: createMarkerViews(state, metrics),
     loopRegion: createLoopRegion(state, metrics),
+    dragPreviewView: createDragPreviewView(state, metrics, cache),
+    snapIndicatorX: createSnapIndicatorX(state, metrics),
+    tooltipView: createTooltipView(state),
     timeToScreenX: (time: number) => timeToScreenX(state, time, metrics),
     screenXToTime: (screenX: number) => screenXToTime(state, screenX, metrics),
     trackIndexToScreenY: (trackIndex: number) =>

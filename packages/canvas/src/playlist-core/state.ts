@@ -4,6 +4,7 @@ import {
   type PlaylistClipMoveUpdate,
 } from "./actions";
 import {
+  getContentEndBeat,
   getTrackIdByIndex,
   getTrackIndexById,
   isAutomationClip,
@@ -26,20 +27,28 @@ import {
   type PlaylistClipType,
   type PlaylistClipboard,
   type PlaylistContextMenu,
+  type PlaylistDragPreview,
   type PlaylistMarker,
   type PlaylistMarkerKind,
   type PlaylistMarquee,
   type PlaylistMetrics,
   type PlaylistPoint,
   type PlaylistSelection,
+  type PlaylistSnapHint,
   type PlaylistSnapMode,
   type PlaylistState,
   type PlaylistStateListener,
   type PlaylistToolId,
+  type PlaylistTooltip,
 } from "./types";
 import type { PlaylistPresentation } from "./presentation";
 import { createPlaylistPresentation } from "./presentation";
-import { makeClipId, makeMarkerId, makePointId } from "./state-track-helpers";
+import {
+  makeClipId,
+  makeGroupId,
+  makeMarkerId,
+  makePointId,
+} from "./state-track-helpers";
 import { cloneClip } from "./state-utils";
 import { normalizeState } from "./state-utils";
 
@@ -265,7 +274,12 @@ export class PlaylistCore {
       return true;
     });
     if (filtered.length === 0) return;
-    this.dispatch({ type: "MOVE_CLIPS", updates: filtered });
+    // Auto-expand groups: for any update whose clip belongs to a group, add
+    // every sibling missing from the updates with the same start/track delta.
+    // Idempotent — if the caller (e.g. the controller after pointerdown
+    // expansion) already passed every member, no extras are appended.
+    const expanded = expandMoveUpdatesToGroups(state, filtered);
+    this.dispatch({ type: "MOVE_CLIPS", updates: expanded });
   }
 
   clearTrackClips(trackIndex: number): void {
@@ -631,6 +645,88 @@ export class PlaylistCore {
     this.dispatch({ type: "OPEN_MARKER_CONTEXT_MENU", markerId, position });
   }
 
+  // UI-overlay wrappers — drag preview / snap indicator / floating tooltip.
+  // All three are idempotent in the reducer (≥30Hz pointermove flood). They
+  // belong to §4 of docs/performance-canon.md.
+  setDragPreview(preview: PlaylistDragPreview): void {
+    this.dispatch({ type: "SET_DRAG_PREVIEW", preview });
+  }
+
+  clearDragPreview(): void {
+    this.dispatch({ type: "SET_DRAG_PREVIEW", preview: null });
+  }
+
+  setSnapHint(hint: PlaylistSnapHint | null): void {
+    this.dispatch({ type: "SET_SNAP_HINT", hint });
+  }
+
+  clearSnapHint(): void {
+    this.dispatch({ type: "SET_SNAP_HINT", hint: null });
+  }
+
+  setTooltip(tooltip: PlaylistTooltip | null): void {
+    this.dispatch({ type: "SET_TOOLTIP", tooltip });
+  }
+
+  clearTooltip(): void {
+    this.dispatch({ type: "SET_TOOLTIP", tooltip: null });
+  }
+
+  // Group membership wrappers (undoable). Group ids are auto-generated as
+  // `g-<n>` so the renderer doesn't have to care about uniqueness.
+  setClipGroup(clipId: string, groupId: string | null): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
+    this.dispatch({ type: "SET_CLIP_GROUP", clipId, groupId });
+  }
+
+  groupSelection(): string | null {
+    const ids = this.history.present.selection.clipIds.filter(
+      (id) => !this.isClipOnLockedTrack(id),
+    );
+    if (ids.length === 0) return null;
+    const groupId = makeGroupId(this.history.present.clips);
+    this.dispatch({ type: "GROUP_SELECTION", groupId, clipIds: ids });
+    return groupId;
+  }
+
+  ungroupSelection(): void {
+    const ids = this.history.present.selection.clipIds.filter(
+      (id) => !this.isClipOnLockedTrack(id),
+    );
+    if (ids.length === 0) return;
+    this.dispatch({ type: "UNGROUP_SELECTION", clipIds: ids });
+  }
+
+  // Returns clip ids expanded to include every clip sharing a groupId with
+  // any of the seeds. Pure / synchronous so the controller can call it once
+  // at pointerdown and reuse the result for every pointermove of the drag.
+  expandSelectionToGroups(seedIds: string[]): string[] {
+    const state = this.history.present;
+    if (seedIds.length === 0) return [];
+    const seedSet = new Set(seedIds);
+    const seedGroups = new Set<string>();
+    for (const clip of state.clips) {
+      if (seedSet.has(clip.id) && clip.groupId !== undefined) {
+        seedGroups.add(clip.groupId);
+      }
+    }
+    if (seedGroups.size === 0) {
+      return [...seedIds];
+    }
+    const out = new Set(seedIds);
+    for (const clip of state.clips) {
+      if (clip.groupId !== undefined && seedGroups.has(clip.groupId)) {
+        out.add(clip.id);
+      }
+    }
+    return Array.from(out);
+  }
+
+  // FL Studio End key: jump the playhead to the end of the last clip.
+  getContentEndTime(): number {
+    return getContentEndBeat(this.history.present);
+  }
+
   // Transport wrappers (UI-only).
   setTransportMode(mode: "song" | "pattern"): void {
     this.dispatch({ type: "SET_TRANSPORT_MODE", mode });
@@ -986,6 +1082,53 @@ export function createPlaylistCore(
   options?: PlaylistCoreOptions,
 ): PlaylistCore {
   return new PlaylistCore(initialState, options);
+}
+
+// Group-aware expansion for MOVE_CLIPS. Picks the delta from the first
+// update whose clip carries a groupId, then folds in every other clip of
+// the same group with the same (start, trackIndex) delta. Lock-filtered
+// against the destination too — sibling clips on locked tracks are skipped.
+function expandMoveUpdatesToGroups(
+  state: PlaylistState,
+  updates: PlaylistClipMoveUpdate[],
+): PlaylistClipMoveUpdate[] {
+  if (updates.length === 0) return updates;
+  const clipById = new Map(state.clips.map((c) => [c.id, c] as const));
+  const includedIds = new Set(updates.map((u) => u.id));
+  // Compute deltas per group from the first update of that group.
+  const groupDeltas = new Map<
+    string,
+    { startDelta: number; trackDelta: number }
+  >();
+  for (const update of updates) {
+    const clip = clipById.get(update.id);
+    if (!clip || clip.groupId === undefined) continue;
+    if (groupDeltas.has(clip.groupId)) continue;
+    const currentTrackIndex = getTrackIndexById(state, clip.trackId);
+    groupDeltas.set(clip.groupId, {
+      startDelta: update.start - clip.start,
+      trackDelta: update.trackIndex - currentTrackIndex,
+    });
+  }
+  if (groupDeltas.size === 0) return updates;
+  const out = [...updates];
+  for (const clip of state.clips) {
+    if (clip.groupId === undefined) continue;
+    if (includedIds.has(clip.id)) continue;
+    const delta = groupDeltas.get(clip.groupId);
+    if (!delta) continue;
+    const currentTrackIndex = getTrackIndexById(state, clip.trackId);
+    const targetTrackIndex = Math.max(0, currentTrackIndex + delta.trackDelta);
+    // Skip siblings on locked tracks (origin or destination).
+    if (state.tracks[currentTrackIndex]?.locked) continue;
+    if (state.tracks[targetTrackIndex]?.locked) continue;
+    out.push({
+      id: clip.id,
+      start: Math.max(0, clip.start + delta.startDelta),
+      trackIndex: targetTrackIndex,
+    });
+  }
+  return out;
 }
 
 function selectionBaseTrackIndex(state: PlaylistState): number {

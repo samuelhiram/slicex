@@ -597,6 +597,24 @@ export function getContentEndBeat(state: PlaylistState): number {
   );
 }
 
+// FL Studio displays time as "bar.beat.tick" where tick = 1/24 of a beat
+// (independent of the snap mode). Bars and beats are 1-indexed so beat 0
+// of bar 0 reads as "1.1.0". Used by the time tooltip and the inspector.
+export function formatBarBeat(
+  timeBeats: number,
+  beatsPerBar: number,
+  ticksPerBeat = 24,
+): string {
+  const safe = Math.max(0, timeBeats);
+  const totalTicks = Math.round(safe * ticksPerBeat);
+  const beatsPerBarRounded = Math.max(1, Math.round(beatsPerBar));
+  const totalBeats = Math.floor(totalTicks / ticksPerBeat);
+  const tick = totalTicks - totalBeats * ticksPerBeat;
+  const bar = Math.floor(totalBeats / beatsPerBarRounded);
+  const beat = totalBeats - bar * beatsPerBarRounded;
+  return `${bar + 1}.${beat + 1}.${tick}`;
+}
+
 function metricsDefaultEnd(state: PlaylistState): number {
   return Math.max(32, state.playPosition.time + 16);
 }

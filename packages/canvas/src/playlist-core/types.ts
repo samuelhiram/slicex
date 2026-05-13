@@ -72,6 +72,10 @@ interface PlaylistClipBase {
   // 2 means the content is twice as long as a 1x source, etc. The financial
   // engine multiplies recurrence intervals by this ratio.
   stretchRatio?: number;
+  // Optional group identifier. Clips sharing a groupId move together when
+  // any of them is dragged or nudged. Cleared by Ctrl+Shift+G or by paste
+  // (paste reassigns a fresh groupId so a pasted group becomes a sibling).
+  groupId?: string;
 }
 
 export interface PlaylistRegularClip extends PlaylistClipBase {
@@ -191,6 +195,53 @@ export interface PlaylistMarquee {
   current: PlaylistPoint;
 }
 
+// Drag preview: ghost outline rendered at the snapped destination while a
+// drag/resize gesture is active. The state is held separately from clip
+// positions so the live clip keeps following the cursor while the ghost
+// shows where the gesture would commit if released right now.
+export type PlaylistDragPreview =
+  | {
+      kind: "clip-move";
+      primaryClipId: string;
+      previewTrackIndex: number;
+      previewStart: number;
+      // Precomputed by the controller; the reducer/presentation never
+      // re-derives positions to avoid coupling with movement math.
+      allMoves: ReadonlyArray<{
+        id: string;
+        start: number;
+        trackIndex: number;
+      }>;
+    }
+  | {
+      kind: "clip-resize";
+      clipId: string;
+      edge: "left" | "right";
+      previewStart: number;
+      previewDuration: number;
+    }
+  | {
+      kind: "marker";
+      markerId: string;
+      previewTime: number;
+    }
+  | null;
+
+// Snap indicator hint: time at which the nearest snap point sits during a
+// drag/resize. `visible` is false when snap is off or Alt is held.
+export interface PlaylistSnapHint {
+  time: number;
+  visible: boolean;
+}
+
+// Time tooltip floating near the cursor. Kind tells the renderer how to
+// format/colour it; anchor is in screen coordinates.
+export interface PlaylistTooltip {
+  kind: "time" | "ratio" | "offset";
+  text: string;
+  anchor: PlaylistPoint;
+}
+
 export interface PlaylistTrackContextMenu {
   kind: "track";
   trackIndex: number;
@@ -252,6 +303,12 @@ export interface PlaylistState {
   // recording fences). Always sorted by `time` ascending after dispatch.
   markers: PlaylistMarker[];
   transport: PlaylistTransport;
+  // Drag/resize ghost outline emitted during active gestures (Fase 8 / F3).
+  dragPreview: PlaylistDragPreview;
+  // Snap-indicator vertical line during drag/resize (Fase 8 / F3).
+  snapHint: PlaylistSnapHint | null;
+  // Floating tooltip near the cursor during drag/hover (Fase 8 / F3).
+  tooltip: PlaylistTooltip | null;
 }
 
 export interface PlaylistMetrics {

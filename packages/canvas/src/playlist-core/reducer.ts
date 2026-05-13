@@ -6,13 +6,97 @@ import {
   getTrackIdByIndex,
   isAutomationClip,
 } from "./geometry";
-import type { PlaylistHover } from "./types";
+import type {
+  PlaylistClip,
+  PlaylistDragPreview,
+  PlaylistHover,
+  PlaylistSnapHint,
+  PlaylistTooltip,
+} from "./types";
 import {
   createInsertedTrack,
   materializeTracksThrough,
 } from "./state-track-helpers";
 import { sortAutomationPoints } from "./state-utils";
 import type { PlaylistMetrics, PlaylistState } from "./types";
+
+// Equality helpers for UI-overlay short-circuits. Each of these returns true
+// when the next value carries no semantic change vs the current one, so the
+// reducer can hand back the same state reference and skip notify(). These
+// actions fire ≥30Hz during drag/hover (pointermove flood).
+function snapHintsEqual(
+  a: PlaylistSnapHint | null,
+  b: PlaylistSnapHint | null,
+): boolean {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  return a.time === b.time && a.visible === b.visible;
+}
+
+function tooltipsEqual(
+  a: PlaylistTooltip | null,
+  b: PlaylistTooltip | null,
+): boolean {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  return (
+    a.kind === b.kind &&
+    a.text === b.text &&
+    a.anchor.x === b.anchor.x &&
+    a.anchor.y === b.anchor.y
+  );
+}
+
+function dragPreviewsEqual(
+  a: PlaylistDragPreview,
+  b: PlaylistDragPreview,
+): boolean {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "clip-move": {
+      const other = b as Extract<PlaylistDragPreview, { kind: "clip-move" }>;
+      if (
+        a.primaryClipId !== other.primaryClipId ||
+        a.previewTrackIndex !== other.previewTrackIndex ||
+        a.previewStart !== other.previewStart ||
+        a.allMoves.length !== other.allMoves.length
+      ) {
+        return false;
+      }
+      for (let i = 0; i < a.allMoves.length; i += 1) {
+        const left = a.allMoves[i]!;
+        const right = other.allMoves[i]!;
+        if (
+          left.id !== right.id ||
+          left.start !== right.start ||
+          left.trackIndex !== right.trackIndex
+        ) {
+          return false;
+        }
+      }
+      return true;
+    }
+    case "clip-resize": {
+      const other = b as Extract<PlaylistDragPreview, { kind: "clip-resize" }>;
+      return (
+        a.clipId === other.clipId &&
+        a.edge === other.edge &&
+        a.previewStart === other.previewStart &&
+        a.previewDuration === other.previewDuration
+      );
+    }
+    case "marker": {
+      const other = b as Extract<PlaylistDragPreview, { kind: "marker" }>;
+      return a.markerId === other.markerId && a.previewTime === other.previewTime;
+    }
+    default: {
+      const exhaustive: never = a;
+      return exhaustive;
+    }
+  }
+}
 
 // Hover equality short-circuit so SET_HOVER on the same target during a
 // pointermove flood doesn't allocate a fresh state every frame.
@@ -405,6 +489,32 @@ export function playlistReducer(
           ),
         },
       };
+    case "SET_DRAG_PREVIEW":
+      if (dragPreviewsEqual(state.dragPreview, action.preview)) {
+        return state;
+      }
+      return { ...state, dragPreview: action.preview };
+    case "SET_SNAP_HINT":
+      if (snapHintsEqual(state.snapHint, action.hint)) {
+        return state;
+      }
+      return { ...state, snapHint: action.hint ? { ...action.hint } : null };
+    case "SET_TOOLTIP":
+      if (tooltipsEqual(state.tooltip, action.tooltip)) {
+        return state;
+      }
+      return {
+        ...state,
+        tooltip: action.tooltip
+          ? { ...action.tooltip, anchor: { ...action.tooltip.anchor } }
+          : null,
+      };
+    case "SET_CLIP_GROUP":
+      return setClipGroup(state, action.clipId, action.groupId);
+    case "GROUP_SELECTION":
+      return groupSelection(state, action.groupId, action.clipIds);
+    case "UNGROUP_SELECTION":
+      return ungroupSelection(state, action.clipIds);
     default: {
       const exhaustive: never = action;
       return exhaustive;
@@ -981,6 +1091,77 @@ function sliceClipsAtTime(
       ...newClips.filter((c) => !state.clips.some((x) => x.id === c.id)),
     ].map((clip) => newById.get(clip.id) ?? clip),
   };
+}
+
+function setClipGroup(
+  state: PlaylistState,
+  clipId: string,
+  groupId: string | null,
+): PlaylistState {
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId) {
+      return clip;
+    }
+    const current = clip.groupId ?? null;
+    if (current === groupId) {
+      return clip;
+    }
+    changed = true;
+    if (groupId === null) {
+      const { groupId: _drop, ...rest } = clip as PlaylistClip & {
+        groupId?: string;
+      };
+      return rest as PlaylistClip;
+    }
+    return { ...clip, groupId };
+  });
+  return changed ? { ...state, clips } : state;
+}
+
+function groupSelection(
+  state: PlaylistState,
+  groupId: string,
+  clipIds: string[],
+): PlaylistState {
+  if (clipIds.length === 0) {
+    return state;
+  }
+  const ids = new Set(clipIds);
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (!ids.has(clip.id)) {
+      return clip;
+    }
+    if (clip.groupId === groupId) {
+      return clip;
+    }
+    changed = true;
+    return { ...clip, groupId };
+  });
+  return changed ? { ...state, clips } : state;
+}
+
+function ungroupSelection(
+  state: PlaylistState,
+  clipIds: string[],
+): PlaylistState {
+  if (clipIds.length === 0) {
+    return state;
+  }
+  const ids = new Set(clipIds);
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (!ids.has(clip.id) || clip.groupId === undefined) {
+      return clip;
+    }
+    changed = true;
+    const { groupId: _drop, ...rest } = clip as PlaylistClip & {
+      groupId?: string;
+    };
+    return rest as PlaylistClip;
+  });
+  return changed ? { ...state, clips } : state;
 }
 
 function deleteEmptyTrack(

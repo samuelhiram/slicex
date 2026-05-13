@@ -56,6 +56,9 @@ function createBaseState(): PlaylistState {
     stretchMode: false,
     markers: [],
     transport: { mode: "song", recording: false },
+    dragPreview: null,
+    snapHint: null,
+    tooltip: null,
   };
 }
 

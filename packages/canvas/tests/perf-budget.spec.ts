@@ -244,6 +244,70 @@ describe("perf budget — hot-path actions are idempotent", () => {
     sub.unsubscribe();
     expect(count).toBe(0);
   });
+
+  // Fase 8 / F1 — three new overlay actions that fire ≥30Hz during drag.
+  // Idempotency is the same canon §4 contract as the actions above.
+  it("SET_DRAG_PREVIEW with the same preview", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setDragPreview({
+      kind: "clip-resize",
+      clipId: "clip-drums-1",
+      edge: "right",
+      previewStart: 0,
+      previewDuration: 16,
+    });
+    let count = 0;
+    const sub = core.subscribe(() => {
+      count += 1;
+    });
+    for (let i = 0; i < 500; i += 1) {
+      core.setDragPreview({
+        kind: "clip-resize",
+        clipId: "clip-drums-1",
+        edge: "right",
+        previewStart: 0,
+        previewDuration: 16,
+      });
+    }
+    sub.unsubscribe();
+    expect(count).toBe(0);
+  });
+
+  it("SET_SNAP_HINT with the same hint", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setSnapHint({ time: 4, visible: true });
+    let count = 0;
+    const sub = core.subscribe(() => {
+      count += 1;
+    });
+    for (let i = 0; i < 500; i += 1) {
+      core.setSnapHint({ time: 4, visible: true });
+    }
+    sub.unsubscribe();
+    expect(count).toBe(0);
+  });
+
+  it("SET_TOOLTIP with the same tooltip", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setTooltip({
+      kind: "time",
+      text: "3.2.0",
+      anchor: { x: 100, y: 50 },
+    });
+    let count = 0;
+    const sub = core.subscribe(() => {
+      count += 1;
+    });
+    for (let i = 0; i < 500; i += 1) {
+      core.setTooltip({
+        kind: "time",
+        text: "3.2.0",
+        anchor: { x: 100, y: 50 },
+      });
+    }
+    sub.unsubscribe();
+    expect(count).toBe(0);
+  });
 });
 
 describe("perf budget — getMaxScrollY/X stay infinite (timeline is unbounded)", () => {

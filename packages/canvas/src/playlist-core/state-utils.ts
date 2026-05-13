@@ -70,7 +70,25 @@ export function cloneState(state: PlaylistState): PlaylistState {
     transport: state.transport
       ? { ...state.transport }
       : { mode: "song", recording: false },
+    dragPreview: cloneDragPreview(state.dragPreview ?? null),
+    snapHint: state.snapHint ? { ...state.snapHint } : null,
+    tooltip: state.tooltip
+      ? { ...state.tooltip, anchor: { ...state.tooltip.anchor } }
+      : null,
   };
+}
+
+function cloneDragPreview(
+  preview: PlaylistState["dragPreview"],
+): PlaylistState["dragPreview"] {
+  if (!preview) return null;
+  if (preview.kind === "clip-move") {
+    return {
+      ...preview,
+      allMoves: preview.allMoves.map((m) => ({ ...m })),
+    };
+  }
+  return { ...preview };
 }
 
 export function sortAutomationPoints(

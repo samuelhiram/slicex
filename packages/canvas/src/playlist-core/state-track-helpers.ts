@@ -82,3 +82,20 @@ export function makeMarkerId(markers: { id: string }[]): string {
   }
   return id;
 }
+
+// FL Studio clip groups. Group ids are arbitrary strings; we generate them
+// as `g-<n>` where n is monotonic against the largest existing g-<n> id.
+// Picking n from the count alone breaks when groups are deleted, so we scan
+// for the highest numeric suffix and increment.
+export function makeGroupId(clips: { groupId?: string }[]): string {
+  let max = 0;
+  for (const clip of clips) {
+    const id = clip.groupId;
+    if (!id || !id.startsWith("g-")) continue;
+    const tail = Number(id.slice(2));
+    if (Number.isFinite(tail) && tail > max) {
+      max = tail;
+    }
+  }
+  return `g-${max + 1}`;
+}

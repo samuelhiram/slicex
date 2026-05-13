@@ -2,13 +2,16 @@ import type {
   PlaylistClip,
   PlaylistClipboard,
   PlaylistContextMenu,
+  PlaylistDragPreview,
   PlaylistHover,
   PlaylistMarker,
   PlaylistMarquee,
   PlaylistPoint,
   PlaylistSelection,
+  PlaylistSnapHint,
   PlaylistSnapMode,
   PlaylistToolId,
+  PlaylistTooltip,
   PlaylistViewport,
 } from "./types";
 
@@ -87,6 +90,10 @@ export type PlaylistAction =
   | { type: "ADD_MARKER"; marker: PlaylistMarker }
   | { type: "REMOVE_MARKER"; markerId: string }
   | { type: "UPDATE_MARKER"; markerId: string; patch: Partial<PlaylistMarker> }
+  // Group membership (undoable). groupId === null clears membership.
+  | { type: "SET_CLIP_GROUP"; clipId: string; groupId: string | null }
+  | { type: "GROUP_SELECTION"; groupId: string; clipIds: string[] }
+  | { type: "UNGROUP_SELECTION"; clipIds: string[] }
   // UI-only mutations (not undoable).
   | { type: "SET_SELECTION"; selection: Partial<PlaylistSelection> }
   | { type: "SET_MARQUEE"; marquee: PlaylistMarquee | null }
@@ -122,7 +129,11 @@ export type PlaylistAction =
     }
   | { type: "SET_TRANSPORT_MODE"; mode: "song" | "pattern" }
   | { type: "TOGGLE_TRANSPORT_MODE" }
-  | { type: "TOGGLE_TRANSPORT_RECORDING" };
+  | { type: "TOGGLE_TRANSPORT_RECORDING" }
+  // UI-only overlays (≥30Hz, idempotent in the reducer).
+  | { type: "SET_DRAG_PREVIEW"; preview: PlaylistDragPreview }
+  | { type: "SET_SNAP_HINT"; hint: PlaylistSnapHint | null }
+  | { type: "SET_TOOLTIP"; tooltip: PlaylistTooltip | null };
 
 export type PlaylistActionType = PlaylistAction["type"];
 
@@ -161,6 +172,9 @@ const UNDOABLE_ACTION_TYPES: ReadonlySet<PlaylistActionType> = new Set([
   "ADD_MARKER",
   "REMOVE_MARKER",
   "UPDATE_MARKER",
+  "SET_CLIP_GROUP",
+  "GROUP_SELECTION",
+  "UNGROUP_SELECTION",
 ] satisfies PlaylistActionType[]);
 
 export function isUndoableAction(action: PlaylistAction): boolean {

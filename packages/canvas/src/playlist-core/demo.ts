@@ -124,5 +124,8 @@ export function createDemoPlaylistState(): PlaylistState {
       { id: "m-loop-b", time: 40, kind: "loop", label: "Loop B" },
     ],
     transport: { mode: "song", recording: false },
+    dragPreview: null,
+    snapHint: null,
+    tooltip: null,
   };
 }
