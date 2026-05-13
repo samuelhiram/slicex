@@ -56,6 +56,58 @@ function parseHexColor(value: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+// F9: deterministic hash → seed → sparkline bar count + heights. Picks N
+// in [8, 19] from the clip id so two clips with the same id always get
+// the same sparkline (no per-frame allocation). The motor financiero can
+// replace this default later via setSparklineProvider.
+function hashStringToSeed(value: string): number {
+  let hash = 2166136261 >>> 0; // FNV-1a basis
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+export function defaultSparklineBars(clipId: string): number[] {
+  return sparklineBarsForClipImpl(clipId);
+}
+
+function sparklineBarsForClipImpl(clipId: string): number[] {
+  const seed = hashStringToSeed(clipId);
+  const count = 8 + (seed % 12);
+  const out: number[] = [];
+  let s = seed || 1;
+  for (let i = 0; i < count; i += 1) {
+    // xorshift 32 — cheap and deterministic.
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    s = s >>> 0;
+    const ratio = (s % 1000) / 1000;
+    out.push(0.2 + ratio * 0.65);
+  }
+  return out;
+}
+
+// Allow consumers to swap in a real provider (e.g. financial engine).
+// Defaults to the deterministic hash above. Setting null reverts to default.
+let sparklineProvider: ((clipId: string) => number[] | null) | null = null;
+
+export function setSparklineProvider(
+  provider: ((clipId: string) => number[] | null) | null,
+): void {
+  sparklineProvider = provider;
+}
+
+function getSparklineBars(clipId: string): number[] {
+  if (sparklineProvider) {
+    const custom = sparklineProvider(clipId);
+    if (custom !== null) return custom;
+  }
+  return sparklineBarsForClipImpl(clipId);
+}
+
 function clipVisualHash(view: PlaylistClipPresentation): string {
   const ratio = view.clip.stretchRatio ?? 1;
   const offset = view.clip.contentOffset ?? 0;
@@ -67,6 +119,9 @@ function clipVisualHash(view: PlaylistClipPresentation): string {
     view.selected ? 1 : 0,
     view.hovered ? 1 : 0,
     view.isAutomation ? 1 : 0,
+    // F9 invalidation: a clip becoming a pattern or losing pattern-ness
+    // changes whether we draw the sparkline at all.
+    view.clip.type,
     view.rect.width,
     view.rect.height,
     Math.round(view.titleRect.height * 100),
@@ -104,6 +159,33 @@ function drawClipBodyLocal(
         .moveTo(clampedX1, clampedX1 - x1)
         .lineTo(clampedX2, clampedX2 - x1)
         .stroke({ color: palette.text, alpha: 0.18, width: 1 });
+    }
+  }
+  // F9: sparkline stub for pattern clips. Skipped on automation (drawn by
+  // the overlay polyline) and on audio (no internal preview today). The
+  // bars are pure visual filler until the financial engine plugs in real
+  // data via setSparklineProvider.
+  if (view.clip.type === "pattern" && width >= 60 && height >= 18) {
+    const bars = getSparklineBars(view.clip.id);
+    if (bars.length > 0) {
+      const titleH = view.titleRect.height;
+      const drawableHeight = height - titleH - 6;
+      if (drawableHeight > 2) {
+        const padX = 8;
+        const usable = Math.max(0, width - padX * 2);
+        const barWidth = 2;
+        const slot = bars.length > 1 ? usable / (bars.length - 1) : usable;
+        for (let i = 0; i < bars.length; i += 1) {
+          const ratio = bars[i]!;
+          const h = Math.max(1, Math.round(drawableHeight * ratio));
+          const x = padX + Math.round(i * slot);
+          if (x + barWidth > width - padX) continue;
+          const yTop = titleH + 3 + (drawableHeight - h);
+          body
+            .rect(x, yTop, barWidth, h)
+            .fill({ color: palette.text, alpha: 0.32 });
+        }
+      }
     }
   }
 }
