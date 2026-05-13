@@ -131,6 +131,25 @@ export type ActiveGesture =
       markerId: string;
       startTime: number;
       startPointerTime: number;
+    }
+  | {
+      // Draw tool — drag from an empty cell to size the new clip while
+      // creating it. The clip is created the moment the cursor crosses the
+      // minClipDuration threshold; subsequent moves grow its right edge.
+      kind: "clip-create-drag";
+      pointerId: number;
+      createdClipId: string | null;
+      startPointerTime: number;
+      startTrackIndex: number;
+      startSnappedStart: number;
+      // Template captured once so the created clip's metadata is stable
+      // across moves (label/color/type/sourceId).
+      template: {
+        type: PlaylistClipType;
+        label: string;
+        color: string;
+        sourceId?: string;
+      };
     };
 
 export type ActiveGestureKind = ActiveGesture["kind"];

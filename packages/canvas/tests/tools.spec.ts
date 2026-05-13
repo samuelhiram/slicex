@@ -15,10 +15,11 @@ import type { PlaylistHit } from "../src/playlist-interaction/hit-test";
 
 const M: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS;
 
-function createMockEvent(button = 0): PointerEvent {
+function createMockEvent(button = 0, detail = 1): PointerEvent {
   return {
     pointerId: 1,
     button,
+    detail,
     altKey: false,
     ctrlKey: false,
     shiftKey: false,
@@ -55,7 +56,7 @@ describe("Tools — onPointerDown dispatch", () => {
     expect(gesture?.kind).toBe("marquee");
   });
 
-  it("Draw tool — empty hit creates a clip and starts clip-drag", () => {
+  it("Draw tool — empty hit on single click starts a clip-create-drag (no clip yet)", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     const before = core.getState().clips.length;
     const gesture = TOOLS.draw.onPointerDown({
@@ -65,7 +66,21 @@ describe("Tools — onPointerDown dispatch", () => {
       hit: emptyHit(core),
       event: createMockEvent(),
     });
-    expect(gesture?.kind).toBe("clip-drag");
+    expect(gesture?.kind).toBe("clip-create-drag");
+    expect(core.getState().clips.length).toBe(before);
+  });
+
+  it("Draw tool — double-click on empty creates a default-sized clip and no gesture", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    const before = core.getState().clips.length;
+    const gesture = TOOLS.draw.onPointerDown({
+      core,
+      metrics: M,
+      point: { x: 800, y: M.rulerHeight + 10 },
+      hit: emptyHit(core),
+      event: createMockEvent(0, 2),
+    });
+    expect(gesture).toBeNull();
     expect(core.getState().clips.length).toBe(before + 1);
   });
 
@@ -171,20 +186,20 @@ describe("Tools — onPointerDown dispatch", () => {
     expect(gesture?.kind).toBe("slice-drag");
   });
 
-  it("createClip via Draw tool resolves a track id from the hit row", () => {
+  it("createClip via Draw tool double-click resolves a track id from the hit row", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     TOOLS.draw.onPointerDown({
       core,
       metrics: M,
       point: { x: 700, y: M.rulerHeight + M.trackHeight + 5 },
       hit: emptyHit(core),
-      event: createMockEvent(),
+      event: createMockEvent(0, 2),
     });
     const created = core.getState().clips[core.getState().clips.length - 1]!;
     expect(created.trackId).toBe(getTrackIdByIndex(core.getState(), 1));
   });
 
-  it("Draw tool uses the selected clip as the visual/source template", () => {
+  it("Draw tool double-click uses the selected clip as the visual/source template", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     core.setClipSelection(["clip-bass-1"]);
     TOOLS.draw.onPointerDown({
@@ -192,7 +207,7 @@ describe("Tools — onPointerDown dispatch", () => {
       metrics: M,
       point: { x: 900, y: M.rulerHeight + 6 * M.trackHeight + 10 },
       hit: emptyHit(core),
-      event: createMockEvent(),
+      event: createMockEvent(0, 2),
     });
     const created = core.getState().clips[core.getState().clips.length - 1]!;
     const source = core.getState().clips.find((c) => c.id === "clip-bass-1")!;

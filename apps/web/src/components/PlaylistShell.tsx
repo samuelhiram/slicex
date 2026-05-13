@@ -556,6 +556,10 @@ export function PlaylistShell() {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const [core, setCore] = React.useState<PlaylistCore | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  // F4: double-click on a clip surfaces a "playlist-clip-open" CustomEvent
+  // from the controller. The shell parks the id in local state and renders
+  // a stub modal until the financial-engine clip editor lands.
+  const [openClipId, setOpenClipId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     const host = hostRef.current;
@@ -630,15 +634,30 @@ export function PlaylistShell() {
       };
     });
 
+    const handleClipOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ clipId: string }>).detail;
+      if (detail?.clipId) {
+        setOpenClipId(detail.clipId);
+      }
+    };
+    host.addEventListener("playlist-clip-open", handleClipOpen);
+
     return () => {
       cancelled = true;
       cancelAnimationFrame(initId);
       unsubscribeTransport?.();
       interaction?.destroy();
       renderer?.destroy();
+      host.removeEventListener("playlist-clip-open", handleClipOpen);
       setCore(null);
     };
   }, []);
+
+  const openClipLabel = React.useMemo(() => {
+    if (!core || !openClipId) return null;
+    const clip = core.getState().clips.find((c) => c.id === openClipId);
+    return clip?.label ?? openClipId;
+  }, [core, openClipId]);
 
   return (
     <section className="playlist-shell" aria-label="Playlist">
@@ -655,6 +674,64 @@ export function PlaylistShell() {
           <span>{error}</span>
         </div>
       ) : null}
+      {openClipId ? (
+        <ClipDetailModal
+          clipLabel={openClipLabel ?? openClipId}
+          onClose={() => setOpenClipId(null)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+// F4 stub modal — opened by double-clicking a clip. The financial-engine
+// clip editor will replace this in a later phase; for now it surfaces the
+// clip label and a close button so the dblclick → editor wiring is
+// observable end-to-end.
+function ClipDetailModal({
+  clipLabel,
+  onClose,
+}: {
+  clipLabel: string;
+  onClose: () => void;
+}) {
+  React.useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+  return (
+    <div
+      className="playlist-shell__modal-overlay"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        className="playlist-shell__modal"
+        role="dialog"
+        aria-label="Clip details"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="playlist-shell__modal-header">
+          <strong>Clip details</strong>
+          <button
+            type="button"
+            className="playlist-shell__modal-close"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </header>
+        <div className="playlist-shell__modal-body">
+          <p>
+            Editing <strong>{clipLabel}</strong>. The financial-engine clip
+            editor will land here in a later phase.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -72,7 +72,14 @@ export const drawTool: PlaylistTool = {
       };
     }
 
-    // Empty timeline area → create a clip and start dragging it.
+    // Empty timeline area.
+    //
+    // Single click + drag → "clip-create-drag" gesture: we WAIT to actually
+    // create the clip until the cursor crosses minClipDuration. That keeps
+    // accidental micro-drags from leaving stray short clips behind.
+    //
+    // Double-click → immediate default-sized clip, no gesture (the user
+    // already committed to a default-duration clip with two clicks).
     const trackIndex = screenYToTrackIndex(state, point.y, metrics);
     const rawTime = screenXToTime(state, point.x, metrics);
     const start = Math.max(0, snapTime(rawTime, state, event.altKey));
@@ -82,23 +89,32 @@ export const drawTool: PlaylistTool = {
       color: "#7aa6d8",
       duration: DEFAULT_CLIP_DURATION_BEATS,
     });
-    const id = core.createClip({
-      trackIndex,
-      start,
-      duration: template.duration,
-      type: template.type,
-      label: template.label,
-      color: template.color,
-      sourceId: template.sourceId,
-    });
-    core.setSelection({ clipIds: [id], automationPointIds: [] });
+    if ((event as { detail?: number }).detail === 2) {
+      const id = core.createClip({
+        trackIndex,
+        start,
+        duration: template.duration,
+        type: template.type,
+        label: template.label,
+        color: template.color,
+        sourceId: template.sourceId,
+      });
+      core.setSelection({ clipIds: [id], automationPointIds: [] });
+      return null;
+    }
     return {
-      kind: "clip-drag",
+      kind: "clip-create-drag",
       pointerId: event.pointerId,
-      primaryClipId: id,
+      createdClipId: null,
       startPointerTime: rawTime,
       startTrackIndex: trackIndex,
-      originals: [{ id, start, trackIndex }],
+      startSnappedStart: start,
+      template: {
+        type: template.type,
+        label: template.label,
+        color: template.color,
+        sourceId: template.sourceId,
+      },
     };
   },
 };

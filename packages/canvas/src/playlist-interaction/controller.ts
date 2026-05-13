@@ -684,6 +684,24 @@ export function createPlaylistInteractionController(
       return;
     }
 
+    // F4: double-click on a clip emits a host-level CustomEvent so the
+    // React shell can open a clip-detail modal. We bubble through DOM
+    // rather than holding modal state in the playlist-core because the
+    // modal's contents are a shell concern (the financial engine modal
+    // will replace this stub later).
+    if (
+      (event as { detail?: number }).detail === 2 &&
+      (hit.kind === "clip" || hit.kind === "automation-body")
+    ) {
+      const evt = new CustomEvent("playlist-clip-open", {
+        detail: { clipId: hit.clip.id },
+        bubbles: true,
+      });
+      host.dispatchEvent(evt);
+      event.preventDefault();
+      return;
+    }
+
     // Delegate timeline-area hits to the active tool.
     const tool = getTool(state.tool);
     const gesture = tool.onPointerDown({ core, metrics, point, hit, event });
@@ -702,6 +720,7 @@ export function createPlaylistInteractionController(
     return (
       gesture.kind === "clip-drag" ||
       gesture.kind === "clip-resize" ||
+      gesture.kind === "clip-create-drag" ||
       gesture.kind === "automation-point-drag" ||
       gesture.kind === "paint-drag" ||
       gesture.kind === "delete-drag" ||
@@ -826,6 +845,45 @@ export function createPlaylistInteractionController(
           previewDuration: clipAfter.duration,
         });
       }
+      event.preventDefault();
+      return;
+    }
+
+    if (gesture.kind === "clip-create-drag") {
+      // Draw-tool drag from empty space. We only commit a clip once the
+      // cursor has crossed minClipDuration past the snapped start so a
+      // micro-drag (single-click bounce) doesn't leave a stray clip behind.
+      // After creation, every subsequent move adjusts the right edge.
+      const rawTime = screenXToTime(state, point.x, metrics);
+      const endTime = snapTime(rawTime, state, event.altKey);
+      const minEnd = gesture.startSnappedStart + metrics.minClipDuration;
+      if (endTime <= minEnd && gesture.createdClipId === null) {
+        event.preventDefault();
+        return;
+      }
+      const effectiveEnd = Math.max(endTime, minEnd);
+      if (gesture.createdClipId === null) {
+        const id = core.createClip({
+          trackIndex: gesture.startTrackIndex,
+          start: gesture.startSnappedStart,
+          duration: effectiveEnd - gesture.startSnappedStart,
+          type: gesture.template.type,
+          label: gesture.template.label,
+          color: gesture.template.color,
+          sourceId: gesture.template.sourceId,
+        });
+        gesture.createdClipId = id;
+        core.setSelection({ clipIds: [id], automationPointIds: [] });
+      } else {
+        core.resizeClip(gesture.createdClipId, "right", effectiveEnd);
+      }
+      emitDragOverlays(core, state, point, event.altKey, {
+        kind: "clip-resize",
+        clipId: gesture.createdClipId ?? "",
+        edge: "right",
+        previewStart: gesture.startSnappedStart,
+        previewDuration: effectiveEnd - gesture.startSnappedStart,
+      });
       event.preventDefault();
       return;
     }
@@ -1059,6 +1117,7 @@ export function createPlaylistInteractionController(
     if (
       activeGesture.kind === "clip-drag" ||
       activeGesture.kind === "clip-resize" ||
+      activeGesture.kind === "clip-create-drag" ||
       activeGesture.kind === "automation-point-drag" ||
       activeGesture.kind === "paint-drag" ||
       activeGesture.kind === "delete-drag" ||

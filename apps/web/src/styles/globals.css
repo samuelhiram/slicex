@@ -273,6 +273,63 @@ textarea {
   color: var(--muted);
 }
 
+/* F4 stub modal — opened by double-clicking a clip. SliceX palette only;
+   replaced by the financial-engine clip editor later. */
+.playlist-shell__modal-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 20;
+}
+
+.playlist-shell__modal {
+  min-width: 320px;
+  max-width: min(520px, 90vw);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.playlist-shell__modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.playlist-shell__modal-close {
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  font-size: 20px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.playlist-shell__modal-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.playlist-shell__modal-body {
+  padding: 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.playlist-shell__modal-body strong {
+  color: var(--text);
+}
+
 .app-error {
   min-height: 100dvh;
   display: grid;
