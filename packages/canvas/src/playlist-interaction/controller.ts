@@ -702,6 +702,32 @@ export function createPlaylistInteractionController(
       return;
     }
 
+    // F7: Alt+click on a clip = eyedropper. Recolors the current selection
+    // to the clicked clip's colour (or just the clicked clip when nothing
+    // else is selected). Alt+click on ruler/empty stays a snap-bypass —
+    // the hit-test distinguishes clip vs ruler/empty for us.
+    if (
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      (hit.kind === "clip" || hit.kind === "automation-body")
+    ) {
+      const sourceColor = hit.clip.color;
+      const selected = state.selection.clipIds;
+      if (selected.length > 0) {
+        core.beginGesture();
+        for (const id of selected) {
+          core.setClipColor(id, sourceColor);
+        }
+        core.endGesture();
+      } else {
+        core.setClipColor(hit.clip.id, sourceColor);
+      }
+      event.preventDefault();
+      return;
+    }
+
     // Delegate timeline-area hits to the active tool.
     const tool = getTool(state.tool);
     const gesture = tool.onPointerDown({ core, metrics, point, hit, event });
