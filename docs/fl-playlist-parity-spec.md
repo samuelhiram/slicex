@@ -1,29 +1,66 @@
 # FL Playlist Parity Spec
 
-Fuente: Image-Line FL Studio Playlist y Automation Clips.
+Fuente: Image-Line FL Studio Playlist y Automation Clips, manual oficial.
+Estado: cierre de Fase 8 (parity de comportamiento + visual SliceX).
 
 ## Ruler
 - Click izquierdo en ruler: seek inmediato a tiempo bajo cursor.
 - Drag desde ruler: scrub continuo del Play Position Marker.
 - Labels de compas se generan desde `scrollX + zoom`, no desde ancho total.
 - Grid sigue al ruler.
+- Hover en ruler emite tooltip "bar.beat.tick" cerca del cursor (F3).
 
 ## Play Position Marker
 - Estado real: `playlist-core.playPosition.time`.
 - Renderer calcula `screenX = worldToScreenX(playPosition.time)`.
 - Marker visible en ruler y linea vertical en tracks.
-- Drag del marker actualiza tiempo real.
+- Drag del marker actualiza tiempo real + emite tooltip B.B.T (F3).
 - Pan/zoom recalcula pantalla desde estado; no hay drift.
 - Space alterna avance demo con RAF, sin audio real.
 
 ## Clips
 - Tracks multiproposito: audio, pattern y automation pueden vivir en cualquier track.
-- Body: drag/move.
+- Body: drag/move (mueve grupos completos cuando el clip pertenece a uno, F6).
 - Title bar: label y resize valido.
-- Resize left/right: ajusta start/duration con minimo.
+- Resize left/right: ajusta start/duration con minimo, emite tooltip B.B.T (F3).
 - Selection simple: click.
 - Marquee: drag en vacio.
 - Snap: activo por defecto; Alt lo ignora.
+- Drag emite snap-indicator vertical (F3) y drop-ghost en destino (F3).
+- Dot 3px en esquina superior derecha cuando el clip esta en un grupo y
+  esta hovered (F6).
+- Halo + stroke 2.5px en seleccion (F10).
+- Clips pattern muestran sparkline interna (F9).
+
+## Drag-to-create (Draw tool)
+- LMB en empty con Draw tool: clip-create-drag.
+- Clip se crea al cruzar `minClipDuration` past snapped start; movimientos
+  siguientes ajustan el borde derecho (F4).
+- Double-click empty: crea clip default-sized sin gesture (F4).
+
+## Double-click clip
+- Cualquier tool, doble click en clip: emite CustomEvent
+  `playlist-clip-open` con `{ clipId }`. El shell React abre modal stub
+  (F4). Hook para el editor financiero futuro.
+
+## Eyedropper (Alt+click on clip)
+- Alt + click LMB en clip: recolora la seleccion actual al color del clip
+  clickeado. Sin seleccion, recolora el clip clickeado (F7).
+- Alt + click en ruler/empty sigue siendo snap-bypass (no interfiere).
+
+## Group / Ungroup
+- Ctrl+G: groupSelection assigns un nuevo groupId a los clips seleccionados.
+- Ctrl+Shift+G: ungroupSelection limpia los groupIds (F6).
+- Drag de un clip agrupado: arrastra todos sus hermanos con el mismo delta
+  (auto-expansion en `PlaylistCore.moveClips` + `expandSelectionToGroups`).
+- Paste: regenera groupIds (un grupo pegado es sibling, no copia que arrastre
+  al original).
+
+## Arrow keys + End / Home
+- Sin seleccion: ←→ mueve playhead.
+- Con seleccion: ←→ nudge horizontal (Shift = ×4, Ctrl/Cmd = 1 bar), ↑↓
+  nudge vertical de tracks (F5).
+- Home: playhead a 0. End: playhead a contentEnd (F5).
 
 ## Automation Clips
 - Tipo separado `automation`.
@@ -45,11 +82,18 @@ Fuente: Image-Line FL Studio Playlist y Automation Clips.
 - Scrollbar vertical: drag mueve `scrollY` como camara virtual.
 - Coordenadas screen nunca son verdad.
 
+## Touch (F8)
+- 2 dedos: pinch zoom anclado al midpoint (mismo math que Ctrl+wheel).
+- Long-press (500ms, <6px move): abre context menu del hit.
+- Flick pan/scroll: inertia decay 0.95/frame hasta SETTLE_EPSILON.
+- Cualquier nuevo pointerdown cancela inertia.
+
 ## Track Headers
 - Columna izquierda es panel opaco, no grid transparente.
 - Cada header tiene fondo solido, texto legible, color strip y divisor alineado con track row.
 - Header es zona interactiva propia.
 - Right click en header abre menu contextual custom del track.
+- Tracks reales sin clips muestran microtext "—" (F10).
 
 ## Tracklist Context Menu
 - Abre en posicion del cursor.
@@ -58,6 +102,12 @@ Fuente: Image-Line FL Studio Playlist y Automation Clips.
 - Delete selected aparece dirigido al track con seleccion.
 - Clear borra contenido del track correcto.
 - Menu vive en estado/interaccion; renderer solo dibuja.
+
+## Recording pulse (F10)
+- R hotkey toggles `transport.recording`.
+- Mientras recording=true, el renderer dispara rAF dedicado que pinta una
+  banda 2px en el borde superior con alpha breathing (0.5 ↔ 1).
+- rAF se cancela cuando recording vuelve a false (canon §3.11).
 
 ## Hit-Testing
 Prioridad:
@@ -100,3 +150,11 @@ Prioridad:
 - Tracks reales se materializan solo cuando un clip cae en track virtual.
 - Filas virtuales se pintan bajo demanda.
 - Scrollbars usan rango virtual movil; no representan documento finito rigido.
+
+## Inspector (F11)
+- Right-side rail, collapsed por defecto, toggle ◀/▶.
+- Selección única: label / color / mute / contentOffset / stretchRatio /
+  groupId (readonly + Ungroup).
+- Multi-selección: contador + batch mute/unmute/group/ungroup.
+- Suscripción granular: re-renders sólo cuando cambia la identity del
+  clip enfocado o la lista de clipIds seleccionados.

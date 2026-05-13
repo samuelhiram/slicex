@@ -296,6 +296,30 @@ Ejemplo canónico: `core.createClips([...])` → `CREATE_CLIPS_BATCH` →
 un único `notify()`. Mismo patrón aplica a futuros `DELETE_CLIPS_BATCH`,
 `MOVE_CLIPS_BATCH`, etc.
 
+### 3.12 Touch tracker — pinch / long-press / inertia (F8)
+
+Cualquier feature de input táctil (pinch zoom, long-press, momentum
+scroll) vive en `playlist-interaction/touch.ts`, fuera del flujo
+principal del controller. El controller solo invoca 4 hooks
+(`handlePointerDown` / `handlePointerMove` / `handlePointerUp` /
+`handlePointerCancel`) que devuelven `true` cuando consumen el evento.
+
+- El tracker **solo se activa** para `event.pointerType === "touch"`.
+  Para mouse retorna `false` inmediato — cero costo en desktop.
+- Pinch zoom usa `core.updateViewport`, que ya tiene el short-circuit
+  §4. Pinch a 60Hz con dist constante no notifica.
+- Long-press es un `setTimeout(500ms)`. Move > 6px o pointer up antes
+  cancela el timer. Cero costo si no dispara.
+- Inertia solo arranca cuando: gesto previo era `pan` o `scrollbar-*`,
+  hubo muestras de velocidad en los últimos 60ms, y la velocidad media
+  supera `SETTLE_EPSILON`. rAF dedicado que decae 0.95/frame y se
+  detiene cuando |vx|+|vy| < SETTLE_EPSILON.
+- Cualquier nuevo pointerdown llama `cancelInertia()` antes de procesar
+  — un tap durante un flick lo para inmediatamente.
+
+No mantener un tick "durmiente" para checar si hay flick. La velocidad
+se sampleia en el handler de pointermove (cuando ya hay trabajo real).
+
 ### 3.7 Brush stroke pattern (Paint y futuros tools de "pintar arrastrando")
 
 Cualquier tool que cree clips/cells por drag (Paint, futuros tools
@@ -340,6 +364,9 @@ ResizeObserver) y **están obligadas a ser idempotentes en el reducer**:
 - `SET_SNAP_MODE`
 - `SET_STRETCH_MODE`
 - `SET_TRANSPORT_MODE`
+- `SET_DRAG_PREVIEW` (F1/F3)
+- `SET_SNAP_HINT` (F1/F3)
+- `SET_TOOLTIP` (F1/F3)
 
 Cada vez que aparezca una nueva acción que se invoque ≥30Hz, agregarla
 a esta lista y a los tests de `perf-budget.spec.ts`.
