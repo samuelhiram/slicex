@@ -273,6 +273,170 @@ textarea {
   color: var(--muted);
 }
 
+/* F11 — Inspector panel rail. Collapsed = thin tab on the right; opened =
+   ~280px column with the clip's editable fields. */
+.playlist-inspector {
+  position: absolute;
+  top: 60px;
+  bottom: 24px;
+  right: 0;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: rgba(20, 20, 20, 0.92);
+  backdrop-filter: blur(6px);
+  z-index: 6;
+  font-size: 12px;
+}
+
+.playlist-inspector--collapsed {
+  width: 26px;
+}
+
+.playlist-inspector__toggle {
+  position: absolute;
+  top: 8px;
+  left: -1px;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-right: 0;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 4px 0 0 4px;
+  display: grid;
+  place-items: center;
+}
+
+.playlist-inspector__toggle:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.playlist-inspector__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.playlist-inspector__header .playlist-inspector__toggle {
+  position: static;
+  border: 0;
+  background: transparent;
+  width: auto;
+  height: auto;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.playlist-inspector__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+
+.playlist-inspector__empty {
+  color: var(--muted);
+  margin: 0;
+}
+
+.playlist-inspector__form {
+  display: grid;
+  gap: 10px;
+}
+
+.playlist-inspector__field {
+  display: grid;
+  gap: 4px;
+}
+
+.playlist-inspector__field span {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.playlist-inspector__field--inline {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.playlist-inspector__field--inline span {
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.playlist-inspector__field input[type="text"],
+.playlist-inspector__field input[type="number"] {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.playlist-inspector__field input[type="text"]:focus,
+.playlist-inspector__field input[type="number"]:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.playlist-inspector__field input[type="color"] {
+  width: 100%;
+  height: 28px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.playlist-inspector__group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.playlist-inspector__group-row code {
+  flex: 1 1 auto;
+  background: var(--panel);
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: var(--text);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+.playlist-inspector__group-row button,
+.playlist-inspector__multi-actions button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.playlist-inspector__group-row button:hover,
+.playlist-inspector__multi-actions button:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.playlist-inspector__multi p {
+  margin: 0 0 10px;
+  color: var(--muted);
+}
+
+.playlist-inspector__multi-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 /* F4 stub modal — opened by double-clicking a clip. SliceX palette only;
    replaced by the financial-engine clip editor later. */
 .playlist-shell__modal-overlay {

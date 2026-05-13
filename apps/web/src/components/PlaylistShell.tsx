@@ -11,6 +11,7 @@ import {
   type PlaylistSnapMode,
   type PlaylistToolId,
 } from "@slicex/canvas";
+import { PlaylistInspector } from "./PlaylistInspector";
 
 const SNAP_OPTIONS: ReadonlyArray<{ value: PlaylistSnapMode; label: string }> =
   [
@@ -674,6 +675,7 @@ export function PlaylistShell() {
           <span>{error}</span>
         </div>
       ) : null}
+      <PlaylistInspector core={core} />
       {openClipId ? (
         <ClipDetailModal
           clipLabel={openClipLabel ?? openClipId}
