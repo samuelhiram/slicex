@@ -1033,9 +1033,23 @@ export class PlaylistCore {
       options.atTrackIndex ?? selectionBaseTrackIndex(state);
     const newEntries: { clip: PlaylistClip; trackIndex: number }[] = [];
     let workingClips = [...state.clips];
+    // F6: regenerate group ids so a pasted group becomes a sibling, not a
+    // copy that drags the original. One fresh groupId per distinct
+    // clipboard groupId; clips that weren't grouped stay ungrouped.
+    const groupIdRemap = new Map<string, string>();
+    for (const entry of state.clipboard.entries) {
+      const sourceGroupId = entry.clip.groupId;
+      if (sourceGroupId !== undefined && !groupIdRemap.has(sourceGroupId)) {
+        groupIdRemap.set(sourceGroupId, makeGroupId(workingClips));
+      }
+    }
     for (const entry of state.clipboard.entries) {
       const id = makeClipId(workingClips);
       const trackIndex = Math.max(0, baseTrackIndex + entry.trackOffset);
+      const nextGroupId =
+        entry.clip.groupId !== undefined
+          ? groupIdRemap.get(entry.clip.groupId)!
+          : undefined;
       const newClip: PlaylistClip = {
         ...cloneClip(entry.clip),
         id,
@@ -1044,7 +1058,10 @@ export class PlaylistCore {
         // produces siblings, not unique copies). Falls back to the original
         // id when the source itself had no explicit sourceId.
         sourceId: entry.clip.sourceId ?? entry.clip.id,
+        ...(nextGroupId !== undefined ? { groupId: nextGroupId } : {}),
       };
+      // If the source clip wasn't grouped, the spread already omitted the
+      // field; nothing more to do.
       newEntries.push({ clip: newClip, trackIndex });
       workingClips = [...workingClips, newClip];
     }

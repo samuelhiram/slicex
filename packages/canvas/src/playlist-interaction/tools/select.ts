@@ -92,9 +92,18 @@ export const selectTool: PlaylistTool = {
         };
       }
 
-      const draggingClips = selected.has(hit.clip.id)
-        ? state.clips.filter((candidate) => selected.has(candidate.id))
-        : [hit.clip];
+      // F6: drag expands to the whole group of any seed clip. The reducer
+      // also auto-expands (in moveClips), but doing it here too keeps the
+      // visual originals list in sync with what's about to move so the
+      // drop-ghost shows every sibling, not just the primary.
+      const seedIds = selected.has(hit.clip.id)
+        ? Array.from(selected)
+        : [hit.clip.id];
+      const expandedIds = core.expandSelectionToGroups(seedIds);
+      const expandedSet = new Set(expandedIds);
+      const draggingClips = state.clips.filter((candidate) =>
+        expandedSet.has(candidate.id),
+      );
       if (!selected.has(hit.clip.id)) {
         core.setSelection({ clipIds: [hit.clip.id], automationPointIds: [] });
       }

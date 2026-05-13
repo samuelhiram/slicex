@@ -1286,6 +1286,17 @@ export function createPlaylistInteractionController(
       return;
     }
 
+    // F6: Ctrl+G groups the selected clips; Ctrl+Shift+G ungroups.
+    if (cmd && !event.altKey && key === "g") {
+      if (event.shiftKey) {
+        core.ungroupSelection();
+      } else {
+        core.groupSelection();
+      }
+      event.preventDefault();
+      return;
+    }
+
     // FL Studio marker hotkeys.
     if (event.altKey && event.shiftKey && !cmd && key === "t") {
       core.addTimeSignatureMarker(core.getState().playPosition.time);

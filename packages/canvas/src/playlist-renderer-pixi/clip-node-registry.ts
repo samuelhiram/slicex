@@ -72,6 +72,7 @@ function clipVisualHash(view: PlaylistClipPresentation): string {
     Math.round(view.titleRect.height * 100),
     ratio,
     offset,
+    view.groupId ?? "",
   ].join("|");
 }
 
@@ -136,6 +137,19 @@ function drawClipOverlayLocal(
   overlay
     .rect(width - resizeHandleWidth, 0, resizeHandleWidth, handleHeight)
     .fill({ color: palette.text, alpha: CLIP_RESIZE_ALPHA });
+
+  // F6: subtle dot in the top-right corner when a clip belongs to a group
+  // and the user is hovering. Renders only on hover so a fully-grouped
+  // playlist doesn't look noisy. Outside the resize handle band so it
+  // doesn't interfere with the resize affordance.
+  if (view.groupId && view.hovered) {
+    const dotX = Math.max(8, width - 10);
+    const dotY = 8;
+    overlay.circle(dotX, dotY, 3).fill({
+      color: palette.selected,
+      alpha: 0.85,
+    });
+  }
 
   if (view.isAutomation && view.automationPoints.length > 0) {
     const points = view.automationPoints;
