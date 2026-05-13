@@ -27,6 +27,7 @@ import type {
 import type { ActiveGesture } from "./gesture-types";
 import { hitTestPlaylist, type PlaylistHit } from "./hit-test";
 import { getTool, zoomToolApplyOut } from "./tools";
+import { createTouchTracker } from "./touch";
 
 export interface PlaylistInteractionController {
   destroy: () => void;
@@ -408,12 +409,29 @@ export function createPlaylistInteractionController(
   host.style.touchAction = "none";
   host.style.userSelect = "none";
 
+  // F8: pinch-zoom + long-press + momentum scroll for touch input. The
+  // tracker only kicks in when `event.pointerType === "touch"`; mouse
+  // remains untouched. When a tracker handler returns true the event
+  // has been consumed (e.g. mid-pinch update) and the controller skips
+  // its normal handling.
+  const touchTracker = createTouchTracker(host, core, metrics, () =>
+    core.getPresentation(),
+  );
+
   const handlePointerDown = (event: PointerEvent): void => {
     host.focus();
 
     const state = core.getState();
     const point = resolvePoint(host, event);
     const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
+
+    // Any new pointerdown cancels in-flight inertia before further
+    // dispatch; the user clearly wants a fresh gesture.
+    touchTracker.cancelInertia();
+    if (touchTracker.handlePointerDown(event, point, hit)) {
+      event.preventDefault();
+      return;
+    }
 
     if (state.contextMenu) {
       // The HTML menu overlay handles its own outside-click, but suppress the
@@ -759,6 +777,13 @@ export function createPlaylistInteractionController(
   const handlePointerMove = (event: PointerEvent): void => {
     const state = core.getState();
     const point = resolvePoint(host, event);
+
+    // F8: let the touch tracker consume mid-pinch updates so the
+    // controller's gesture branches don't fight the zoom math.
+    if (touchTracker.handlePointerMove(event, point)) {
+      event.preventDefault();
+      return;
+    }
 
     if (!activeGesture) {
       const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
@@ -1118,6 +1143,22 @@ export function createPlaylistInteractionController(
   };
 
   const endGesture = (event: PointerEvent): void => {
+    // F8: capture the kind of the gesture that's about to end so the
+    // touch tracker can decide whether to start momentum scroll (only
+    // pan / scrollbar gestures qualify).
+    const endingGestureWasPanLike =
+      activeGesture !== null &&
+      (activeGesture.kind === "pan" ||
+        activeGesture.kind === "scrollbar-horizontal" ||
+        activeGesture.kind === "scrollbar-vertical");
+
+    if (touchTracker.handlePointerUp(event, endingGestureWasPanLike)) {
+      // The tracker consumed the up (e.g. tail end of a pinch). Don't
+      // run the controller's gesture finalisation logic for this event.
+      event.preventDefault();
+      return;
+    }
+
     if (!activeGesture || activeGesture.pointerId !== event.pointerId) {
       return;
     }
@@ -1419,10 +1460,15 @@ export function createPlaylistInteractionController(
     event.preventDefault();
   };
 
+  const handlePointerCancel = (event: PointerEvent): void => {
+    touchTracker.handlePointerCancel(event);
+    endGesture(event);
+  };
+
   host.addEventListener("pointerdown", handlePointerDown);
   host.addEventListener("pointermove", handlePointerMove);
   host.addEventListener("pointerup", endGesture);
-  host.addEventListener("pointercancel", endGesture);
+  host.addEventListener("pointercancel", handlePointerCancel);
   host.addEventListener("wheel", handleWheel, { passive: false });
   host.addEventListener("keydown", handleKeyDown);
   host.addEventListener("contextmenu", preventContextMenu);
@@ -1431,10 +1477,11 @@ export function createPlaylistInteractionController(
     destroy() {
       activeGesture = null;
       host.style.cursor = "";
+      touchTracker.destroy();
       host.removeEventListener("pointerdown", handlePointerDown);
       host.removeEventListener("pointermove", handlePointerMove);
       host.removeEventListener("pointerup", endGesture);
-      host.removeEventListener("pointercancel", endGesture);
+      host.removeEventListener("pointercancel", handlePointerCancel);
       host.removeEventListener("wheel", handleWheel);
       host.removeEventListener("keydown", handleKeyDown);
       host.removeEventListener("contextmenu", preventContextMenu);
