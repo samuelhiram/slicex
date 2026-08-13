@@ -32,6 +32,29 @@ Estado: cierre de Fase 8 (parity de comportamiento + visual SliceX).
 - Halo + stroke 2.5px en seleccion (F10).
 - Clips pattern muestran sparkline interna (F9).
 
+## Slip tool (S)
+- LMB-drag dentro de un clip desliza el contenido interno (`contentOffset`)
+  sin mover `start`/`duration`. Arrastrar a la derecha corre el contenido a
+  la izquierda bajo la ventana del clip.
+- El delta se mide en beats de contenido: un beat de pantalla equivale a
+  `stretchRatio` beats de contenido (`offset -= deltaScreen * stretchRatio`).
+- Tooltip "↻ offset" sigue al cursor durante el drag; el clip además pinta un
+  badge ↻ persistente cuando `|offset| > 0`.
+- Acepta hit en clip body, automation body o handles de resize.
+- Track bloqueado: no-op. Un drag completo = una entrada de undo.
+
+## Slice tool (C)
+- LMB-drag dibuja una guía vertical (reusa el snap-indicator) en el punto de
+  corte; tooltip B.B.T sigue al cursor.
+- Al soltar, todo clip cuyo cuerpo cruza ese tiempo se parte en dos: la mitad
+  izquierda conserva `start` y se trunca a `time - start`; la derecha es un
+  clip nuevo con id fresco, `sourceId` heredado y `contentOffset` ajustado al
+  punto de corte (`baseOffset + (time - start) * stretchRatio`).
+- Snap activo por defecto; Alt lo ignora. El corte se ignora en `t ≤ 0` o si
+  no cruza ningún clip. Tracks bloqueados se saltan.
+- La tecla Insert reusa el mismo corte en el playhead.
+- Un corte = una entrada de undo.
+
 ## Drag-to-create (Draw tool)
 - LMB en empty con Draw tool: clip-create-drag.
 - Clip se crea al cruzar `minClipDuration` past snapped start; movimientos

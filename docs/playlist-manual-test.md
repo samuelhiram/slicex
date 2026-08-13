@@ -122,6 +122,17 @@ Fuente UX: FL Studio Playlist y Automation Clips, manual Image-Line.
   ungroup).
 - Cambios se reflejan en vivo en el canvas.
 
+## Slip / Slice tools
+- Slip (S): arrastrar dentro de un clip desliza su contenido; aparece tooltip
+  "↻ offset" siguiendo el cursor y el badge ↻ en el clip. Arrastrar derecha
+  baja el offset, izquierda lo sube. Un drag = un undo.
+- Slice (C): arrastrar muestra una línea vertical de corte + tooltip B.B.T; al
+  soltar parte en dos cada clip que cruce ese tiempo. La mitad derecha es un
+  clip nuevo contiguo. Alt ignora snap.
+- Slice en `t ≤ 0` o fuera de todo clip: no hace nada.
+- Insert: corta todos los clips visibles en el playhead (mismo corte).
+- Undo restaura el clip original tanto para slip como para slice.
+
 ## Tools & snap
 - Toolbar (Select/Draw/Paint/Delete/Mute/Slip/Slice/Zoom): hotkeys
   E/P/B/D/T/S/C/Z.

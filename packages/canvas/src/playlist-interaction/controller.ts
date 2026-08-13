@@ -517,7 +517,8 @@ export function createPlaylistInteractionController(
         return;
       }
 
-      // Select tool (and stubs that fall back to it): RMB opens a context menu.
+      // Select / Slip / Slice: RMB opens a context menu. Slip and Slice have
+      // no distinct right-button gesture, so they share select's menu here.
       if (state.tool === "select" || state.tool === "slip" || state.tool === "slice") {
         if (
           hit.kind === "clip" ||
@@ -948,15 +949,36 @@ export function createPlaylistInteractionController(
       const nextOffset =
         gesture.startContentOffset - deltaScreen * gesture.startStretchRatio;
       core.setClipContentOffset(gesture.clipId, nextOffset);
+      // Live feedback near the cursor. The clip also paints a persistent ↻
+      // badge, but the tooltip tracks the value mid-drag the same way
+      // clip-move / resize show a B.B.T tooltip.
+      core.setTooltip({
+        kind: "offset",
+        text: `↻ ${nextOffset.toFixed(2).replace(/\.?0+$/, "")}`,
+        anchor: point,
+      });
       event.preventDefault();
       return;
     }
 
     if (gesture.kind === "slice-drag") {
       gesture.currentPoint = { ...point };
-      // Drag updates the marquee state so the renderer can draw a guide line
-      // without adding a new presentation field.
-      core.setMarquee({ start: gesture.startPoint, current: point });
+      const snapped = snapTime(
+        Math.max(0, screenXToTime(state, point.x, metrics)),
+        state,
+        event.altKey,
+      );
+      // Reuse the snap-indicator vertical line as the slice guide (a thin
+      // full-height line at the cut), plus a B.B.T tooltip. No dedicated
+      // presentation field needed; both clear on release via
+      // clearDragOverlays. `visible` stays true regardless of snap mode —
+      // this marks where the cut lands, it's not just a snap hint.
+      core.setSnapHint({ time: snapped, visible: true });
+      core.setTooltip({
+        kind: "time",
+        text: formatBarBeat(snapped, metrics.beatsPerBar),
+        anchor: point,
+      });
       event.preventDefault();
       return;
     }
@@ -1169,13 +1191,13 @@ export function createPlaylistInteractionController(
 
     if (activeGesture.kind === "slice-drag") {
       const state = core.getState();
-      // Snap the slice point to the active grid (Alt bypasses snap).
+      // Snap the slice point to the active grid (Alt bypasses snap). The
+      // guide line + tooltip are cleared by clearDragOverlays below.
       const time = snapTime(
-        screenXToTime(state, activeGesture.currentPoint.x, metrics),
+        Math.max(0, screenXToTime(state, activeGesture.currentPoint.x, metrics)),
         state,
         event.altKey,
       );
-      core.setMarquee(null);
       if (time > 0) {
         core.sliceClipsAtTime(time);
       }

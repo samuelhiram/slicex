@@ -1,7 +1,8 @@
 export type PlaylistClipType = "audio" | "pattern" | "automation";
 
-// FL Studio toolbar identifiers. `select` is the default; `slip` and `slice`
-// are recognised by the dispatcher but their behaviour lands in Fase 6.
+// FL Studio toolbar identifiers. `select` is the default. Every id has a live
+// tool implementation in playlist-interaction/tools — `slip` slides a clip's
+// inner content (contentOffset) and `slice` splits clips at the cut time.
 export type PlaylistToolId =
   | "select"
   | "draw"
