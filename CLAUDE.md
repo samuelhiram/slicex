@@ -8,17 +8,20 @@ Gestor financiero avanzado tipo **Excel-DAW**: timeline infinito con tracks y ob
 
 Target multi-plataforma: web → Android → iOS. Por eso la **separación motor gráfico / motor lógico no es estilo, es requisito**. `@slicex/core` debe poder portarse sin React ni Pixi.
 
-## Estado real hoy (master)
+## Estado real hoy (master, verificado 2026-08-13)
 
-- Foco actual: **motor de interacción del playlist tipo FL Studio** en `@slicex/canvas/playlist-*`. **No está terminado**.
-- La UI principal monta el playlist con datos demo en memoria ([PlaylistShell.tsx](apps/web/src/components/PlaylistShell.tsx) → `createDemoPlaylistState()`). No hay flujo financiero conectado todavía.
+- Foco actual: **motor de interacción del playlist tipo FL Studio** en `@slicex/canvas/playlist-*`. Fases 1–8 (F1–F12) cerradas; **el producto financiero sigue sin conectar**.
+- Las 8 herramientas de la toolbar (`select`, `draw`, `paint`, `delete`, `mute`, `slip`, `slice`, `zoom`) tienen implementación viva en [playlist-interaction/tools/](packages/canvas/src/playlist-interaction/tools/). Ninguna es stub.
+- La UI principal monta el playlist con datos demo en memoria ([PlaylistShell.tsx](apps/web/src/components/PlaylistShell.tsx) → `createDemoPlaylistState()`) más un panel [PlaylistInspector.tsx](apps/web/src/components/PlaylistInspector.tsx). No hay flujo financiero conectado todavía.
 - La rama financiera (`@slicex/core`, `@slicex/contracts`, `@slicex/db`, ruta `/api/timelines/[timelineId]`, `editorStore.ts`) está **dormida pero viva** — es scaffolding para la fase 2, no deuda muerta. **No proponer borrarla sin confirmación explícita.**
+- Suite actual: **314 tests unitarios en 30 archivos**, todos verdes. Playwright tiene **1 spec** ([reload-stress.pw.ts](apps/web/tests/reload-stress.pw.ts)), no cero.
+- `master` es la **única branch** del repo (local y remota) desde 2026-08-13.
 
 ## Stack
 
 | Capa | Tech |
 |---|---|
-| Monorepo | pnpm 10 + workspaces + Turbo |
+| Monorepo | pnpm 9 (lockfile v9, sin campo `packageManager`) + workspaces + Turbo |
 | App | Vite 6 + React 19 + TypeScript 5 (SPA) |
 | Worker / API | Hono 4 sobre Cloudflare Workers, vía `@cloudflare/vite-plugin` |
 | Renderer | Pixi.js 8 |
@@ -26,20 +29,21 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 | Persistencia | Prisma 7 + `@prisma/adapter-pg` sobre Cloudflare Hyperdrive (Postgres) |
 | Validación | Zod en `@slicex/contracts` |
 | Observabilidad | `@sentry/cloudflare` (Worker) + `@sentry/react` (browser) + JSON `console` → Workers Logpush |
-| Tests | Vitest (unit) + Playwright (config presente, **0 specs** hoy) |
+| Tests | Vitest (314 unit) + Playwright (1 spec: `apps/web/tests/*.pw.ts`) |
 | Deploy | `wrangler deploy` o Workers Builds (push a `master` → build+deploy) |
 
 ## Mapa rápido
 
 - [apps/web/index.html](apps/web/index.html) + [apps/web/src/main.tsx](apps/web/src/main.tsx) — entrada Vite/React.
 - [apps/web/src/App.tsx](apps/web/src/App.tsx) — root React, monta `<PlaylistShell />`.
-- [apps/web/src/components/PlaylistShell.tsx](apps/web/src/components/PlaylistShell.tsx) — única superficie React activa (canvas Pixi).
+- [apps/web/src/components/PlaylistShell.tsx](apps/web/src/components/PlaylistShell.tsx) — superficie React principal (canvas Pixi); monta también `PlaylistInspector` y `ErrorBoundary`.
 - [apps/web/worker/index.ts](apps/web/worker/index.ts) — Worker entry (Hono + Sentry).
 - [apps/web/worker/routes/](apps/web/worker/routes/) — `health.ts`, `timelines.ts`.
-- [apps/web/wrangler.jsonc](apps/web/wrangler.jsonc) — config Worker + assets + Hyperdrive binding.
-- [apps/web/vite.config.ts](apps/web/vite.config.ts) — Vite + plugin React + plugin Cloudflare.
-- [packages/canvas/src/playlist-core/](packages/canvas/src/playlist-core/) — modelo, geometría, estado, demo data.
-- [packages/canvas/src/playlist-interaction/controller.ts](packages/canvas/src/playlist-interaction/controller.ts) — pan, zoom, drag, resize, marquee, automation, scrollbars.
+- [wrangler.jsonc](wrangler.jsonc) — **en la raíz, no en `apps/web/`**: config Worker + assets + Hyperdrive binding. `vite.config.ts` lo referencia como `../../wrangler.jsonc`.
+- [apps/web/vite.config.ts](apps/web/vite.config.ts) — Vite + plugin React + plugin Cloudflare. Dev server en **puerto 4321** con `strictPort: false`.
+- [packages/canvas/src/playlist-core/](packages/canvas/src/playlist-core/) — modelo, geometría, estado, presentación, demo data.
+- [packages/canvas/src/playlist-interaction/controller.ts](packages/canvas/src/playlist-interaction/controller.ts) — dispatcher de 17 gestos: pan, zoom, drag, resize, marquee, automation, scrollbars, slip, slice, paint, delete, mute, markers, track resize/reorder.
+- [packages/canvas/src/playlist-interaction/tools/](packages/canvas/src/playlist-interaction/tools/) — una implementación por herramienta de toolbar, vía `registry.ts`.
 - [packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts](packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts) — renderer Pixi por capas.
 - [packages/db/prisma/schema.prisma](packages/db/prisma/schema.prisma) — schema multi-tenant con `Timeline`/`TimelineRevision` para persistencia futura.
 
@@ -57,27 +61,28 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 ```powershell
 pnpm install
 pnpm dev                  # turbo dev de todos los paquetes
-pnpm dev:web              # apps/web (Vite + Worker en runtime CF local)
+pnpm dev:web              # apps/web (Vite + Worker CF local) → http://localhost:4321
 
 pnpm -w run build:web     # build SPA + Worker (vite build)
 pnpm -w run preview:web   # preview local del build con runtime CF
-pnpm -w run deploy:web    # vite build + wrangler deploy
+pnpm -w run deploy:web    # wrangler deploy (usa el wrangler.jsonc de la raíz)
 
-pnpm -w run check:arch    # check-imports + check-js-siblings
+pnpm -w run check:arch    # check-imports + check-js-siblings + check-perf-patterns
 pnpm -w run typecheck     # tsc raíz + tsc client + tsc worker
 pnpm -w run test:unit     # vitest (pasar -- --run para no entrar en watch)
 pnpm exec vitest run      # forma directa, equivalente
+pnpm -w run test:e2e      # playwright (levanta el dev server si no hay uno)
 pnpm -w run check:env     # crea/valida .env.local
 pnpm -w run check:fast    # check:arch + check:env (gate pre-commit)
 
 pnpm -w --filter @slicex/db prisma generate
 pnpm -w --filter @slicex/db prisma migrate dev
 
-# Cloudflare:
-pnpm -w --filter apps-web exec wrangler hyperdrive create slicex-pg \
+# Cloudflare — desde la raíz, que es donde vive wrangler.jsonc:
+pnpm -w exec wrangler hyperdrive create slicex-pg \
   --connection-string="postgresql://..."
-pnpm -w --filter apps-web exec wrangler secret put SENTRY_DSN
-pnpm -w --filter apps-web exec wrangler deploy
+pnpm -w exec wrangler secret put SENTRY_DSN
+pnpm -w exec wrangler deploy
 ```
 
 ## Deploy de un dedo
@@ -92,10 +97,12 @@ pnpm -w --filter apps-web exec wrangler deploy
 - **Antes de borrar algo del scaffolding financiero** (`@slicex/core`, `@slicex/contracts`, `@slicex/db`, `editorStore.ts`, ruta Hono `/api/timelines/:timelineId`): preguntar.
 - **Antes de tocar `master`**: confirmar. Trabajar en branch.
 - **Gates obligatorios** antes de reportar trabajo terminado: `check:arch`, `typecheck`, `vitest run`. Tres en verde, no dos.
-- **Dev server en el navegador**: para cambios de UI/canvas, levantar `pnpm dev:web` y verificar en el browser, no solo confiar en typecheck.
-- **Notas de fixes** en `docs/` (ej. `header-occlusion-fix.md`, `timeline-grid-bleed-fix.md`) son históricas; no asumir que reflejan estado actual sin verificar.
+- **Dev server en el navegador**: para cambios de UI/canvas, levantar `pnpm dev:web` y verificar en el browser, no solo confiar en typecheck. Ojo: `strictPort: false` hace que Vite se pase al 4322 en silencio si el 4321 está ocupado, mientras Playwright sigue apuntando fijo al 4321 — revisar a qué puerto arrancó de verdad.
+- **Notas de fixes y auditorías** en `docs/` llevan banner `> **Histórico**` cuando describen un estado ya superado (ver [docs/README.md](docs/README.md)). No asumir que reflejan el estado actual.
 
 ## Lo que ya se limpió (referencia)
 
 - Fase A (commit `b0b48c0`) podó cruft, middleware roto (`proxy.ts`), duplicados de Sentry/Playwright, directorios vacíos, `pixi-viewport` sin uso.
-- Fase Cloudflare (branch `feature/cloudflare-migration`): se eliminó Next.js y se sustituyó por Vite + Hono sobre Cloudflare Workers. La composición React, estilos y la ruta `timelines` se preservaron 1:1; sólo cambió el frame que las hospeda.
+- Fase Cloudflare (branch `feature/cloudflare-migration`, ya borrada): se eliminó Next.js y se sustituyó por Vite + Hono sobre Cloudflare Workers. La composición React, estilos y la ruta `timelines` se preservaron 1:1; sólo cambió el frame que las hospeda.
+- Dedup JS (2026-04-19): se borraron los mirrors `.js` junto a `.ts`/`.tsx`; hoy lo bloquea `check-js-siblings`. Ver [docs/js-dedup-report.md](docs/js-dedup-report.md).
+- Limpieza de branches (2026-08-13): se mergeó `feat/playlist-slip-slice-finish` a `master` y se borraron `feature/cloudflare-migration`, `fix/cloudflare-deploy` y `update_worker_name_to_slicex`. Esta última llevaba un commit no mergeado del bot de Cloudflare que renombraba el Worker de `slicex-web` a `slicex`; se descartó a propósito — el Worker sigue llamándose `slicex-web`.

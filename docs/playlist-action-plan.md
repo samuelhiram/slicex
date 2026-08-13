@@ -2,10 +2,16 @@
 
 Fuente UX: FL Studio Playlist y Automation Clips, manual Image-Line.
 
+> **Estado: fases 1–6 ejecutadas.** Este documento es el plan original; se conserva como registro de
+> intención, no como lista de pendientes. El trabajo posterior (fases 7–8, hitos F1–F12: herramientas
+> de toolbar, grupos, markers, touch, sparklines, inspector, slip/slice) está descrito en
+> [fl-playlist-parity-spec.md](fl-playlist-parity-spec.md), que es el contrato vigente, y se prueba
+> con [playlist-manual-test.md](playlist-manual-test.md).
+
 ## Fase 1 - Diagnostico y reemplazo controlado
 - Actual sirve: `playlist-core`, `playlist-interaction`, `playlist-renderer-pixi`, `PlaylistShell`.
 - Estorba: header izquierdo poco separado, sin menu tracklist, sin scrollbars virtuales.
-- Ruta final: `apps/web/src/app/page.tsx`.
+- Ruta final: `apps/web/src/App.tsx` (era `src/app/page.tsx` cuando se escribió el plan, en la era Next.js).
 - Salida: `localhost` abre el Playlist demo directo.
 
 ## Fase 2 - Core

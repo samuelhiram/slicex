@@ -1,20 +1,45 @@
 # Contributing to SliceX
 
-Branching & commits
+## Branching & commits
 
-- Branches: `feature/<desc>`, `fix/<desc>`, `chore/<desc>`, `hotfix/<desc>`.
-- Commit message format: `type(scope): short description` (e.g. `feat(core): add recurrence rule`).
+- Branch base: **`master`**. No `main`.
+- Nombres: `feat/<desc>`, `fix/<desc>`, `chore/<desc>`, `docs/<desc>`, `hotfix/<desc>`.
+- Mensajes: `type(scope): short description` — ej. `feat(playlist): add slice tool guide`.
+- No trabajar directo sobre `master`; abrir branch y mergear con PR.
 
-Pre-PR checklist
+## Pre-PR checklist
 
-1. Ejecuta `pnpm install`.
-2. Ejecuta `pnpm -w run check:fast` (equivale a `check:arch` + `check:env`).
-3. Ejecuta `pnpm -w run typecheck` y `pnpm -w run test:unit`.
+```powershell
+pnpm install
+pnpm -w run check:arch    # deep imports + mirrors .js + anti-patrones de performance
+pnpm -w run typecheck     # raíz + cliente + worker
+pnpm exec vitest run      # unit tests
+```
 
-Review
+Los tres tienen que estar en verde, no dos. Si tocas UI o canvas, además levanta `pnpm dev:web` y
+verifica en el navegador — typecheck no detecta un render roto.
 
-- Abre PR contra `main` (o la rama destino acordada). Asegúrate que la CI pase y añade reviewers.
+`pnpm -w run check:fast` (= `check:arch` + `check:env`) es el gate corto para iterar.
 
-Code generation via AI
+## Reglas que bloquean merge
 
-- Document what the AI generated, add tests for generated code, and never merge without human review.
+- **Performance canon** ([docs/performance-canon.md](docs/performance-canon.md)): obligatorio para
+  código en `packages/canvas/src/playlist-*` o el shell React. Si un budget de
+  `packages/canvas/tests/perf-budget.spec.ts` falla, se arregla el código — **no se relaja la
+  tolerancia**.
+- Sin deep imports entre paquetes (`@slicex/<pkg>` únicamente).
+- Sin mirrors `.js` junto a `.ts`/`.tsx`.
+- Prisma sólo dentro de `@slicex/db`; `@slicex/core` sin IO.
+- Cambios de lógica llevan test. Cambios de DTO actualizan `@slicex/contracts`.
+
+## Review
+
+- Abre PR contra `master`. La CI debe pasar y necesitas al menos una revisión aprobatoria.
+- Antes de borrar cualquier pieza del scaffolding financiero (`@slicex/core`, `@slicex/contracts`,
+  `@slicex/db`, `editorStore.ts`, la ruta `/api/timelines/:timelineId`): **preguntar primero**. Está
+  dormido a propósito, no es deuda muerta.
+
+## Code generation via AI
+
+- Documenta qué se generó y por qué, y añade tests que cubran el comportamiento.
+- Nunca mergear código generado sin revisión humana.

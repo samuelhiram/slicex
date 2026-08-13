@@ -1,5 +1,8 @@
 # JS Dedup Plan
 
+> **Histórico (era Next.js).** Plan de eliminación de los mirrors `.js`. Ya ejecutado — ver
+> [js-dedup-report.md](js-dedup-report.md). Las rutas `apps/web/src/app/**` que lista ya no existen.
+
 ## Objetivo
 
 Dejar TypeScript como unica fuente de verdad en `src/` y eliminar mirrors `.js`/`.jsx` que dupliquen archivos `.ts`/`.tsx` en el arbol de aplicaciones, paquetes y tests.

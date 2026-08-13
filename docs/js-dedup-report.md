@@ -1,5 +1,8 @@
 # JS Dedup Report
 
+> **Histórico (2026-04-19).** Resultado del dedup de mirrors `.js`. La regla que dejó viva sí sigue
+> vigente y la enforce `scripts/check-js-siblings.mjs` dentro de `check:arch`.
+
 ## Resultado
 
 Consolidacion completada. TypeScript quedo como fuente de verdad en `src/` y los mirrors `.js`/`.spec.js` que estaban duplicando archivos `.ts`/`.tsx` fueron eliminados. El unico caso vivo que mantenia un mirror activo en runtime, `packages/canvas/src/playlist-interaction/hit-test.js`, fue corregido primero y luego borrado.

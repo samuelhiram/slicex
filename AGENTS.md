@@ -7,16 +7,19 @@ Documentar las responsabilidades por capa y las reglas de colaboración para evi
 ## Ownership por capa
 
 - `@slicex/core`: dominio y lógica financiera (TypeScript puro, sin IO). Aquí vive la lógica que debe ser determinista y testeable.
-- `@slicex/canvas`: renderer Pixi y adaptadores gráficos (sin fetch ni auth). Implementaciones gráficas y optimizaciones de render.
+- `@slicex/canvas`: motor del playlist y renderer Pixi (sin fetch ni auth). Tres capas con frontera dura entre sí: `playlist-core` (modelo, estado, presentación derivada), `playlist-interaction` (gestos y herramientas) y `playlist-renderer-pixi` (dibujo por capas). El renderer sólo proyecta presentación; no guarda verdad del modelo.
 - `@slicex/contracts`: DTOs, validaciones y el `ErrorEnvelope` compartido (contratos entre capas).
 - `@slicex/db`: Prisma schema, migraciones y el cliente Prisma singleton.
-- `apps/web`: SPA Vite + React 19 + Hono Worker (Cloudflare Workers). El cliente vive en `src/`; el Worker (API + asset fallback) vive en `worker/`. Store Zustand y wiring de UI + adapters.
+- `@slicex/config`, `@slicex/testing`: configuración compartida y helpers de test.
+- `apps/web`: SPA Vite + React 19 + Hono Worker (Cloudflare Workers). El cliente vive en `src/`; el Worker (API + asset fallback) vive en `worker/`. Store Zustand y wiring de UI + adapters. La config del Worker (`wrangler.jsonc`) vive en la **raíz del repo**, no aquí.
 
 ## Principios y reglas básicas
 
 - Una sola fuente de verdad por concepto: tipos y reglas de negocio en `@slicex/core`.
 - Separación IO/negocio: IO (fetch, DB, auth) en `apps/*` o `@slicex/db`; `@slicex/core` no debe realizar IO.
 - Evitar deep-imports entre paquetes. Usa la API pública del paquete (`@slicex/<paquete>`) en lugar de `@slicex/<paquete>/src/...`.
+- **Performance es regla dura.** Todo código que toque `playlist-core`, `playlist-interaction`, `playlist-renderer-pixi` o el shell React se rige por [docs/performance-canon.md](docs/performance-canon.md). Si el patrón cómodo contradice una regla, se busca el patrón correcto — no se relaja la regla. Un budget que falla en `packages/canvas/tests/perf-budget.spec.ts` es un bug real, no una tolerancia a ajustar.
+- Sin mirrors `.js`/`.jsx` junto a fuentes `.ts`/`.tsx`.
 
 ## Prohibiciones (ejemplos)
 
@@ -26,7 +29,7 @@ Documentar las responsabilidades por capa y las reglas de colaboración para evi
 
 ## Automatización y comprobaciones
 
-- El repositorio incluye `scripts/check-imports.mjs` que detecta imports profundos y viola la regla de ownership. Ejecutar:
+- `pnpm -w run check:arch` encadena tres guardrails: `scripts/check-imports.mjs` (deep imports), `scripts/check-js-siblings.mjs` (mirrors `.js`) y `scripts/check-perf-patterns.mjs` (anti-patrones del performance canon). Ejecutar:
 
 ```
 pnpm -w run check:arch
@@ -42,9 +45,10 @@ pnpm -w run check:env
 
 ## Branching y convenciones de commits
 
-- Branches: `feature/<desc>`, `fix/<desc>`, `chore/<desc>`, `hotfix/<desc>`.
+- Branches: `feat/<desc>`, `fix/<desc>`, `chore/<desc>`, `docs/<desc>`, `hotfix/<desc>`.
 - Mensajes de commit: usar el formato `type(scope): short description`. Ej: `feat(core): add recurrence rule`.
 - Abrir PR contra `master`. Todas las PRs deben pasar `check:fast` en la CI y tener al menos una revisión aprobatoria.
+- No trabajar directo sobre `master`. Hoy `master` es la única branch viva del repo.
 
 ## Proceso de PR y revisiones
 
@@ -66,7 +70,7 @@ pnpm -w run check:env
 
 ## Enforcement / CI
 
-- La CI ejecuta `pnpm -w run check:arch`, `pnpm -w run typecheck` y `pnpm -w run test:unit` (ver `.github/workflows/ci.yml`).
+- La CI (`.github/workflows/ci.yml`, Node 20) ejecuta en orden: `check:arch`, `check:env`, `typecheck`, `test:unit`, `build:web`, `test:e2e` (Playwright), y sube el reporte HTML como artifact.
 - Si una comprobación falla, abrir una PR con la corrección y enlazar la salida de CI.
 
 ## Contacto y propietarios

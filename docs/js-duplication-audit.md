@@ -1,5 +1,10 @@
 # JS Duplication Audit
 
+> **Histórico (era Next.js).** Auditoría de los mirrors `.js` que existían junto a las fuentes
+> `.ts`/`.tsx`. Todas las rutas que lista (`src/app/**`, `supabaseServer.ts`, `next.config.ts`) fueron
+> borradas en la migración a Vite + Cloudflare. El problema está resuelto y hoy lo bloquea
+> `scripts/check-js-siblings.mjs`. Se conserva como registro del diagnóstico.
+
 ## Verdict
 
 Mixed. The repository still contains 43 checked-in `.js` mirrors beside `.ts` / `.tsx` sources. Most are stale and can be deleted, but there are two live exceptions that must be handled first: `packages/canvas/src/playlist-interaction/hit-test.js` is imported explicitly from TypeScript, and the `.spec.js` files under `packages/**/tests` are executed by Vitest. `apps/web/tests/playwright.js` is currently dormant rather than proven active.

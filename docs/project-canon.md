@@ -1,6 +1,7 @@
 # SliceX — canon básico del proyecto
 
-> Estado sintetizado del repo inspeccionado en `master`.
+> Estado sintetizado del repo inspeccionado en `master`. **Última verificación: 2026-08-13**
+> (rutas, comandos y suite de tests comprobados contra el código, no sólo leídos).
 > Este archivo sirve como referencia canónica corta para entender qué es SliceX hoy, cómo está organizado y qué partes del repo describen el estado real.
 > **Para el comportamiento del producto** (modelo de timeline, objetos financieros, mecánicas de tarjeta/MSI, etc.) ver [product-spec.md](product-spec.md) — ese es el documento primigenio del producto, no este.
 
@@ -12,25 +13,30 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
 
 ### Lo que sí está implementado en el código
 
-- `apps/web/src/app/page.tsx` monta directamente `PlaylistShell`.
-- `PlaylistShell` crea un estado demo, inicializa el core, la interacción y el renderer del playlist.
+- `apps/web/src/App.tsx` monta directamente `PlaylistShell` (no hay router; la entrada es
+  `index.html` → `src/main.tsx` → `<App />`).
+- `PlaylistShell` crea un estado demo, inicializa el core, la interacción y el renderer del playlist,
+  y monta además `PlaylistInspector` y `ErrorBoundary`.
 - `@slicex/canvas` exporta tres capas claras:
   - `playlist-core`
   - `playlist-interaction`
   - `playlist-renderer-pixi`
 - El playlist actual soporta, a nivel de código:
   - tracks y clips de tipo `audio`, `pattern` y `automation`
-  - play position marker / playhead
-  - drag de clips
-  - resize izquierdo y derecho
-  - marquee selection
+  - play position marker / playhead + transporte con `Space`
+  - drag de clips, resize izquierdo y derecho, stretch mode (Shift+M)
+  - marquee selection, grupos, clipboard (copy/paste) e historial undo/redo
   - edición de automation points
-  - zoom horizontal con wheel + ctrl/meta
-  - pan con mouse medio
+  - zoom horizontal con wheel + ctrl/meta, pan con mouse medio
   - scrollbars horizontal y vertical
-  - context menu en track headers
-  - tracks virtuales al navegar hacia abajo
-  - timeline virtual/infinito a la derecha
+  - context menu en track headers y en clips
+  - tracks virtuales al navegar hacia abajo y timeline virtual/infinito a la derecha
+  - markers de timeline (labels, loop bounds, recording fences)
+  - toolbar completa de 8 herramientas — `select`, `draw`, `paint`, `delete`, `mute`, `slip`,
+    `slice`, `zoom` — con hotkeys `E/P/B/D/T/S/C/Z`, todas implementadas en
+    `playlist-interaction/tools/`
+  - overlays de drag: ghost preview, snap indicator y tooltip B.B.T
+  - gestos touch: pinch zoom, long-press e inercia
 
 ### Lo que no está conectado todavía como flujo final de producto
 
@@ -78,8 +84,9 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
 - `apps/web/worker/index.ts`
 - `apps/web/worker/routes/health.ts`
 - `apps/web/worker/routes/timelines.ts`
-- `apps/web/wrangler.jsonc`
-- `apps/web/vite.config.ts`
+- `wrangler.jsonc` — **en la raíz del repo**, no en `apps/web/`. `vite.config.ts` lo referencia como
+  `../../wrangler.jsonc` y `wrangler deploy` se corre desde la raíz.
+- `apps/web/vite.config.ts` — dev server en puerto **4321**, `strictPort: false`.
 
 ### Playlist core
 
@@ -118,17 +125,15 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
 
 ### Estado
 
-El estado del playlist vive en `PlaylistState` y contiene:
+El estado del playlist vive en `PlaylistState` (`playlist-core/types.ts`) y contiene:
 
-- `tracks`
-- `clips`
-- `viewport`
-- `snap`
-- `selection`
-- `marquee`
-- `contextMenu`
-- `hover`
-- `playPosition`
+- `tracks`, `clips`
+- `viewport`, `snap`
+- `selection`, `marquee`, `hover`, `contextMenu`
+- `playPosition`, `transport`
+- `tool`, `clipboard`, `stretchMode`
+- `markers`
+- `dragPreview`, `snapHint`, `tooltip` — overlays efímeros de gesto, se limpian en el release
 
 ### Reglas importantes del modelo
 
@@ -144,14 +149,17 @@ La interacción del playlist está centralizada en `playlist-interaction/control
 
 ### Gestos soportados en el código
 
-- pan
-- marquee
-- clip drag
-- clip resize
-- automation point drag
-- play position drag
-- scrollbar drag horizontal
-- scrollbar drag vertical
+Los 17 `kind` de `playlist-interaction/gesture-types.ts`:
+
+- `pan`, `marquee`
+- `clip-drag`, `clip-resize`, `clip-create-drag`
+- `automation-point-drag`
+- `play-position-drag`
+- `scrollbar-horizontal`, `scrollbar-vertical`
+- `slip-drag`, `slice-drag`
+- `paint-drag`, `delete-drag`, `mute-drag`
+- `track-resize`, `track-reorder`
+- `marker-drag`
 
 ### Acciones por contexto
 
@@ -217,18 +225,28 @@ Eso indica que la intención arquitectónica de persistir documentos/versiones s
 
 ## 10. Documentos del repo y cómo leerlos
 
+Índice completo con estado por documento: [docs/README.md](README.md).
+
 ### Documentos útiles y vigentes
 
+- `docs/product-spec.md`
+  - **fuente de verdad del producto** (modelo, mecánicas financieras, MSI)
+- `docs/performance-canon.md`
+  - **regla dura** para todo código en `playlist-*` y el shell React
+- `docs/fl-playlist-parity-spec.md`
+  - contrato de paridad con FL Studio, gesto por gesto
+- `docs/playlist-manual-test.md`
+  - guion de prueba manual del playlist
 - `README.md`
   - quickstart y mapa general del monorepo
 - `AGENTS.md`
   - ownership, workflow y reglas de colaboración
-- `CONTEXT.md`
-  - historial operativo y notas acumuladas
 - `CONTRIBUTING.md`
   - pre-PR checklist y convenciones
 - `docs/frontend-canon.md`
   - canon visual/layout del frontend
+- `CONTEXT.md`
+  - resumen operativo **+ historial acumulado**; la mitad de abajo es archivo de la era Next.js
 
 ### Cómo deben interpretarse
 
@@ -238,20 +256,32 @@ Eso indica que la intención arquitectónica de persistir documentos/versiones s
 
 ## 11. Inconsistencias reales encontradas
 
-Estas inconsistencias existen en el repo inspeccionado y conviene conocerlas:
+Estas inconsistencias existen en el repo y conviene conocerlas (revisadas 2026-08-13):
 
-1. **Narrativa mixta del producto**
-   - Parte de la documentación raíz describe un editor financiero.
-   - El código visible actual monta un playlist estilo FL Studio.
+1. **Narrativa mixta del producto** — *vigente, es intencional.*
+   - La documentación de producto describe un gestor financiero; el código visible monta un playlist
+     estilo FL Studio. No es contradicción: el playlist es el motor de interacción que después
+     hospedará los objetos financieros. Ver `product-spec.md`.
 
-2. **`CONTEXT.md` mezcla historia y estado**
-   - Incluye fases previas de canvas/financial timeline.
-   - También incluye notas más recientes de playlist/interacción.
-   - Sirve como log histórico, no como snapshot único.
+2. **`CONTEXT.md` mezcla historia y estado** — *acotado.*
+   - El historial quedó agrupado bajo "Historial acumulado (archivo)" con banner explícito. La
+     cabecera sí describe el estado real.
 
-3. **Rama objetivo mencionada con variación histórica**
-   - Algunos docs viejos hablan de PR contra `main`.
-   - El repo usa `master` como default branch (CI y AGENTS ya están alineados).
+3. **Rama objetivo `main` vs `master`** — *resuelto.*
+   - `CONTRIBUTING.md` ya apunta a `master`, igual que CI y `AGENTS.md`. `master` es además la
+     **única branch** del repo desde 2026-08-13.
+
+4. **`docs/adr/` tiene numeración solapada** — *documentado, sin resolver.*
+   - Conviven dos series de ADR con los mismos números (0001–0004). Ver [adr/README.md](adr/README.md).
+
+5. **`scripts/e2e-static-server.js` está roto** — *sin resolver.*
+   - Apunta a `apps/web/public/index.html` y a `playwright.local.config.ts`; ninguno existe. El
+     script `test:e2e:static` no corre. El camino vivo es `test:e2e`.
+
+6. **CI declara pasos que no se han verificado verdes en esta pasada.**
+   - `.github/workflows/ci.yml` corre `corepack enable` *después* de `actions/setup-node` con
+     `cache: 'pnpm'`, orden que suele fallar en runners limpios. Sin `gh` CLI local no se pudo
+     confirmar el estado real de las corridas.
 
 ## 12. Qué tomar como verdad canónica mínima
 
@@ -309,6 +339,12 @@ Actualizar `docs/project-canon.md` cuando cambie al menos una de estas cosas:
 
 Este canon fue sintetizado mediante inspección directa del repositorio y sus documentos principales.
 
-No implica validación de ejecución local en esta pasada.
-No implica confirmación de que CI esté verde hoy.
-Sí implica una foto estructural confiable del código y documentación actualmente presentes.
+Revisión 2026-08-13, verificado ejecutando:
+
+- `pnpm -w run check:arch` — verde (imports, mirrors `.js`, anti-patrones de performance)
+- `pnpm -w run typecheck` — verde (raíz + cliente + worker)
+- `pnpm exec vitest run` — **314 tests en 30 archivos**, verdes
+- `pnpm dev:web` — arranca y sirve `/` y `/api/health` con 200 en el puerto 4321
+
+**No** implica confirmación de que CI esté verde hoy (ver inconsistencia 6).
+**No** implica validación de la ruta de deploy a Cloudflare en esta pasada.

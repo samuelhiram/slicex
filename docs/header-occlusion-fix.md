@@ -1,18 +1,22 @@
 # Header Occlusion Fix
 
+> **Histórico (2026-04-19).** Nota del fix de oclusión del header. Describe el estado del renderer
+> en ese momento; el renderer cambió mucho desde entonces. No asumir que refleja el código actual —
+> verificar contra `playlist-renderer-pixi/` antes de confiar en cualquier detalle.
+
 ## Causa exacta
 
 El renderer dibujaba el contenido del timeline en la misma capa visual que el resto del playlist sin una mascara real para el area de timeline. Como resultado, cuando el scroll horizontal desplazaba clips, automation o overlays con `x < trackHeaderWidth`, esos elementos podian seguir renderizandose por debajo o a traves del panel izquierdo en lugar de quedar recortados por el borde del header.
 
 ## Archivos tocados
 
-- [packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts](packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts)
-- [docs/header-occlusion-fix.md](docs/header-occlusion-fix.md)
+- [packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts](../packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts)
+- [docs/header-occlusion-fix.md](header-occlusion-fix.md)
 
 ## Superficie revisada
 
-- [packages/canvas/src/playlist-core/presentation.ts](packages/canvas/src/playlist-core/presentation.ts)
-- [packages/canvas/src/playlist-core/geometry.ts](packages/canvas/src/playlist-core/geometry.ts)
+- [packages/canvas/src/playlist-core/presentation.ts](../packages/canvas/src/playlist-core/presentation.ts)
+- [packages/canvas/src/playlist-core/geometry.ts](../packages/canvas/src/playlist-core/geometry.ts)
 
 ## Solucion aplicada
 

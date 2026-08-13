@@ -1,5 +1,8 @@
 # Timeline Grid Bleed Fix
 
+> **Histórico (2026-04-19).** Nota del fix de fuga de grid sobre los clips. Menciona
+> `http://localhost:3000`, puerto anterior al move a **4321**. No asumir que refleja el código actual.
+
 ## Causa exacta
 
 El problema no era el z-order principal del Playlist ni el clipping del timeline. El timeline ya estaba maskeado correctamente. La fuga visual venia de dos cosas:
@@ -33,8 +36,8 @@ Tambien movi las lineas verticales de tick fuera del pass chrome para que no vue
 
 ## Archivos tocados
 
-- [packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts](packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts)
-- [docs/timeline-grid-bleed-fix.md](docs/timeline-grid-bleed-fix.md)
+- [packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts](../packages/canvas/src/playlist-renderer-pixi/renderer-impl.ts)
+- [docs/timeline-grid-bleed-fix.md](timeline-grid-bleed-fix.md)
 
 ## Validacion manual
 
