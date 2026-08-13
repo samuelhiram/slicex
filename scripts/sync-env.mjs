@@ -46,7 +46,7 @@ async function main() {
       }
       if (Object.keys(toWrite).length === 0) {
         // Fallback defaults
-        toWrite["VITE_APP_URL"] = "http://localhost:3000";
+        toWrite["VITE_APP_URL"] = "http://localhost:4321";
       }
       await writeEnv(localFile, toWrite);
       console.log(
@@ -55,7 +55,7 @@ async function main() {
       process.exit(0);
     } catch (e) {
       // Create minimal .env.local
-      const defaults = { VITE_APP_URL: "http://localhost:3000" };
+      const defaults = { VITE_APP_URL: "http://localhost:4321" };
       await writeEnv(localFile, defaults);
       console.log("✅ check-env: created minimal .env.local");
       process.exit(0);

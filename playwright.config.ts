@@ -11,7 +11,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? [["github"], ["html"]] : [["list"], ["html"]],
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000",
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:4321",
     headless: true,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
@@ -24,7 +24,7 @@ export default defineConfig({
       process.platform === "win32" ? `pnpm.cmd ${base}` : `pnpm ${base}`;
     return {
       command: cmd,
-      url: "http://localhost:3000",
+      url: "http://localhost:4321",
       timeout: 120_000,
       reuseExistingServer: !process.env.CI,
     };

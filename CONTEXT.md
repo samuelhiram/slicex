@@ -64,7 +64,7 @@ pnpm -w run test:unit
 
 ## Variables de entorno relevantes
 
-- `NEXT_PUBLIC_APP_URL` — URL pública local para la app (`http://localhost:3000`).
+- `NEXT_PUBLIC_APP_URL` — URL pública local para la app (`http://localhost:4321`).
 - Otras variables de integración (Sentry, Supabase) están esbozadas en `apps/web/src/lib/supabaseServer.ts` y `apps/web/src/instrumentation-client.ts`.
 
 ## Prisma y migraciones

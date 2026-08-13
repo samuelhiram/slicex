@@ -5,7 +5,7 @@ Fuente UX: FL Studio Playlist y Automation Clips, manual Image-Line.
 ## Setup
 - `pnpm install`
 - `pnpm dev`
-- Abrir `http://localhost:3000`
+- Abrir `http://localhost:4321`
 - Ver Playlist demo directo.
 
 ## Clips
