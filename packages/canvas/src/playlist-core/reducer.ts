@@ -17,7 +17,7 @@ import {
   createInsertedTrack,
   materializeTracksThrough,
 } from "./state-track-helpers";
-import { sortAutomationPoints } from "./state-utils";
+import { sortAutomationPoints, splitAutomationPoints } from "./state-utils";
 import type { PlaylistMetrics, PlaylistState } from "./types";
 
 // Equality helpers for UI-overlay short-circuits. Each of these returns true
@@ -220,7 +220,12 @@ export function playlistReducer(
         metrics,
       );
     case "SLICE_CLIPS_AT_TIME":
-      return sliceClipsAtTime(state, action.time, action.newClips);
+      return sliceClipsAtTime(
+        state,
+        action.time,
+        action.clipIds,
+        action.newClips,
+      );
     case "SET_STRETCH_MODE":
       return state.stretchMode === action.enabled
         ? state
@@ -1065,20 +1070,45 @@ function sortMarkers(
 function sliceClipsAtTime(
   state: PlaylistState,
   time: number,
+  clipIds: string[],
   newClips: import("./types").PlaylistClip[],
 ): PlaylistState {
   const newById = new Map(newClips.map((c) => [c.id, c] as const));
+  // Only the clips the caller resolved get truncated. Deriving the set from
+  // `time` here would also truncate clips on locked tracks, which never get a
+  // right half built for them.
+  const toSlice = new Set(clipIds);
   const adjusted: PlaylistState["clips"] = [];
   for (const clip of state.clips) {
     if (
+      toSlice.has(clip.id) &&
       time > clip.start + 1e-6 &&
       time < clip.start + clip.duration - 1e-6
     ) {
       // Left half stays in place; its duration shrinks to (time - start).
-      adjusted.push({
-        ...clip,
-        duration: time - clip.start,
-      });
+      const leftDuration = time - clip.start;
+      if (isAutomationClip(clip)) {
+        // Re-cut the envelope so the points past the cut are not clamped flat
+        // against the new right edge by normalizeState.
+        adjusted.push({
+          ...clip,
+          duration: leftDuration,
+          points: splitAutomationPoints(
+            clip.points,
+            leftDuration,
+            clip.id,
+            // Only the left half is used here; the right half's ids are minted
+            // by the caller against the real new clip id.
+            `${clip.id}-slice-right`,
+            clip.start + clip.duration - time,
+          ).left,
+        });
+      } else {
+        adjusted.push({
+          ...clip,
+          duration: leftDuration,
+        });
+      }
     } else {
       adjusted.push(clip);
     }

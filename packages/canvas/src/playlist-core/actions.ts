@@ -80,6 +80,10 @@ export type PlaylistAction =
   | {
       type: "SLICE_CLIPS_AT_TIME";
       time: number;
+      // Clips whose left half must be truncated. Explicit because the reducer
+      // must not re-derive it from `time` alone: clips on locked tracks cross
+      // the cut too, and truncating them without a right half loses content.
+      clipIds: string[];
       newClips: PlaylistClip[];
     }
   | {

@@ -15,7 +15,8 @@ Estado por documento, revisado **2026-08-13**. Si un doc no está aquí, no exis
 
 | Documento | Qué responde |
 |---|---|
-| [fl-playlist-parity-spec.md](fl-playlist-parity-spec.md) | Contrato de paridad con FL Studio, gesto por gesto. Se actualiza con cada fase. |
+| [fl-playlist-parity-spec.md](fl-playlist-parity-spec.md) | Contrato de paridad con FL Studio, gesto por gesto: lo que **sí** está. Incluye las divergencias declaradas. |
+| [fl-parity-gap-analysis.md](fl-parity-gap-analysis.md) | Lo que **falta** para igualar la UI interactiva de FL Studio: 382 huecos, 9 bloqueantes, 3 bugs verificados y la ruta F13–F17. |
 | [playlist-manual-test.md](playlist-manual-test.md) | Guion de prueba manual del playlist en el navegador. |
 | [frontend-canon.md](frontend-canon.md) | Canon visual/layout: shell full-bleed, sin cards, separación por líneas. |
 | [playlist-action-plan.md](playlist-action-plan.md) | Plan original de fases 1–6 del playlist. Ya ejecutado; útil como registro de intención. |

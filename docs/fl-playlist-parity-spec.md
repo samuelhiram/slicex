@@ -3,6 +3,34 @@
 Fuente: Image-Line FL Studio Playlist y Automation Clips, manual oficial.
 Estado: cierre de Fase 8 (parity de comportamiento + visual SliceX).
 
+> Este documento describe lo que **sí** está implementado. Para lo que falta ver
+> [fl-parity-gap-analysis.md](fl-parity-gap-analysis.md).
+
+## Divergencias declaradas
+
+Decisiones tomadas a propósito el **2026-08-13**. No son deuda ni bugs: no se "arreglan".
+
+- **D1 — Prima la estabilidad en browser sobre la paridad literal de modificadores.** FL distingue
+  Right-Alt / Right-Shift / Left-Shift en ~9 gestos. El DOM no expone lateralidad en eventos de
+  mouse, y en teclado LatAm Right-Alt **es AltGr** (llega como `Ctrl+Alt`). Esos gestos se rebindean
+  a combinaciones estables. No se sintetizan gestos frágiles — doble clic derecho, chords de tres
+  botones — para simular paridad.
+- **D2 — `Ctrl+G` es *group*, no *merge*.** En FL `Ctrl+G` fusiona pattern clips. SliceX lo usa para
+  agrupar (`Ctrl+Shift+G` desagrupa). La familia Merge queda fuera de alcance por ahora; cuando
+  entre, necesitará otro binding.
+- **D3 — Arrangements es P0.** Es el análogo de los "timelines clonables para simular escenarios"
+  del [product-spec](product-spec.md), así que su spec se escribe contra ese documento, no contra FL.
+- **Undo multinivel en vez del toggle de FL.** SliceX mantiene `past/present/future` con
+  `maxDepth` 200. Es deliberadamente distinto —y mejor— que el undo alterno de FL.
+- **"Sin selección se aplica a todo"**: FL lo hace en Delete, `Ctrl+B` y Shift+flechas. SliceX **no**.
+  Semántica destructiva y sorprendente; la divergencia es intencional.
+
+### Restricción de plataforma
+
+`Ctrl+T`, `Ctrl+N`, `Ctrl+W`, `Ctrl+Shift+T/N/W`, `Ctrl+Tab` y `F12` los reserva el navegador y
+**no** son cancelables por la página. Ningún binding puede vivir ahí. Todo binding con `Alt` debe
+exigir `!event.ctrlKey` para no dispararse al teclear con AltGr.
+
 ## Ruler
 - Click izquierdo en ruler: seek inmediato a tiempo bajo cursor.
 - Drag desde ruler: scrub continuo del Play Position Marker.
@@ -66,9 +94,14 @@ Estado: cierre de Fase 8 (parity de comportamiento + visual SliceX).
   `playlist-clip-open` con `{ clipId }`. El shell React abre modal stub
   (F4). Hook para el editor financiero futuro.
 
-## Eyedropper (Alt+click on clip)
-- Alt + click LMB en clip: recolora la seleccion actual al color del clip
-  clickeado. Sin seleccion, recolora el clip clickeado (F7).
+## Eyedropper (hover + tecla I)
+- Con el cursor sobre un clip, pulsar **I** recolora la seleccion actual al
+  color de ese clip. Sin seleccion, recolora el clip bajo el cursor (F7).
+- **F13:** era Alt+click, y luego brevemente Alt+Shift+click. Los dos estaban
+  mal: cualquier binding de modificador+puntero aqui hace `return` antes del
+  dispatch a la herramienta y se traga un gesto de arrastre entero de FL.
+  Quedan libres los tres: **Alt+drag** mueve sin snap, **Shift+drag** clona,
+  **Alt+Shift+drag** clona sin snap. Hover+tecla no colisiona con ninguno.
 - Alt + click en ruler/empty sigue siendo snap-bypass (no interfiere).
 
 ## Group / Ungroup
@@ -89,7 +122,13 @@ Estado: cierre de Fase 8 (parity de comportamiento + visual SliceX).
 - Tipo separado `automation`.
 - Body muestra polilinea y puntos.
 - Punto: click/drag mueve.
-- Right click en body: agrega punto.
+- Right click en body: agrega punto. Vale tambien con Draw, Paint y Mute
+  activos — esas herramientas borran clips con RMB, pero **no** sobre una
+  curva de automatizacion, donde FL documenta el RMB como "add control
+  point" (F13).
+- Slice sobre un automation clip **re-corta la envolvente**: cada mitad
+  materializa el punto del corte con el valor interpolado y la derecha se
+  rebasa a 0. Nada se aplana contra el borde nuevo (F13).
 - Right click en punto: elimina punto si quedan minimo 2.
 - Shift al mover punto: bloquea valor.
 - Ctrl al mover punto: bloquea tiempo.

@@ -20,8 +20,17 @@ export const paintTool: PlaylistTool = {
   id: "paint",
   cursor: "cell",
   onPointerDown(env: ToolEnvironment) {
-    const { core, metrics, point, event } = env;
+    const { core, metrics, point, event, hit } = env;
     const state = core.getState();
+    // Never stamp on top of an existing clip. The occupancy grid alone is not
+    // enough: it is keyed by SNAPPED cell, so an Alt (snap-bypass) press lands
+    // between cells and reports the spot as free, dropping a duplicate clip
+    // right on top of the one under the cursor.
+    const overExistingClip =
+      hit.kind === "clip" ||
+      hit.kind === "automation-body" ||
+      hit.kind === "resize-left" ||
+      hit.kind === "resize-right";
     const trackIndex = screenYToTrackIndex(state, point.y, metrics);
     const start = Math.max(
       0,
@@ -36,7 +45,7 @@ export const paintTool: PlaylistTool = {
       duration: DEFAULT_PAINT_DURATION_BEATS,
     });
 
-    if (!occupied.has(trackIndex, start, state)) {
+    if (!overExistingClip && !occupied.has(trackIndex, start, state)) {
       core.createClip({
         trackIndex,
         start,

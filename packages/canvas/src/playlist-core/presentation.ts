@@ -597,12 +597,17 @@ function createClipViews(
             height: Math.max(0, rect.height - titleRect.height),
           }
         : rect;
+    // The clip is a window over its envelope: the model keeps points past the
+    // right edge (so resizing is non-destructive) and the window decides what
+    // is drawn. Points outside are culled here rather than deleted there.
     const automationPoints = isAutomationClip(clip)
-      ? clip.points.map((point) => ({
-          point,
-          position: getAutomationPointPosition(state, clip, point, metrics),
-          selected: state.selection.automationPointIds.includes(point.id),
-        }))
+      ? clip.points
+          .filter((point) => point.time <= clip.duration + 1e-6)
+          .map((point) => ({
+            point,
+            position: getAutomationPointPosition(state, clip, point, metrics),
+            selected: state.selection.automationPointIds.includes(point.id),
+          }))
       : [];
     const track = state.tracks[trackIndex];
     const trackMuted = track ? isTrackEffectivelyMuted(state, track) : false;

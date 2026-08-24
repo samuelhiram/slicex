@@ -90,10 +90,17 @@ Fuente UX: FL Studio Playlist y Automation Clips, manual Image-Line.
 - Paste de grupo: nuevo groupId (no comparte con original).
 - Inspector: muestra groupId y boton Ungroup en seleccion única.
 
-## F7 — Eyedropper (Alt+click)
-- Alt + click en otro clip: recolora la seleccion actual al color del
-  clic (o el clic mismo si no hay seleccion).
+## F7 — Eyedropper (hover + I)
+- Cursor sobre un clip + tecla **I**: recolora la seleccion actual al color de
+  ese clip (o el clip bajo el cursor si no hay seleccion).
+- **F13:** el eyedropper salio del espacio de modificadores. Verificar que los
+  tres gestos de arrastre quedaron libres, con snap en "beat":
+  - Alt + drag: mueve el clip **sin snap** (posicion fraccionaria).
+  - Shift + drag: clona.
+  - Alt + Shift + drag: clona **sin snap**.
 - Alt + click en ruler/empty sigue siendo snap-bypass (no interfiere).
+- Redimensionar un automation clip hacia dentro y volver a estirarlo **debe
+  restaurar los puntos**: el clip es una ventana sobre la envolvente.
 
 ## F8 — Touch refinement
 - Pinch zoom (2 dedos): pxPerBeat escala anclado al midpoint.
@@ -142,7 +149,8 @@ Fuente UX: FL Studio Playlist y Automation Clips, manual Image-Line.
 ## Marker hotkeys
 - Alt+T: marker generico en playhead.
 - Alt+Shift+T: marker time-signature en playhead.
-- Ctrl+T: marker auto-nombrado.
+- Ctrl+M: marker auto-nombrado. **F13:** era Ctrl+T, que el navegador reserva
+  para "nueva pestana" y no es cancelable — el marker nunca se creaba.
 
 ## Transport hotkeys
 - L: toggle song / pattern mode.

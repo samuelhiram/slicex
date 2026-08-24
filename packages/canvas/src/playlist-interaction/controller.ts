@@ -292,15 +292,39 @@ function clipIdsTouchedBySegment(
   from: PlaylistPoint,
   to: PlaylistPoint,
   seen: Set<string>,
+  skipAutomation: boolean,
 ): string[] {
   const ids: string[] = [];
   for (const view of core.getPresentation().visibleClipViews) {
     if (seen.has(view.clip.id)) continue;
+    // RMB sweeps started from Draw/Paint/Mute must not eat automation clips:
+    // a direct RMB there adds a control point, so wiping one mid-sweep would
+    // contradict the very gesture the user is performing. The Delete tool
+    // deletes everything, and passes skipAutomation = false.
+    if (skipAutomation && view.clip.type === "automation") continue;
     if (!segmentIntersectsRect(from, to, view.rect)) continue;
     seen.add(view.clip.id);
     ids.push(view.clip.id);
   }
   return ids;
+}
+
+// F7 eyedropper: paint the current selection with `sourceClipId`'s colour, or
+// just that clip when nothing is selected.
+function pickColorFrom(core: PlaylistCore, sourceClipId: string): void {
+  const state = core.getState();
+  const source = state.clips.find((clip) => clip.id === sourceClipId);
+  if (!source) return;
+  const selected = state.selection.clipIds;
+  if (selected.length > 0) {
+    core.beginGesture();
+    for (const id of selected) {
+      core.setClipColor(id, source.color);
+    }
+    core.endGesture();
+    return;
+  }
+  core.setClipColor(source.id, source.color);
 }
 
 // Pump the three F3 overlays (snap line / drop ghost / time tooltip) from a
@@ -482,14 +506,22 @@ export function createPlaylistInteractionController(
       }
 
       // Draw, Paint and Mute tools: RMB on clips deletes; drag keeps deleting.
+      //
+      // Automation clips are excluded by CLIP TYPE, not by hit kind: FL
+      // documents RMB over an automation clip as "add control point", and the
+      // branch below owns it. Filtering only `automation-body` would still let
+      // an RMB on the clip's title bar or on its 8 px resize edges delete the
+      // whole envelope. The sweep carries `skipAutomation` for the same reason.
+      // Deleting an automation clip goes through the Delete tool or the
+      // context menu.
       if (
         (state.tool === "draw" ||
           state.tool === "paint" ||
           state.tool === "mute") &&
         (hit.kind === "clip" ||
-          hit.kind === "automation-body" ||
           hit.kind === "resize-left" ||
-          hit.kind === "resize-right")
+          hit.kind === "resize-right") &&
+        hit.clip.type !== "automation"
       ) {
         const deletedClipIds = new Set<string>([hit.clip.id]);
         core.beginGesture();
@@ -499,9 +531,31 @@ export function createPlaylistInteractionController(
           pointerId: event.pointerId,
           lastPoint: { ...point },
           deletedClipIds,
+          skipAutomation: true,
         };
         host.setPointerCapture?.(event.pointerId);
         setCursor(host, hit, activeGesture, state.tool);
+        event.preventDefault();
+        return;
+      }
+
+      // RMB anywhere on an automation clip (body, title or edges) adds a
+      // control point with Draw/Paint/Mute active.
+      if (
+        (state.tool === "draw" ||
+          state.tool === "paint" ||
+          state.tool === "mute") &&
+        (hit.kind === "clip" ||
+          hit.kind === "resize-left" ||
+          hit.kind === "resize-right") &&
+        hit.clip.type === "automation"
+      ) {
+        const next = automationPointFromScreen(state, hit.clip, point, metrics);
+        core.addAutomationPoint(
+          hit.clip.id,
+          snapTime(next.time, state, event.altKey),
+          next.value,
+        );
         event.preventDefault();
         return;
       }
@@ -721,31 +775,10 @@ export function createPlaylistInteractionController(
       return;
     }
 
-    // F7: Alt+click on a clip = eyedropper. Recolors the current selection
-    // to the clicked clip's colour (or just the clicked clip when nothing
-    // else is selected). Alt+click on ruler/empty stays a snap-bypass —
-    // the hit-test distinguishes clip vs ruler/empty for us.
-    if (
-      event.altKey &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.shiftKey &&
-      (hit.kind === "clip" || hit.kind === "automation-body")
-    ) {
-      const sourceColor = hit.clip.color;
-      const selected = state.selection.clipIds;
-      if (selected.length > 0) {
-        core.beginGesture();
-        for (const id of selected) {
-          core.setClipColor(id, sourceColor);
-        }
-        core.endGesture();
-      } else {
-        core.setClipColor(hit.clip.id, sourceColor);
-      }
-      event.preventDefault();
-      return;
-    }
+    // F13: the eyedropper no longer lives on a pointer modifier at all — see
+    // `pickColorUnderCursor` and the "I" hotkey. Every Alt/Shift combination
+    // over a clip now reaches the active tool, which is what FL expects:
+    // Alt = move without snap, Shift = clone, Alt+Shift = clone without snap.
 
     // Delegate timeline-area hits to the active tool.
     const tool = getTool(state.tool);
@@ -1122,6 +1155,7 @@ export function createPlaylistInteractionController(
         gesture.lastPoint,
         point,
         gesture.deletedClipIds,
+        gesture.skipAutomation === true,
       );
       if (ids.length > 0) {
         core.deleteClips(ids);
@@ -1137,6 +1171,7 @@ export function createPlaylistInteractionController(
         gesture.lastPoint,
         point,
         gesture.touchedClipIds,
+        false,
       );
       if (ids.length > 0) {
         core.setClipsMuted(ids, gesture.muted);
@@ -1397,7 +1432,11 @@ export function createPlaylistInteractionController(
       event.preventDefault();
       return;
     }
-    if (cmd && !event.shiftKey && !event.altKey && key === "t") {
+    // F13: FL binds the auto-named marker to Ctrl+T, but Chrome, Firefox and
+    // Edge all reserve Ctrl+T for "new tab" and the page cannot cancel it —
+    // the binding was unreachable in a browser. Ctrl+M is free in all three.
+    // Declared divergence, see docs/fl-playlist-parity-spec.md.
+    if (cmd && !event.shiftKey && !event.altKey && key === "m") {
       core.addAutoNamedMarker(core.getState().playPosition.time);
       event.preventDefault();
       return;
@@ -1453,6 +1492,23 @@ export function createPlaylistInteractionController(
     if (!cmd && !event.altKey && !event.shiftKey && key === "r") {
       core.toggleTransportRecording();
       event.preventDefault();
+      return;
+    }
+
+    // F7 eyedropper, rebound in F13: hover a clip and press I to paint the
+    // current selection with its colour.
+    //
+    // It used to be Alt+click, then briefly Alt+Shift+click. Both were wrong:
+    // any pointer-modifier binding here swallows an FL drag gesture whole
+    // (Alt = move without snap, Shift = clone, Alt+Shift = clone without
+    // snap), because the branch returned before the tool dispatch. Hover+key
+    // collides with nothing and is stable in every browser.
+    if (!cmd && !event.altKey && !event.shiftKey && key === "i") {
+      const hover = core.getState().hover;
+      if (hover && hover.kind === "clip") {
+        pickColorFrom(core, hover.clipId);
+        event.preventDefault();
+      }
       return;
     }
 

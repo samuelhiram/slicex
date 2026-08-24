@@ -90,6 +90,10 @@ export type ActiveGesture =
       pointerId: number;
       lastPoint: PlaylistPoint;
       deletedClipIds: Set<string>;
+      // True when the sweep came from an RMB press with Draw/Paint/Mute, where
+      // automation clips are off-limits (RMB there means "add control point").
+      // The Delete tool leaves it false and deletes everything.
+      skipAutomation?: boolean;
     }
   | {
       kind: "mute-drag";

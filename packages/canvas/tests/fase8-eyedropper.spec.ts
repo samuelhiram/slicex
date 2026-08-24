@@ -1,9 +1,16 @@
-// F7 (Fase 8) — Eyedropper (Alt+click on a clip).
+// F7 (Fase 8) — Eyedropper, rebound in F13 to "hover a clip + press I".
 //
-// Alt+click on a clip recolours the current selection to the clicked
-// clip's color. When nothing is selected, the clicked clip recolors to
-// itself (a no-op visually, but the intent stays — and the implementation
-// keeps the modifier paths cleanly separated from snap-bypass).
+// Hovering a clip and pressing I recolours the current selection to that
+// clip's color. With nothing selected, the hovered clip recolors to itself
+// (a visual no-op, but the intent stays).
+//
+// F13: the trigger used to be Alt+click, then briefly Alt+Shift+click. Both
+// were wrong. Any pointer-modifier binding here returns before the tool
+// dispatch, so it swallows an FL drag gesture whole:
+//   Alt+drag       = move without snap
+//   Shift+drag     = clone
+//   Alt+Shift+drag = clone without snap
+// Hover+key collides with none of them and is stable in every browser.
 import { describe, expect, it } from "vitest";
 import {
   createDemoPlaylistState,
@@ -40,7 +47,7 @@ function createHost() {
 function pointerEvent(
   x: number,
   y: number,
-  extra: { altKey?: boolean } = {},
+  extra: { altKey?: boolean; shiftKey?: boolean } = {},
 ): PointerEvent {
   return {
     pointerId: 1,
@@ -50,20 +57,38 @@ function pointerEvent(
     altKey: extra.altKey ?? false,
     ctrlKey: false,
     metaKey: false,
-    shiftKey: false,
+    shiftKey: extra.shiftKey ?? false,
     detail: 1,
     preventDefault() {},
   } as unknown as PointerEvent;
 }
 
-describe("F7 — eyedropper", () => {
-  it("Alt+click on a clip with a multi-clip selection recolours all of them", () => {
+function keyEvent(key: string): KeyboardEvent {
+  return {
+    key,
+    code: `Key${key.toUpperCase()}`,
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    preventDefault() {},
+  } as unknown as KeyboardEvent;
+}
+
+function centerOf(core: ReturnType<typeof createPlaylistCore>, clipId: string) {
+  const view = core.getPresentation().clipViewsById.get(clipId)!;
+  return {
+    x: view.bodyRect.x + view.bodyRect.width / 2,
+    y: view.bodyRect.y + view.bodyRect.height / 2,
+  };
+}
+
+describe("F7 — eyedropper (hover + I)", () => {
+  it("recolours the whole selection to the hovered clip's colour", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     core.setViewportSize(1200, 700);
     const { host, listeners } = createHost();
     const controller = createPlaylistInteractionController(host, core);
-    // Target clip (the one being clicked) — we'll use the bass clip's
-    // colour. Selected clips are the drum clips.
     const bassColor = core
       .getState()
       .clips.find((c) => c.id === "clip-bass-1")!.color;
@@ -71,50 +96,107 @@ describe("F7 — eyedropper", () => {
       clipIds: ["clip-drums-1", "clip-drums-2"],
       automationPointIds: [],
     });
-    const view = core.getPresentation().clipViewsById.get("clip-bass-1")!;
-    const cx = view.bodyRect.x + view.bodyRect.width / 2;
-    const cy = view.bodyRect.y + view.bodyRect.height / 2;
-    listeners.get("pointerdown")?.(pointerEvent(cx, cy, { altKey: true }));
+
+    const { x, y } = centerOf(core, "clip-bass-1");
+    listeners.get("pointermove")?.(pointerEvent(x, y));
+    listeners.get("keydown")?.(keyEvent("i"));
+
     const after = core.getState();
     expect(after.clips.find((c) => c.id === "clip-drums-1")!.color).toBe(bassColor);
     expect(after.clips.find((c) => c.id === "clip-drums-2")!.color).toBe(bassColor);
     controller.destroy();
   });
 
-  it("Alt+click does not start a drag on the clicked clip", () => {
+  it("is one undo entry", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     core.setViewportSize(1200, 700);
     const { host, listeners } = createHost();
     const controller = createPlaylistInteractionController(host, core);
-    const view = core.getPresentation().clipViewsById.get("clip-drums-1")!;
-    const cx = view.bodyRect.x + view.bodyRect.width / 2;
-    const cy = view.bodyRect.y + view.bodyRect.height / 2;
-    const startBeats = core.getState().clips.find((c) => c.id === "clip-drums-1")!.start;
-    listeners.get("pointerdown")?.(pointerEvent(cx, cy, { altKey: true }));
-    listeners.get("pointermove")?.(pointerEvent(cx + 200, cy, { altKey: true }));
-    listeners.get("pointerup")?.(pointerEvent(cx + 200, cy, { altKey: true }));
-    expect(core.getState().clips.find((c) => c.id === "clip-drums-1")!.start).toBe(
-      startBeats,
+    const originals = new Map(
+      core.getState().clips.map((c) => [c.id, c.color] as const),
+    );
+    core.setSelection({
+      clipIds: ["clip-drums-1", "clip-drums-2"],
+      automationPointIds: [],
+    });
+
+    const { x, y } = centerOf(core, "clip-bass-1");
+    listeners.get("pointermove")?.(pointerEvent(x, y));
+    listeners.get("keydown")?.(keyEvent("i"));
+    core.undo();
+
+    expect(core.getState().clips.find((c) => c.id === "clip-drums-1")!.color).toBe(
+      originals.get("clip-drums-1"),
+    );
+    expect(core.getState().clips.find((c) => c.id === "clip-drums-2")!.color).toBe(
+      originals.get("clip-drums-2"),
     );
     controller.destroy();
-    void M;
   });
 
-  it("Alt+click on ruler still bypasses snap (no eyedropper interference)", () => {
+  it("does nothing when the cursor is not over a clip", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setViewportSize(1200, 700);
+    const { host, listeners } = createHost();
+    const controller = createPlaylistInteractionController(host, core);
+    const before = core.getState().clips.map((c) => c.color);
+    core.setSelection({
+      clipIds: ["clip-drums-1"],
+      automationPointIds: [],
+    });
+
+    // Far below the last demo clip: empty canvas.
+    listeners.get("pointermove")?.(pointerEvent(900, 640));
+    listeners.get("keydown")?.(keyEvent("i"));
+
+    expect(core.getState().clips.map((c) => c.color)).toEqual(before);
+    controller.destroy();
+  });
+
+  // F13 regressions: the three drag gestures the old bindings used to eat.
+  it("bare Alt+drag moves the clip without snapping and keeps its colour", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     core.setViewportSize(1200, 700);
     core.setSnapMode("beat");
     const { host, listeners } = createHost();
     const controller = createPlaylistInteractionController(host, core);
-    // Click on the ruler with Alt at a non-integer beat. Snap is "beat",
-    // so without Alt the playhead would land at the nearest integer; with
-    // Alt it should land exactly where clicked.
+    const before = core.getState().clips.find((c) => c.id === "clip-drums-1")!;
+    const startBeats = before.start;
+    const originalColor = before.color;
+    const { x, y } = centerOf(core, "clip-drums-1");
     const px = core.getState().viewport.pxPerBeat;
-    const rulerY = 6;
-    const x = M.trackHeaderWidth + 3.75 * px;
-    listeners.get("pointerdown")?.(pointerEvent(x, rulerY, { altKey: true }));
-    listeners.get("pointerup")?.(pointerEvent(x, rulerY, { altKey: true }));
-    expect(core.getState().playPosition.time).toBeCloseTo(3.75, 4);
+
+    listeners.get("pointerdown")?.(pointerEvent(x, y, { altKey: true }));
+    listeners.get("pointermove")?.(pointerEvent(x + 2.5 * px, y, { altKey: true }));
+    listeners.get("pointerup")?.(pointerEvent(x + 2.5 * px, y, { altKey: true }));
+
+    const after = core.getState().clips.find((c) => c.id === "clip-drums-1")!;
+    expect(after.start).toBeCloseTo(startBeats + 2.5, 4);
+    expect(after.color).toBe(originalColor);
     controller.destroy();
+  });
+
+  it("Alt+Shift+drag still clones (clone without snap), it is not swallowed", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setViewportSize(1200, 700);
+    core.setSnapMode("beat");
+    const { host, listeners } = createHost();
+    const controller = createPlaylistInteractionController(host, core);
+    core.setSelection({
+      clipIds: ["clip-drums-1"],
+      automationPointIds: [],
+    });
+    const clipCountBefore = core.getState().clips.length;
+    const { x, y } = centerOf(core, "clip-drums-1");
+    const px = core.getState().viewport.pxPerBeat;
+    const mods = { altKey: true, shiftKey: true };
+
+    listeners.get("pointerdown")?.(pointerEvent(x, y, mods));
+    listeners.get("pointermove")?.(pointerEvent(x + 3 * px, y, mods));
+    listeners.get("pointerup")?.(pointerEvent(x + 3 * px, y, mods));
+
+    expect(core.getState().clips.length).toBe(clipCountBefore + 1);
+    controller.destroy();
+    void M;
   });
 });

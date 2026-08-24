@@ -49,7 +49,7 @@ import {
   makeMarkerId,
   makePointId,
 } from "./state-track-helpers";
-import { cloneClip } from "./state-utils";
+import { cloneClip, splitAutomationPoints } from "./state-utils";
 import { normalizeState } from "./state-utils";
 
 export type { PlaylistClipMoveUpdate } from "./actions";
@@ -494,20 +494,37 @@ export class PlaylistCore {
       const baseOffset = clip.contentOffset ?? 0;
       const stretch = clip.stretchRatio ?? 1;
       const cutOffsetWithinContent = (time - clip.start) * stretch;
+      const leftDuration = time - clip.start;
+      const rightDuration = clip.start + clip.duration - time;
       const right: PlaylistClip = {
         ...cloneClip(clip),
         id: newId,
         start: time,
-        duration: clip.start + clip.duration - time,
+        duration: rightDuration,
         sourceId: clip.sourceId ?? clip.id,
         contentOffset: baseOffset + cutOffsetWithinContent,
       };
+      // Automation halves must be re-cut, not copied: see splitAutomationPoints.
+      if (isAutomationClip(clip) && isAutomationClip(right)) {
+        right.points = splitAutomationPoints(
+          clip.points,
+          leftDuration,
+          clip.id,
+          newId,
+          rightDuration,
+        ).right;
+        // The rebased points already carry the cut offset. Advancing
+        // contentOffset too would encode the same shift twice and show a
+        // bogus "↻" badge on a half whose envelope starts cleanly at 0.
+        right.contentOffset = baseOffset;
+      }
       newClips.push(right);
       working = [...working, right];
     }
     this.dispatch({
       type: "SLICE_CLIPS_AT_TIME",
       time,
+      clipIds: candidates.map((clip) => clip.id),
       newClips,
     });
     return newClips.map((c) => c.id);
