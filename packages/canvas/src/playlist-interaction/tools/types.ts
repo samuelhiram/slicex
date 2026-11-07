@@ -13,6 +13,10 @@ export interface ToolEnvironment {
   point: PlaylistPoint;
   hit: PlaylistHit;
   event: PointerEvent;
+  // Press count resolved by the controller (2 = double-click). Browsers
+  // report 0 in PointerEvent.detail, so tools must read this instead.
+  // Optional for direct tool calls in tests; falls back to event.detail.
+  clickCount?: number;
 }
 
 export interface PlaylistTool {

@@ -211,6 +211,12 @@ export function playlistReducer(
         "stretchRatio",
         Math.max(0.01, action.stretchRatio),
       );
+    case "SET_CLIP_NO_SLICE":
+      return setClipNoSlice(state, action.clipId, action.noSlice);
+    case "TOUCH":
+      // Deliberately NOT idempotent: the new identity is the point. Never
+      // dispatched at UI frequency (canon §4 does not apply).
+      return { ...state };
     case "STRETCH_RESIZE_CLIP":
       return stretchResizeClip(
         state,
@@ -527,6 +533,12 @@ export function playlistReducer(
   }
 }
 
+// Idempotent (canon §4): pointermove calls this on every move of a drag,
+// mostly with the position the clip already has (moves under one snap
+// step). When no track gets materialized and every update leaves the clip's
+// start / track as they are, the SAME state comes back — no notify, clips
+// keep their identity, subscribers (renderer, financial bridge) pay O(1).
+// The clips array is only copied from the first clip that really moves.
 function moveClips(
   state: PlaylistState,
   updates: { id: string; start: number; trackIndex: number }[],
@@ -537,20 +549,32 @@ function moveClips(
     state.tracks.length - 1,
   );
   const materialized = materializeTracksThrough(state, maxTrackIndex);
-  const clips = materialized.clips.map((clip) => {
+  const source = materialized.clips;
+  let clips: PlaylistClip[] | null = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const clip = source[index]!;
     const update = byId.get(clip.id);
-    if (!update) {
-      return clip;
+    if (update) {
+      const start = Math.max(0, update.start);
+      const trackId = getTrackIdByIndex(materialized, update.trackIndex);
+      if (start !== clip.start || trackId !== clip.trackId) {
+        clips ??= source.slice(0, index);
+        clips.push({ ...clip, start, trackId });
+        continue;
+      }
     }
-    return {
-      ...clip,
-      start: Math.max(0, update.start),
-      trackId: getTrackIdByIndex(materialized, update.trackIndex),
-    };
-  });
+    clips?.push(clip);
+  }
+  if (clips === null) {
+    // No clip moved: only a materialized track (if any) is a change.
+    return materialized;
+  }
   return { ...materialized, clips };
 }
 
+// Idempotent (canon §4): same contract as moveClips — an edge dragged to
+// where it already is (start, duration and contentOffset unchanged) returns
+// the SAME state.
 function resizeClip(
   state: PlaylistState,
   clipId: string,
@@ -558,20 +582,64 @@ function resizeClip(
   time: number,
   metrics: PlaylistMetrics,
 ): PlaylistState {
-  const clips = state.clips.map((clip) => {
-    if (clip.id !== clipId) {
-      return clip;
-    }
-    const start = clip.start;
-    const end = clip.start + clip.duration;
-    if (edge === "right") {
-      const nextEnd = Math.max(start + metrics.minClipDuration, time);
-      return { ...clip, duration: nextEnd - start };
-    }
-    const nextStart = clamp(time, 0, end - metrics.minClipDuration);
-    return { ...clip, start: nextStart, duration: end - nextStart };
-  });
+  const index = state.clips.findIndex((clip) => clip.id === clipId);
+  if (index < 0) {
+    return state;
+  }
+  const clip = state.clips[index]!;
+  const next = resizedClip(clip, edge, time, metrics);
+  if (
+    next.start === clip.start &&
+    next.duration === clip.duration &&
+    next.contentOffset === clip.contentOffset
+  ) {
+    return state;
+  }
+  const clips = state.clips.slice();
+  clips[index] = next;
   return { ...state, clips };
+}
+
+function resizedClip(
+  clip: PlaylistClip,
+  edge: "left" | "right",
+  time: number,
+  metrics: PlaylistMetrics,
+): PlaylistClip {
+  const start = clip.start;
+  const end = clip.start + clip.duration;
+  if (edge === "right") {
+    const nextEnd = Math.max(start + metrics.minClipDuration, time);
+    return { ...clip, duration: nextEnd - start };
+  }
+  const nextStart = clamp(time, 0, end - metrics.minClipDuration);
+  // FL parity: cropping the LEFT edge keeps the inner content in place on
+  // the timeline — the window moves, the content doesn't. Shift the slip
+  // offset by the start delta measured in content beats (one screen beat =
+  // stretchRatio content beats, same convention as slip/slice). Automation
+  // clips keep their old behaviour (points are clip-relative). Stretch-mode
+  // resize goes through STRETCH_RESIZE_CLIP instead and never lands here.
+  const delta = nextStart - start;
+  if (isAutomationClip(clip) || (delta === 0 && clip.contentOffset === undefined)) {
+    return { ...clip, start: nextStart, duration: end - nextStart };
+  }
+  const contentOffset = cleanBeats(
+    (clip.contentOffset ?? 0) + delta * (clip.stretchRatio ?? 1),
+  );
+  return {
+    ...clip,
+    start: nextStart,
+    duration: end - nextStart,
+    contentOffset,
+  };
+}
+
+// Accumulated pointermove deltas (e.g. third-step snaps) leave binary noise
+// like 0.30000000000000004 in the offset. Snap times are already rounded to
+// 1e-4 beats, so rounding the sum to 1e-9 only strips the noise.
+function cleanBeats(value: number): number {
+  const rounded = Math.round(value * 1e9) / 1e9;
+  return rounded === 0 ? 0 : rounded;
 }
 
 function addAutomationPoint(
@@ -1025,6 +1093,30 @@ function setClipNumericField<K extends "contentOffset" | "stretchRatio">(
   return changed ? { ...state, clips } : state;
 }
 
+// Idempotent: setting the flag a clip already has returns the same state, so
+// the dispatch neither notifies nor pushes an undo entry. `false` drops the
+// key instead of storing `noSlice: false`, so a cleared clip is structurally
+// identical to one that never had the flag.
+function setClipNoSlice(
+  state: PlaylistState,
+  clipId: string,
+  noSlice: boolean,
+): PlaylistState {
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId || (clip.noSlice === true) === noSlice) {
+      return clip;
+    }
+    changed = true;
+    if (noSlice) {
+      return { ...clip, noSlice: true };
+    }
+    const { noSlice: _drop, ...rest } = clip;
+    return rest as PlaylistClip;
+  });
+  return changed ? { ...state, clips } : state;
+}
+
 function stretchResizeClip(
   state: PlaylistState,
   clipId: string,
@@ -1073,6 +1165,35 @@ function sliceClipsAtTime(
   clipIds: string[],
   newClips: import("./types").PlaylistClip[],
 ): PlaylistState {
+  // noSlice clips are never cut, whoever built the action (core.sliceClipsAtTime
+  // already skips them; this guards a raw dispatch). A blocked clip keeps its
+  // full length and its right half is not appended: core.sliceClipsAtTime
+  // builds `newClips` index-aligned with `clipIds`, and a right half spread
+  // from a noSlice clip inherits the flag, so either signal identifies it.
+  const blocked = new Set<string>();
+  if (clipIds.length > 0) {
+    const requested = new Set(clipIds);
+    for (const clip of state.clips) {
+      if (clip.noSlice === true && requested.has(clip.id)) {
+        blocked.add(clip.id);
+      }
+    }
+  }
+  if (blocked.size > 0 || newClips.some((clip) => clip.noSlice === true)) {
+    const aligned = clipIds.length === newClips.length;
+    const sourceIds = clipIds;
+    const keptIds = sourceIds.filter((id) => !blocked.has(id));
+    const keptNew = newClips.filter(
+      (clip, index) =>
+        clip.noSlice !== true &&
+        !(aligned && blocked.has(sourceIds[index]!)),
+    );
+    if (keptIds.length === 0 && keptNew.length === 0) {
+      return state;
+    }
+    clipIds = keptIds;
+    newClips = keptNew;
+  }
   const newById = new Map(newClips.map((c) => [c.id, c] as const));
   // Only the clips the caller resolved get truncated. Deriving the set from
   // `time` here would also truncate clips on locked tracks, which never get a

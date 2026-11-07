@@ -77,6 +77,12 @@ interface PlaylistClipBase {
   // any of them is dragged or nudged. Cleared by Ctrl+Shift+G or by paste
   // (paste reassigns a fresh groupId so a pasted group becomes a sibling).
   groupId?: string;
+  // Host-owned "this object cannot be cut" flag. Every slice path skips a
+  // clip with noSlice === true: core.sliceClipsAtTime (Slice tool release,
+  // Insert at the playhead) and the SLICE_CLIPS_AT_TIME reducer itself.
+  // Copy / paste / clone / duplicate keep it (they spread the clip). Toggled
+  // with core.setClipNoSlice (undoable). Absent / false = sliceable.
+  noSlice?: boolean;
 }
 
 export interface PlaylistRegularClip extends PlaylistClipBase {
@@ -339,6 +345,28 @@ export interface PlaylistMetrics {
 }
 
 export type PlaylistStateListener = (state: PlaylistState) => void;
+
+// Pluggable time axis. When a PlaylistCore is created with one, the ruler
+// ticks and every time tooltip (drag / resize / slice / ruler hover) come
+// from it instead of the built-in "bar.beat.tick" grid. The canvas stays
+// agnostic of what a beat means — the host decides (e.g. 1 beat = 1 day).
+export interface PlaylistTimeAxisTick {
+  beat: number;
+  // Major ticks draw the taller ruler line, the stronger grid line and their
+  // label (when non-null). Minor ticks only draw a short line.
+  major: boolean;
+  label: string | null;
+}
+
+export interface PlaylistTimeAxis {
+  // Ticks covering [fromBeat, toBeat] at zoom pxPerBeat, ascending beats.
+  // Called at most once per presentation build; may allocate. Must be a pure
+  // function of its arguments (the renderer's grid cache relies on it).
+  ticks(fromBeat: number, toBeat: number, pxPerBeat: number): PlaylistTimeAxisTick[];
+  // Text for time tooltips (drag / resize / slice / ruler hover). Replaces
+  // the default bar.beat.tick format.
+  formatTime(beat: number): string;
+}
 
 export const DEFAULT_PLAYLIST_METRICS: PlaylistMetrics = {
   rulerHeight: 38,

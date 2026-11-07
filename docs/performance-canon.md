@@ -196,6 +196,35 @@ Un drag = una entrada de undo. El controller llama `beginGesture()` /
 entre ambos no se push-ean al historial individualmente. Cualquier
 nuevo gesto que mute state debe hacer lo mismo.
 
+Contrato del gesto (`PlaylistCore`):
+
+- `endGesture()` push-ea **solo si** hubo al menos un dispatch undoable
+  (fuera de `amend`) dentro del gesto. Selección, marquee, overlays,
+  clipboard o viewport solos no crean entrada.
+- El destino del undo es el present **justo antes del primer dispatch
+  undoable** del gesto (`getGestureBase()`; `null` sin gesto abierto).
+  Lo no-undoable previo (p. ej. la selección del click) queda fuera de
+  la entrada, igual que si se hubiera dispatchado sin gesto.
+- El controller abre el gesto **antes** de `tool.onPointerDown` y lo
+  cierra en el acto si la tool no devuelve un drag que mute el doc. Así
+  un pointer-down que ya crea/borra/mutea (paint, Shift clone-drag,
+  Delete/Mute, doble click de Draw) + el drag + el `amend` del host en
+  microtask son **una** entrada (R2-BRIDGE-1).
+
+```ts
+// ❌ PROHIBIDO: el dispatch creador queda en su propia entrada; un Ctrl+Z
+// revierte solo el drag y deja el clip sin corregir (o un clon oculto)
+const gesture = tool.onPointerDown(env); // core.createClip(...) → push
+if (gesture) core.beginGesture();
+```
+
+```ts
+// ✅ OBLIGATORIO
+core.beginGesture();
+const gesture = tool.onPointerDown(env);
+if (!gesture || !gestureMutatesDoc(gesture)) core.endGesture();
+```
+
 ### 3.5 rAF tick selectivo
 
 El tick del `requestAnimationFrame` solo despacha cuando hay trabajo
@@ -236,6 +265,33 @@ clip-node-registry.ts`. El lint `check-perf-patterns.mjs` permite
 como factories — `renderer-impl.ts` (init one-shot) y los
 `*-registry.ts` que implementan este patrón.
 
+**Providers del host** (`PlaylistRendererCallbacks.getClipDetail` /
+`getClipSparkline`): `syncFrame` los llama una vez por clip **visible** por
+frame (sparkline: solo clips pattern). Contrato:
+
+- Ambos son lookups O(1) sobre un índice que el host ya construyó. Nada de
+  proyección/cálculo dentro del frame.
+- `getClipDetail` devuelve un string estable; un string distinto redibuja
+  ese clip (forma parte de `clipVisualHash`).
+- `getClipSparkline` devuelve **la misma referencia de array** mientras las
+  barras no cambian, y un array **nuevo** cuando cambian (nunca mutar en
+  sitio un array ya devuelto). El body se redibuja si cambió el hash **o**
+  si la referencia difiere de la última dibujada (`node.bars`), así que las
+  barras pueden depender de cosas fuera del hash (p. ej. la posición del
+  clip en un calendario) sin meter `clip.start` en el hash — un move puro
+  sigue sin redibujar nada cuando no hay providers.
+
+```ts
+// ❌ PROHIBIDO: array nuevo en cada llamada → redibuja el clip cada frame
+getClipSparkline: (id) => projection.barsFor(id).map(normalize),
+```
+
+```ts
+// ✅ OBLIGATORIO: índice recalculado solo cuando cambian los datos; un
+// array sin cambios elemento a elemento conserva la referencia previa.
+getClipSparkline: (id) => sparkIndex.get(id) ?? null,
+```
+
 ### 3.10 rAF coalescing + dirty-layer caching en el renderer
 
 `dispatch()` invoca `notify()` síncronamente; durante un pointermove
@@ -269,6 +325,16 @@ deben cachear su geometría:
 El patrón es: calcula un hash de las dependencies, comparalo con el
 hash del frame anterior, salta `clear()` + re-emit si no cambió.
 
+**Repintar sin notify del core.** Cuando cambian datos de un provider
+(`getClipDetail` / `getClipSparkline`) pero `PlaylistState` no, el host
+llama `renderer.invalidate()`. Entra por el mismo `requestRender`
+coalescido: N invalidates + N notifies del mismo frame = 1 `renderNow()`,
+y no arranca ningún tick (§3.11). Prohibido forzar un repaint despachando
+una acción "dummy" al core (ensucia history/notify) o con un rAF propio.
+El callback del rAF limpia `renderFrameId` **antes** de `renderNow()`: un
+frame que cae antes de que Pixi esté listo no puede dejar el id colgado y
+bloquear todos los renders siguientes.
+
 ### 3.11 rAF idle stop
 
 Cualquier rAF tick que solo tenga sentido durante un estado activo
@@ -282,6 +348,37 @@ Ejemplo canónico: `PlaylistShell` se suscribe a
 `state.playPosition.isRunning`. El tick que llama
 `advancePlayPosition` solo arranca cuando `isRunning` pasa de false a
 true, y se cancela cuando vuelve a false.
+
+### 3.13 Identidad estable de `state.clips` / `state.tracks`
+
+Una acción que no toca clips/tracks (hover, playhead, viewport, tool,
+selección, overlays…) **conserva la referencia** de `state.clips` y
+`state.tracks`. `PlaylistCore.dispatch` pasa el estado previo a
+`normalizeState(reduced, metrics, previous)`, que reutiliza el array previo
+cuando el reducer devolvió el mismo — sin clonar ni re-normalizar (la
+normalización de un clip depende solo del clip + `metrics`, y el previo ya
+está normalizado). Arrays que sí cambiaron se reconstruyen con objetos
+nuevos, como siempre.
+
+Consecuencias obligatorias:
+
+- Los reducers que no tocan clips/tracks hacen `{ ...state, x }` — nunca
+  `clips: state.clips.map(...)` "por si acaso".
+- Los suscriptores pueden (y deben) cortar con
+  `state.clips === lastClips && state.tracks === lastTracks` antes de
+  cualquier trabajo O(N) (bridge financiero, inspector, caches).
+- El state es inmutable (§1.4): dos entradas de history pueden compartir el
+  mismo array; mutarlo en sitio corrompe el undo.
+
+```ts
+// ❌ PROHIBIDO: re-clona N clips en cada hover/tick (60 Hz × O(N) allocs)
+const next = normalizeState(reduced, metrics);
+```
+
+```ts
+// ✅ OBLIGATORIO
+const next = normalizeState(reduced, metrics, previous);
+```
 
 ### 3.9 Batch dispatch para gestures que generan N mutaciones por move
 
@@ -367,6 +464,17 @@ ResizeObserver) y **están obligadas a ser idempotentes en el reducer**:
 - `SET_DRAG_PREVIEW` (F1/F3)
 - `SET_SNAP_HINT` (F1/F3)
 - `SET_TOOLTIP` (F1/F3)
+- `MOVE_CLIPS` (cada pointermove de un clip-drag): misma `state` cuando
+  ninguna track se materializa y cada update deja `max(0, start)` y el
+  `trackId` destino iguales a los del clip. Si algo cambia, el array de
+  clips se copia desde el primer clip que se mueve.
+- `RESIZE_CLIP` (cada pointermove de un resize): misma `state` cuando
+  `start`, `duration` y `contentOffset` resultantes no cambian (borde
+  donde ya está, o ya clampeado a `minClipDuration` / 0).
+
+Sin esto, cada pointermove por debajo de un paso de snap re-normalizaba
+N clips y obligaba a todo suscriptor (bridge financiero: ~1.3 ms a 600
+items) a un pase O(N) por un no-op (PERF2-3).
 
 Cada vez que aparezca una nueva acción que se invoque ≥30Hz, agregarla
 a esta lista y a los tests de `perf-budget.spec.ts`.
@@ -383,6 +491,7 @@ a esta lista y a los tests de `perf-budget.spec.ts`.
 | `clipViews.length` con 1000 clips fuera del viewport | < 50 |
 | `trackRows.length` con `scrollY=1_000_000` | < 40 |
 | Notify rate sobre 1000 dispatches idempotentes | == 0 |
+| `moveClips` / `resizeClip` a la posición actual × 500 en un drag (1000 clips) | 0 notifies, mismo `state.clips` |
 | `dispatch` × 10000 con state estable | < 100 ms (10 µs/dispatch) |
 | Brush path interpolación cubre todas las celdas snapped | sí, sin saltos |
 | Paint en track virtual produce clip visible | sí, track materializada |
@@ -391,6 +500,8 @@ a esta lista y a los tests de `perf-budget.spec.ts`.
 | N notifies del mismo frame coalescen en 1 render | sí |
 | rAF idle stop: tick cancelado al pausar play | sí |
 | Mask / grid solo redibujan al cambiar sus deps | sí |
+| hover / playhead / viewport conservan `state.clips` y `state.tracks` (1000 clips) | misma referencia |
+| 1000 cambios de hover con 1000 clips | < 30 ms |
 
 Estos números **no se tocan para que pasen los tests**. Si un test
 falla, hay un bug de performance real que arreglar.

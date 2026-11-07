@@ -40,6 +40,19 @@ interface ClipNode {
   label: Text | null;
   ratioBadge: Text | null;
   offsetBadge: Text | null;
+  // Secondary line under the title (host-provided via getClipDetail).
+  detail: Text | null;
+  // Truncation cache for the detail line: the display string is only
+  // recomputed when the source text or the clip width changes, so steady
+  // frames never allocate a new string.
+  detailSource: string;
+  detailWidth: number;
+  detailDisplay: string;
+  // Sparkline array the body was last drawn with, as returned by the
+  // per-renderer getClipSparkline provider (null = provider absent / returned
+  // null). A different reference forces a body redraw even when the visual
+  // hash is unchanged — see ClipNodeProviders.
+  bars: readonly number[] | null;
   // Visual hash captures everything that would force a redraw. Position and
   // size are kept separate so we can skip a redraw when only x/y changed.
   hash: string;
@@ -100,7 +113,43 @@ export function setSparklineProvider(
   sparklineProvider = provider;
 }
 
-function getSparklineBars(clipId: string): number[] {
+export type ClipSparklineProvider = (
+  clipId: string,
+) => readonly number[] | null;
+export type ClipDetailProvider = (clipId: string) => string | null;
+
+// Per-renderer providers (PlaylistRendererCallbacks.getClipDetail /
+// getClipSparkline). Both are called by syncFrame for VISIBLE clips only,
+// once per frame each (getClipSparkline only for pattern clips). Both must
+// be O(1) cached lookups — no projection work inside the frame.
+//
+// getClipDetail: return a stable string; a changed string redraws the clip
+// (it is part of clipVisualHash).
+//
+// getClipSparkline: return the SAME array reference for as long as the bars
+// are unchanged, and a NEW array when they change (never mutate a returned
+// array in place — the registry cannot see that). The body redraws when the
+// visual hash changes OR when the returned reference differs from the one
+// it was last drawn with, so the bars may depend on anything the host likes
+// (e.g. the clip's position on a calendar) without being in the hash. A
+// provider that allocates a fresh array per call defeats the cache and
+// redraws that clip every frame (canon §3.8). null falls back to the global
+// setSparklineProvider / the deterministic default; [] draws no bars.
+//
+// Neither provider schedules a frame by itself: when provider data changes
+// without a core notify, the host calls PlaylistRenderer.invalidate().
+export interface ClipNodeProviders {
+  getClipDetail?: ClipDetailProvider;
+  getClipSparkline?: ClipSparklineProvider;
+}
+
+function getSparklineBars(
+  clipId: string,
+  localBars: readonly number[] | null,
+): readonly number[] {
+  // Per-renderer provider wins over the global one; null falls through.
+  // syncFrame already queried it this frame and passes the result in.
+  if (localBars !== null) return localBars;
   if (sparklineProvider) {
     const custom = sparklineProvider(clipId);
     if (custom !== null) return custom;
@@ -108,7 +157,13 @@ function getSparklineBars(clipId: string): number[] {
   return sparklineBarsForClipImpl(clipId);
 }
 
-function clipVisualHash(view: PlaylistClipPresentation): string {
+// Exported for tests. `detail` is the host-provided secondary line (or null);
+// including it lets a changed detail (and the sparkline that is derived from
+// the same data, see ClipNodeProviders) trigger a redraw.
+export function clipVisualHash(
+  view: PlaylistClipPresentation,
+  detail: string | null = null,
+): string {
   const ratio = view.clip.stretchRatio ?? 1;
   const offset = view.clip.contentOffset ?? 0;
   return [
@@ -128,13 +183,49 @@ function clipVisualHash(view: PlaylistClipPresentation): string {
     ratio,
     offset,
     view.groupId ?? "",
+    detail ?? "",
   ].join("|");
+}
+
+// Detail line layout (local coords). Shown only when the body has room.
+const DETAIL_FONT_SIZE = 10;
+const DETAIL_LINE_HEIGHT = 13;
+const DETAIL_MIN_BODY_HEIGHT = 14;
+const DETAIL_MIN_WIDTH = 36;
+const DETAIL_PAD_X = 12;
+// Conservative average glyph width for the 10px detail font. Same estimate
+// style as the ratio badge (tagText.length * 6): no canvas measuring, so the
+// truncation is deterministic and works headless.
+const DETAIL_CHAR_PX = 6;
+
+export function isClipDetailVisible(
+  view: PlaylistClipPresentation,
+  detail: string | null,
+): boolean {
+  return (
+    detail !== null &&
+    detail.length > 0 &&
+    view.rect.width >= DETAIL_MIN_WIDTH &&
+    view.rect.height >= view.titleRect.height + DETAIL_MIN_BODY_HEIGHT
+  );
+}
+
+// Truncates `text` with an ellipsis so it fits inside a clip of `width` px
+// (left pad DETAIL_PAD_X, right pad 4). Pure; returns the input when it fits.
+export function truncateClipDetail(text: string, width: number): string {
+  const maxChars = Math.floor((width - DETAIL_PAD_X - 4) / DETAIL_CHAR_PX);
+  if (maxChars <= 0) return "";
+  if (text.length <= maxChars) return text;
+  if (maxChars === 1) return "…";
+  return `${text.slice(0, maxChars - 1)}…`;
 }
 
 function drawClipBodyLocal(
   body: Graphics,
   view: PlaylistClipPresentation,
   palette: PixiPaletteColors,
+  localBars: readonly number[] | null,
+  detailVisible: boolean,
 ): void {
   body.clear();
   const width = view.rect.width;
@@ -166,9 +257,11 @@ function drawClipBodyLocal(
   // bars are pure visual filler until the financial engine plugs in real
   // data via setSparklineProvider.
   if (view.clip.type === "pattern" && width >= 60 && height >= 18) {
-    const bars = getSparklineBars(view.clip.id);
+    const bars = getSparklineBars(view.clip.id, localBars);
     if (bars.length > 0) {
-      const titleH = view.titleRect.height;
+      // Reserve the detail line so the bars don't run under its text.
+      const titleH =
+        view.titleRect.height + (detailVisible ? DETAIL_LINE_HEIGHT : 0);
       const drawableHeight = height - titleH - 6;
       if (drawableHeight > 2) {
         const padX = 8;
@@ -272,7 +365,7 @@ function drawClipOverlayLocal(
 
 function ensureText(
   node: ClipNode,
-  key: "label" | "ratioBadge" | "offsetBadge",
+  key: "label" | "ratioBadge" | "offsetBadge" | "detail",
   factory: () => Text,
 ): Text {
   let existing = node[key];
@@ -311,10 +404,61 @@ export interface ClipNodeRegistry {
 
 export function createClipNodeRegistry(
   palette: PixiPaletteColors,
+  providers: ClipNodeProviders = {},
 ): ClipNodeRegistry {
   const cache = new Map<string, ClipNode>();
+  const getClipDetail = providers.getClipDetail;
+  const getClipSparkline = providers.getClipSparkline;
 
-  function applyLabels(node: ClipNode, view: PlaylistClipPresentation): void {
+  // Secondary line under the title bar. Created lazily ONCE per node (same
+  // factory pattern as the title label), never per frame.
+  function applyDetail(
+    node: ClipNode,
+    view: PlaylistClipPresentation,
+    detail: string | null,
+    visible: boolean,
+  ): void {
+    if (!visible || detail === null) {
+      hideText(node.detail);
+      return;
+    }
+    const width = view.rect.width;
+    if (node.detailSource !== detail || node.detailWidth !== width) {
+      node.detailSource = detail;
+      node.detailWidth = width;
+      node.detailDisplay = truncateClipDetail(detail, width);
+    }
+    if (node.detailDisplay.length === 0) {
+      hideText(node.detail);
+      return;
+    }
+    const text = ensureText(node, "detail", () =>
+      new Text({
+        text: node.detailDisplay,
+        style: {
+          fill: palette.textMuted,
+          fontFamily: "Segoe UI, Arial, sans-serif",
+          fontSize: DETAIL_FONT_SIZE,
+          fontWeight: "600" as any,
+        },
+      }),
+    );
+    applyText(
+      text,
+      node.detailDisplay,
+      palette.textMuted,
+      DETAIL_FONT_SIZE,
+      "600",
+    );
+    text.x = DETAIL_PAD_X;
+    text.y = view.titleRect.height + 1;
+  }
+
+  function applyLabels(
+    node: ClipNode,
+    view: PlaylistClipPresentation,
+    detailVisible: boolean,
+  ): void {
     const width = view.rect.width;
     const height = view.rect.height;
     if (width < 44 || height < 24) {
@@ -375,7 +519,15 @@ export function createClipNodeRegistry(
       );
       applyText(badge, offsetText, palette.textMuted, 10, "600");
       badge.x = 12;
-      badge.y = 18;
+      // With a detail line present the badge drops below it (or hides when
+      // there is no room) so the two never overlap.
+      if (detailVisible) {
+        const y = view.titleRect.height + 1 + DETAIL_LINE_HEIGHT;
+        badge.y = y;
+        if (y + DETAIL_LINE_HEIGHT > height) badge.visible = false;
+      } else {
+        badge.y = 18;
+      }
     } else {
       hideText(node.offsetBadge);
     }
@@ -394,6 +546,11 @@ export function createClipNodeRegistry(
       label: null,
       ratioBadge: null,
       offsetBadge: null,
+      detail: null,
+      detailSource: "",
+      detailWidth: -1,
+      detailDisplay: "",
+      bars: null,
       hash: "",
       width: 0,
       height: 0,
@@ -416,19 +573,34 @@ export function createClipNodeRegistry(
       node.container.visible = true;
       node.container.x = Math.round(view.rect.x);
       node.container.y = Math.round(view.rect.y);
-      const hash = clipVisualHash(view);
-      if (
+      const detail = getClipDetail ? getClipDetail(view.clip.id) : null;
+      const detailVisible = isClipDetailVisible(view, detail);
+      // Queried every frame for visible pattern clips (O(1) by contract) so
+      // bars that depend on data outside the hash — e.g. the clip's calendar
+      // position — still repaint; the reference compare keeps it free.
+      const bars =
+        getClipSparkline && view.clip.type === "pattern"
+          ? getClipSparkline(view.clip.id)
+          : null;
+      const hash = clipVisualHash(view, detail);
+      const visualChanged =
         hash !== node.hash ||
         node.width !== view.rect.width ||
-        node.height !== view.rect.height
-      ) {
-        drawClipBodyLocal(node.body, view, palette);
+        node.height !== view.rect.height;
+      if (visualChanged || bars !== node.bars) {
+        // New bars alone only touch the body; the overlay (outline, handles,
+        // automation polyline) does not depend on them.
+        drawClipBodyLocal(node.body, view, palette, bars, detailVisible);
+        node.bars = bars;
+      }
+      if (visualChanged) {
         drawClipOverlayLocal(node.overlay, view, palette);
         node.hash = hash;
         node.width = view.rect.width;
         node.height = view.rect.height;
       }
-      applyLabels(node, view);
+      applyLabels(node, view, detailVisible);
+      applyDetail(node, view, detail, detailVisible);
     }
     // Hide nodes whose clips are off-screen this frame. We keep them
     // parented so future frames can show them again in O(1) — only
@@ -440,6 +612,7 @@ export function createClipNodeRegistry(
       hideText(node.label);
       hideText(node.ratioBadge);
       hideText(node.offsetBadge);
+      hideText(node.detail);
     }
   }
 
@@ -454,6 +627,7 @@ export function createClipNodeRegistry(
         if (node.label) node.label.removeFromParent();
         if (node.ratioBadge) node.ratioBadge.removeFromParent();
         if (node.offsetBadge) node.offsetBadge.removeFromParent();
+        if (node.detail) node.detail.removeFromParent();
       } catch {
         // noop — best-effort cleanup
       }

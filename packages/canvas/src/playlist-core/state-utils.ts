@@ -181,10 +181,19 @@ export function cloneClip(clip: PlaylistClip): PlaylistClip {
   return { ...clip };
 }
 
-export function cloneState(state: PlaylistState): PlaylistState {
+// `shareClips` / `shareTracks` hand the input arrays back as-is instead of
+// cloning them. Only normalizeState uses that, and only for arrays it either
+// reuses from the already-normalized previous state or rebuilds itself.
+export function cloneState(
+  state: PlaylistState,
+  shareClips = false,
+  shareTracks = false,
+): PlaylistState {
   return {
-    tracks: state.tracks.map((track) => ({ ...track })),
-    clips: state.clips.map(cloneClip),
+    tracks: shareTracks
+      ? state.tracks
+      : state.tracks.map((track) => ({ ...track })),
+    clips: shareClips ? state.clips : state.clips.map(cloneClip),
     viewport: { ...state.viewport },
     snap: { ...state.snap },
     selection: cloneSelection(state.selection),
@@ -245,11 +254,36 @@ export function sortAutomationPoints(
   return [...points].sort((left, right) => left.time - right.time);
 }
 
+// `previous` is the state the reducer started from. It MUST itself be an
+// output of normalizeState with the same metrics (PlaylistCore guarantees
+// that: the constructor normalizes, every dispatch normalizes, undo/redo
+// only restore normalized states). When the reducer handed back the very
+// same `clips` / `tracks` array, that array is reused as-is (SYNC-15):
+//
+//   - Sound because clip normalization depends only on the clip itself +
+//     `metrics.minClipDuration` (start >= 0, duration >= min, automation
+//     points sorted with time >= 0 and value in 0..1), and tracks are only
+//     copied, never rewritten. Re-normalizing an already-normalized array
+//     yields equal values, so skipping it changes nothing but identity.
+//   - Required because hover / playhead / viewport dispatches run at
+//     60 Hz: re-cloning every clip there was O(N) allocation per frame
+//     (canon §1.1) and broke `state.clips === lastClips` short-circuits in
+//     every subscriber (the renderer, the financial bridge).
+//
+// Arrays that DID change are rebuilt with fresh clip/track objects, exactly
+// as before. State is immutable by contract (canon §1.4), so sharing an
+// array between two history entries is safe.
 export function normalizeState(
   input: PlaylistState,
   metrics: PlaylistMetrics,
+  previous: PlaylistState | null = null,
 ): PlaylistState {
-  const state = cloneState(input);
+  const reuseClips = previous !== null && input.clips === previous.clips;
+  const reuseTracks = previous !== null && input.tracks === previous.tracks;
+  // Clips are always shared here: either reused below, or rebuilt by the
+  // normalization map (which already allocates a fresh object per clip, so
+  // cloning them first would just allocate twice).
+  const state = cloneState(input, true, reuseTracks);
 
   state.viewport.pxPerBeat = clamp(
     state.viewport.pxPerBeat,
@@ -267,6 +301,10 @@ export function normalizeState(
     getMaxScrollY(state, metrics),
   );
   state.playPosition.time = Math.max(0, state.playPosition.time);
+  if (reuseClips) {
+    state.clips = previous!.clips;
+    return state;
+  }
   state.clips = state.clips.map((clip) => {
     const duration = Math.max(metrics.minClipDuration, clip.duration);
     const start = Math.max(0, clip.start);

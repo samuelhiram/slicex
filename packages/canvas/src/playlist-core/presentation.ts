@@ -7,6 +7,7 @@ import {
   type PlaylistPoint,
   type PlaylistRect,
   type PlaylistState,
+  type PlaylistTimeAxis,
   type PlaylistTrack,
 } from "./types";
 import {
@@ -746,6 +747,7 @@ function createSnapIndicatorX(
 function createRulerTicks(
   state: PlaylistState,
   metrics: PlaylistMetrics,
+  timeAxis: PlaylistTimeAxis | null = null,
 ): PlaylistRulerTickPresentation[] {
   const step = pickGridStep(state.viewport.pxPerBeat);
   const startBeat = Math.max(
@@ -755,6 +757,30 @@ function createRulerTicks(
   );
   const endBeat = screenXToTime(state, state.viewport.width, metrics) + step;
   const ticks: PlaylistRulerTickPresentation[] = [];
+
+  // Pluggable axis: same visible beat range, same x rounding and the same
+  // header cull as the default grid — only the tick list and labels change.
+  if (timeAxis) {
+    const axisTicks = timeAxis.ticks(
+      startBeat,
+      endBeat,
+      state.viewport.pxPerBeat,
+    );
+    for (let i = 0; i < axisTicks.length; i += 1) {
+      const tick = axisTicks[i]!;
+      const x = Math.round(timeToScreenX(state, tick.beat, metrics)) + 0.5;
+      if (x < metrics.trackHeaderWidth) {
+        continue;
+      }
+      ticks.push({
+        beat: tick.beat,
+        x,
+        isBar: tick.major,
+        label: tick.label,
+      });
+    }
+    return ticks;
+  }
 
   for (let beat = startBeat; beat <= endBeat; beat += step) {
     const x = Math.round(timeToScreenX(state, beat, metrics)) + 0.5;
@@ -876,6 +902,7 @@ function createMarquee(
 export function createPlaylistPresentation(
   state: PlaylistState,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+  timeAxis: PlaylistTimeAxis | null = null,
 ): PlaylistPresentation {
   const cache = buildTrackLayoutCache(state, metrics);
   const flagsByTrackId = getTrackFlags(state);
@@ -891,7 +918,7 @@ export function createPlaylistPresentation(
   // Every entry in clipViews is already inside the overscanned bounds; the
   // visibility flag remains a strict-intersect filter for the renderer.
   const visibleClipViews = clipViews.filter((view) => view.isVisible);
-  const rulerTicks = createRulerTicks(state, metrics);
+  const rulerTicks = createRulerTicks(state, metrics, timeAxis);
   const scrollbars = createScrollbars(state, metrics);
 
   return {

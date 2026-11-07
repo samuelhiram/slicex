@@ -1,7 +1,6 @@
 import {
   automationPointFromScreen,
   clamp,
-  formatBarBeat,
   getHorizontalScrollableRange,
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
@@ -362,7 +361,7 @@ function emitDragOverlays(
   const tooltipBeats = tooltipTime ?? snapTimeValue;
   core.setTooltip({
     kind: "time",
-    text: formatBarBeat(tooltipBeats, core.metrics.beatsPerBar),
+    text: core.formatTime(tooltipBeats),
     anchor: point,
   });
 }
@@ -423,6 +422,10 @@ function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
 // the React shell now; the controller just routes RMB events to the right
 // open* helper on PlaylistCore.
 
+// Double-click window when the browser does not report a click count.
+const DOUBLE_CLICK_MS = 500;
+const DOUBLE_CLICK_SLOP_PX = 5;
+
 export function createPlaylistInteractionController(
   host: PlaylistInteractionHost,
   core: PlaylistCore,
@@ -442,12 +445,59 @@ export function createPlaylistInteractionController(
     core.getPresentation(),
   );
 
+  // Click counting for double-click. Modern Chromium reports
+  // `PointerEvent.detail === 0` on pointerdown (only mouse/click events carry
+  // the click count), so `event.detail === 2` alone never fired there. When
+  // the browser reports a count we trust it; otherwise we count primary
+  // presses that land within DOUBLE_CLICK_MS and DOUBLE_CLICK_SLOP_PX of the
+  // previous one. Plain mutable fields — no allocation per pointerdown.
+  //
+  // A press that turned into a drag (moved more than DOUBLE_CLICK_SLOP_PX
+  // while held) is never the first half of a double-click: press-drag-release
+  // then press again at the release point must start a fresh count, or a
+  // quick second slip/move would read as "open". `pressHeld` / `pressDragged`
+  // are plain booleans flipped in pointerdown / pointermove / pointerup.
+  let lastPressTime = Number.NEGATIVE_INFINITY;
+  let lastPressX = 0;
+  let lastPressY = 0;
+  let lastPressCount = 0;
+  let pressHeld = false;
+  let pressDragged = false;
+  const pressClickCount = (event: PointerEvent, point: PlaylistPoint): number => {
+    const afterDrag = pressDragged;
+    pressDragged = false;
+    if (event.button !== 0) {
+      pressHeld = false;
+      lastPressCount = 0;
+      return 0;
+    }
+    pressHeld = true;
+    if (afterDrag) {
+      lastPressCount = 1;
+    } else if (event.detail > 0) {
+      lastPressCount = event.detail;
+    } else {
+      const near =
+        Math.abs(point.x - lastPressX) <= DOUBLE_CLICK_SLOP_PX &&
+        Math.abs(point.y - lastPressY) <= DOUBLE_CLICK_SLOP_PX;
+      lastPressCount =
+        near && event.timeStamp - lastPressTime <= DOUBLE_CLICK_MS
+          ? lastPressCount + 1
+          : 1;
+    }
+    lastPressTime = event.timeStamp;
+    lastPressX = point.x;
+    lastPressY = point.y;
+    return lastPressCount;
+  };
+
   const handlePointerDown = (event: PointerEvent): void => {
     host.focus();
 
     const state = core.getState();
     const point = resolvePoint(host, event);
     const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
+    const clickCount = pressClickCount(event, point);
 
     // Any new pointerdown cancels in-flight inertia before further
     // dispatch; the user clearly wants a fresh gesture.
@@ -762,8 +812,16 @@ export function createPlaylistInteractionController(
     // rather than holding modal state in the playlist-core because the
     // modal's contents are a shell concern (the financial engine modal
     // will replace this stub later).
+    //
+    // Only for the tools whose FL double-click means "open": Select, Draw
+    // and Paint. Zoom, Mute, Slip, Slice and Delete act on EVERY press
+    // (click-click-click zooms 3 times, two clicks mute then unmute), so
+    // their second press must reach the tool instead of opening a modal.
     if (
-      (event as { detail?: number }).detail === 2 &&
+      clickCount === 2 &&
+      (state.tool === "select" ||
+        state.tool === "draw" ||
+        state.tool === "paint") &&
       (hit.kind === "clip" || hit.kind === "automation-body")
     ) {
       const evt = new CustomEvent("playlist-clip-open", {
@@ -781,13 +839,36 @@ export function createPlaylistInteractionController(
     // Alt = move without snap, Shift = clone, Alt+Shift = clone without snap.
 
     // Delegate timeline-area hits to the active tool.
+    //
+    // The undo gesture opens BEFORE the tool runs: a pointer-down that
+    // already changes the document (paint stamps a clip, Shift clones the
+    // selection, Delete / Mute act on the clicked clip, Draw double-click
+    // creates one) must share ONE undo entry with the drag that follows and
+    // with any host follow-up a microtask folds in through core.amend.
+    // Pushing the creating dispatch on its own let one Ctrl+Z revert only
+    // the drag + fix-ups (R2-BRIDGE-1). A gesture records an entry only when
+    // something undoable was dispatched, so selection clicks / marquee
+    // starts stay out of the history. Closed right away unless the tool
+    // returned a document-mutating drag, which pointerup closes.
     const tool = getTool(state.tool);
-    const gesture = tool.onPointerDown({ core, metrics, point, hit, event });
+    core.beginGesture();
+    let gesture: ActiveGesture | null = null;
+    try {
+      gesture = tool.onPointerDown({
+        core,
+        metrics,
+        point,
+        hit,
+        event,
+        clickCount,
+      });
+    } finally {
+      if (!gesture || !gestureMutatesDoc(gesture)) {
+        core.endGesture();
+      }
+    }
     if (gesture) {
       activeGesture = gesture;
-      if (gestureMutatesDoc(gesture)) {
-        core.beginGesture();
-      }
       host.setPointerCapture?.(event.pointerId);
       setCursor(host, hit, activeGesture, state.tool);
     }
@@ -812,6 +893,15 @@ export function createPlaylistInteractionController(
     const state = core.getState();
     const point = resolvePoint(host, event);
 
+    if (
+      pressHeld &&
+      !pressDragged &&
+      (Math.abs(point.x - lastPressX) > DOUBLE_CLICK_SLOP_PX ||
+        Math.abs(point.y - lastPressY) > DOUBLE_CLICK_SLOP_PX)
+    ) {
+      pressDragged = true;
+    }
+
     // F8: let the touch tracker consume mid-pinch updates so the
     // controller's gesture branches don't fight the zoom math.
     if (touchTracker.handlePointerMove(event, point)) {
@@ -833,7 +923,7 @@ export function createPlaylistInteractionController(
         );
         core.setTooltip({
           kind: "time",
-          text: formatBarBeat(tooltipBeats, metrics.beatsPerBar),
+          text: core.formatTime(tooltipBeats),
           anchor: point,
         });
       } else {
@@ -913,7 +1003,9 @@ export function createPlaylistInteractionController(
         state,
         event.altKey,
       );
-      if (state.stretchMode) {
+      // stretchEnabled === false keeps state.stretchMode false already; the
+      // explicit check makes "no gesture enters stretch-resize" local.
+      if (state.stretchMode && core.stretchEnabled) {
         core.stretchResizeClip(gesture.clipId, gesture.edge, time);
       } else {
         core.resizeClip(gesture.clipId, gesture.edge, time);
@@ -1009,7 +1101,7 @@ export function createPlaylistInteractionController(
       core.setSnapHint({ time: snapped, visible: true });
       core.setTooltip({
         kind: "time",
-        text: formatBarBeat(snapped, metrics.beatsPerBar),
+        text: core.formatTime(snapped),
         anchor: point,
       });
       event.preventDefault();
@@ -1200,6 +1292,7 @@ export function createPlaylistInteractionController(
   };
 
   const endGesture = (event: PointerEvent): void => {
+    pressHeld = false;
     // F8: capture the kind of the gesture that's about to end so the
     // touch tracker can decide whether to start momentum scroll (only
     // pan / scrollbar gestures qualify).

@@ -15,8 +15,10 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
 
 - `apps/web/src/App.tsx` monta directamente `PlaylistShell` (no hay router; la entrada es
   `index.html` → `src/main.tsx` → `<App />`).
-- `PlaylistShell` crea un estado demo, inicializa el core, la interacción y el renderer del playlist,
-  y monta además `PlaylistInspector` y `ErrorBoundary`.
+- `PlaylistShell` crea un **documento financiero demo** (`createDemoFinancialDocument(hoy)` de
+  `@slicex/core`), lo proyecta a estado de playlist (`apps/web/src/finance/mapping.ts`), inicializa
+  core + interacción + renderer y el `FinancialBridge`, y monta `PlaylistInspector`, los paneles
+  financieros (`apps/web/src/finance/components/`) y `ErrorBoundary`.
 - `@slicex/canvas` exporta tres capas claras:
   - `playlist-core`
   - `playlist-interaction`
@@ -38,11 +40,32 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
   - overlays de drag: ghost preview, snap indicator y tooltip B.B.T
   - gestos touch: pinch zoom, long-press e inercia
 
+### Motor financiero (MVP, en memoria)
+
+- **Tiempo:** 1 beat = 1 día; beat 0 = `FinancialDocument.startDate` ("hoy"). Ruler de calendario
+  vía la opción genérica `PlaylistCoreOptions.timeAxis` (`apps/web/src/finance/time-axis.ts`).
+- **`@slicex/core/finance`** (puro): fechas ISO, recurrencias (`once`/`weekly`/`biweekly`/
+  `semimonthly`/`monthly`), expansión de eventos, proyección (cash + deuda por cuenta; interés de
+  tarjeta estimado por saldo diario promedio), alertas de liquidez, avalancha, comparación de
+  escenarios, documento demo.
+- **`FinancialBridge`** (`apps/web/src/finance/financial-bridge.ts`): `item.id === clip.id`. La
+  geometría del clip es la verdad de las fechas (mover = mover fechas, estirar borde derecho =
+  `endDate`, recortar el izquierdo no mueve los días de pago, slice parte la recurrencia); lo no
+  temporal (montos, tarjetas) vive en el documento. Undo/redo del playlist es la única pila: cada
+  estado del historial tiene su snapshot de items, y cada guardado del editor es una entrada
+  (`core.touch()` cuando el clip no cambia). Clips no cortables (`noSlice`): eventos únicos,
+  tarjetas, MSI, préstamos con saldo.
+- **UI React:** barra de resumen (liquidez, reserva, deuda, próximo pago, mínimo proyectado,
+  alertas, altas), readout del playhead, editor (doble clic; alta diferida: el item se crea al
+  Guardar), panel "Análisis" (escenario base vs actual, estrategia avalancha a la fecha del
+  playhead).
+
 ### Lo que no está conectado todavía como flujo final de producto
 
-- La pantalla principal usa `createDemoPlaylistState()`; el playlist visible actual es **demo/in-memory**.
-- La persistencia Prisma existe, pero el playlist actual no aparece cableado aquí a lectura/escritura real de timelines desde la UI principal.
-- La documentación raíz todavía mezcla una narrativa de "editor financiero" con el código actual del playlist.
+- El documento financiero vive **solo en memoria**: no se persiste (Prisma / `/api/timelines` siguen
+  sin cablear a la UI).
+- `createDemoPlaylistState()` (demo musical) sigue existiendo en `@slicex/canvas` para sus tests,
+  pero la app ya no la monta.
 
 ## 3. Arquitectura vigente del repo
 

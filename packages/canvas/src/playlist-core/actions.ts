@@ -71,6 +71,11 @@ export type PlaylistAction =
   | { type: "SET_CLIP_COLOR"; clipId: string; color: string }
   | { type: "SET_CLIP_CONTENT_OFFSET"; clipId: string; contentOffset: number }
   | { type: "SET_CLIP_STRETCH_RATIO"; clipId: string; stretchRatio: number }
+  | { type: "SET_CLIP_NO_SLICE"; clipId: string; noSlice: boolean }
+  // History checkpoint: a new present with identical content. Lets a host
+  // whose own data changed (no playlist field did) get an undo step that
+  // undo/redo can map back to its data (see PlaylistCore.touch).
+  | { type: "TOUCH" }
   | {
       type: "STRETCH_RESIZE_CLIP";
       clipId: string;
@@ -171,6 +176,8 @@ const UNDOABLE_ACTION_TYPES: ReadonlySet<PlaylistActionType> = new Set([
   "SET_CLIP_COLOR",
   "SET_CLIP_CONTENT_OFFSET",
   "SET_CLIP_STRETCH_RATIO",
+  "SET_CLIP_NO_SLICE",
+  "TOUCH",
   "STRETCH_RESIZE_CLIP",
   "SLICE_CLIPS_AT_TIME",
   "ADD_MARKER",

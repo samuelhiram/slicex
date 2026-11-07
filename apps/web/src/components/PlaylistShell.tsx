@@ -1,7 +1,6 @@
 import React from "react";
 import {
   PLAYLIST_TOOL_HOTKEYS,
-  createDemoPlaylistState,
   createPlaylistCore,
   createPlaylistInteractionController,
   createPlaylistRenderer,
@@ -11,7 +10,40 @@ import {
   type PlaylistSnapMode,
   type PlaylistToolId,
 } from "@slicex/canvas";
+import { createDemoFinancialDocument } from "@slicex/core";
+import type { FinancialItem } from "@slicex/core";
 import { PlaylistInspector } from "./PlaylistInspector";
+import type { FinancialBridgeApi } from "../finance/bridge-api";
+import { FinancialBridge } from "../finance/financial-bridge";
+import {
+  FINANCE_PLAYLIST_METRICS,
+  createFinancialPlaylistState,
+} from "../finance/mapping";
+import { createCalendarTimeAxis } from "../finance/time-axis";
+import { FinancialSummaryBar } from "../finance/components/FinancialSummaryBar";
+import { PlayheadReadout } from "../finance/components/PlayheadReadout";
+import { FinancialEditorModal } from "../finance/components/FinancialEditorModal";
+import { FinancialSidePanel } from "../finance/components/FinancialSidePanel";
+
+// Playback speed of the financial timeline: 1 beat = 1 day.
+const PLAYBACK_DAYS_PER_SECOND = 7;
+
+// Financial item editor: edit an existing item (double-click on its clip)
+// or create one from a draft ("+ Ingreso" & co.; added only on "Guardar").
+type EditorState =
+  | { mode: "edit"; id: string }
+  | { mode: "create"; draft: FinancialItem }
+  | null;
+
+// Local calendar date of the device ("today" for the projection). The only
+// place that reads the clock: @slicex/core stays pure and receives dates.
+function localTodayISO(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
 
 const SNAP_OPTIONS: ReadonlyArray<{ value: PlaylistSnapMode; label: string }> =
   [
@@ -500,16 +532,21 @@ function PlaylistToolbar({ core }: ToolbarProps) {
           ))}
         </select>
       </label>
-      <button
-        type="button"
-        className="playlist-shell__tool"
-        data-active={stretchMode ? "true" : "false"}
-        title="Stretch mode — resize stretches content (Shift+M)"
-        onClick={() => core?.toggleStretchMode()}
-      >
-        <span className="playlist-shell__tool-label">Str</span>
-        <span className="playlist-shell__tool-hotkey">⇧M</span>
-      </button>
+      {core?.stretchEnabled ? (
+        // Hidden when the core disables time-stretch (the finance playlist:
+        // a clip's content has no time-stretch meaning there).
+        <button
+          type="button"
+          className="playlist-shell__tool"
+          data-active={stretchMode ? "true" : "false"}
+          data-tool="stretch"
+          title="Stretch mode — resize stretches content (Shift+M)"
+          onClick={() => core.toggleStretchMode()}
+        >
+          <span className="playlist-shell__tool-label">Str</span>
+          <span className="playlist-shell__tool-hotkey">⇧M</span>
+        </button>
+      ) : null}
       <button
         type="button"
         className="playlist-shell__tool"
@@ -556,11 +593,19 @@ function PlaylistToolbar({ core }: ToolbarProps) {
 export function PlaylistShell() {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const [core, setCore] = React.useState<PlaylistCore | null>(null);
+  const [bridge, setBridge] = React.useState<FinancialBridgeApi | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  // F4: double-click on a clip surfaces a "playlist-clip-open" CustomEvent
-  // from the controller. The shell parks the id in local state and renders
-  // a stub modal until the financial-engine clip editor lands.
-  const [openClipId, setOpenClipId] = React.useState<string | null>(null);
+  // Double-click on a clip surfaces a "playlist-clip-open" CustomEvent from
+  // the controller; the shell opens the financial editor for that item
+  // (item.id === clip.id). "+ Ingreso" & co. open it on a draft.
+  const [editor, setEditor] = React.useState<EditorState>(null);
+  const closeEditor = React.useCallback(() => setEditor(null), []);
+  const openDraft = React.useCallback(
+    (draft: FinancialItem) => setEditor({ mode: "create", draft }),
+    [],
+  );
+  // Where focus goes back when the editor closes and its opener is gone.
+  const getHost = React.useCallback(() => hostRef.current, []);
 
   React.useEffect(() => {
     const host = hostRef.current;
@@ -582,6 +627,8 @@ export function PlaylistShell() {
       typeof createPlaylistInteractionController
     > | null = null;
     let renderer: ReturnType<typeof createPlaylistRenderer> | null = null;
+    let financial: FinancialBridge | null = null;
+    let unsubscribeBridge: (() => void) | null = null;
     let tickId = 0;
     let lastFrame = performance.now();
 
@@ -589,14 +636,34 @@ export function PlaylistShell() {
 
     const initId = requestAnimationFrame(() => {
       if (cancelled) return;
-      instance = createPlaylistCore(createDemoPlaylistState());
+      const doc = createDemoFinancialDocument(localTodayISO());
+      instance = createPlaylistCore(createFinancialPlaylistState(doc), {
+        metrics: FINANCE_PLAYLIST_METRICS,
+        timeAxis: createCalendarTimeAxis(doc.startDate),
+        // Financial clips have no time-stretch meaning: a stretch would
+        // rescale the schedule phase and shift every payday.
+        stretchEnabled: false,
+      });
+      const bridgeInstance = new FinancialBridge(instance, doc);
+      financial = bridgeInstance;
       setCore(instance);
+      setBridge(bridgeInstance);
       interaction = createPlaylistInteractionController(host, instance);
       renderer = createPlaylistRenderer(host, instance, {
         onError: (reason) => {
           setError(reason instanceof Error ? reason.message : "Renderer failed.");
         },
+        getClipDetail: (clipId) => bridgeInstance.getClipDetail(clipId),
+        getClipSparkline: (clipId) => bridgeInstance.getClipSparkline(clipId),
       });
+      // Clip detail / sparkline text comes from the bridge, which can change
+      // with no core notify (e.g. only an amount edited in the editor). The
+      // bridge notifies only on real data changes, never per frame, and
+      // invalidate() just schedules the renderer's coalesced rAF frame.
+      const rendererInstance = renderer;
+      unsubscribeBridge = bridgeInstance.subscribe(() =>
+        rendererInstance.invalidate(),
+      );
 
       // Canon §3.5 + §3.10: only run the play-position rAF when playback
       // is actually engaged. While paused there's no animation to advance,
@@ -606,7 +673,7 @@ export function PlaylistShell() {
         if (!instance || cancelled) return;
         const deltaSeconds = Math.min(0.05, (now - lastFrame) / 1000);
         lastFrame = now;
-        instance.advancePlayPosition(deltaSeconds * 2);
+        instance.advancePlayPosition(deltaSeconds * PLAYBACK_DAYS_PER_SECOND);
         tickId = requestAnimationFrame(tick);
       };
       const startTick = () => {
@@ -638,7 +705,7 @@ export function PlaylistShell() {
     const handleClipOpen = (event: Event) => {
       const detail = (event as CustomEvent<{ clipId: string }>).detail;
       if (detail?.clipId) {
-        setOpenClipId(detail.clipId);
+        setEditor({ mode: "edit", id: detail.clipId });
       }
     };
     host.addEventListener("playlist-clip-open", handleClipOpen);
@@ -647,93 +714,68 @@ export function PlaylistShell() {
       cancelled = true;
       cancelAnimationFrame(initId);
       unsubscribeTransport?.();
+      unsubscribeBridge?.();
       interaction?.destroy();
       renderer?.destroy();
+      financial?.destroy();
       host.removeEventListener("playlist-clip-open", handleClipOpen);
       setCore(null);
+      setBridge(null);
     };
   }, []);
 
-  const openClipLabel = React.useMemo(() => {
-    if (!core || !openClipId) return null;
-    const clip = core.getState().clips.find((c) => c.id === openClipId);
-    return clip?.label ?? openClipId;
-  }, [core, openClipId]);
+  // While the (aria-modal) editor is open everything behind it is inert:
+  // no Tab into the canvas host, no Delete / Ctrl+Z reaching the playlist.
+  const editorOpen = editor !== null && bridge !== null;
 
   return (
-    <section className="playlist-shell" aria-label="Playlist">
-      <PlaylistToolbar core={core} />
-      <div
-        ref={hostRef}
-        className="playlist-shell__surface"
-        tabIndex={0}
-      />
-      <PlaylistContextMenuOverlay core={core} />
-      {error ? (
-        <div className="playlist-shell__status" role="alert">
-          <strong>Error</strong>
-          <span>{error}</span>
-        </div>
-      ) : null}
-      <PlaylistInspector core={core} />
-      {openClipId ? (
-        <ClipDetailModal
-          clipLabel={openClipLabel ?? openClipId}
-          onClose={() => setOpenClipId(null)}
+    <section className="playlist-shell playlist-shell--finance" aria-label="Playlist">
+      {bridge ? (
+        <FinancialSummaryBar
+          bridge={bridge}
+          onCreateDraft={openDraft}
+          inert={editorOpen}
         />
       ) : null}
-    </section>
-  );
-}
-
-// F4 stub modal — opened by double-clicking a clip. The financial-engine
-// clip editor will replace this in a later phase; for now it surfaces the
-// clip label and a close button so the dblclick → editor wiring is
-// observable end-to-end.
-function ClipDetailModal({
-  clipLabel,
-  onClose,
-}: {
-  clipLabel: string;
-  onClose: () => void;
-}) {
-  React.useEffect(() => {
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [onClose]);
-  return (
-    <div
-      className="playlist-shell__modal-overlay"
-      onClick={onClose}
-      role="presentation"
-    >
-      <div
-        className="playlist-shell__modal"
-        role="dialog"
-        aria-label="Clip details"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="playlist-shell__modal-header">
-          <strong>Clip details</strong>
-          <button
-            type="button"
-            className="playlist-shell__modal-close"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            ×
-          </button>
-        </header>
-        <div className="playlist-shell__modal-body">
-          <p>
-            Editing <strong>{clipLabel}</strong>. The financial-engine clip
-            editor will land here in a later phase.
-          </p>
-        </div>
+      <div className="playlist-shell__stage" inert={editorOpen}>
+        <PlaylistToolbar core={core} />
+        <div
+          ref={hostRef}
+          className="playlist-shell__surface"
+          tabIndex={0}
+        />
+        <PlaylistContextMenuOverlay core={core} />
+        {error ? (
+          <div className="playlist-shell__status" role="alert">
+            <strong>Error</strong>
+            <span>{error}</span>
+          </div>
+        ) : null}
+        <PlaylistInspector core={core} />
+        {/* Side panel BEFORE the readout: the open rail shifts the readout
+            with a sibling selector (globals.css) instead of covering it. */}
+        {bridge ? <FinancialSidePanel bridge={bridge} /> : null}
+        {bridge ? <PlayheadReadout bridge={bridge} /> : null}
       </div>
-    </div>
+      {editor && bridge ? (
+        editor.mode === "edit" ? (
+          <FinancialEditorModal
+            key={"edit:" + editor.id}
+            bridge={bridge}
+            itemId={editor.id}
+            onClose={closeEditor}
+            returnFocusFallback={getHost}
+          />
+        ) : (
+          <FinancialEditorModal
+            key={"create:" + editor.draft.id}
+            bridge={bridge}
+            draft={editor.draft}
+            onClose={closeEditor}
+            returnFocusFallback={getHost}
+          />
+        )
+      ) : null}
+    </section>
   );
 }

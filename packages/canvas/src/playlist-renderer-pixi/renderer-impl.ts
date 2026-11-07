@@ -36,10 +36,29 @@ import { drawTooltip } from "./layers/tooltip";
 export interface PlaylistRendererCallbacks {
   onReady?: () => void;
   onError?: (error: unknown) => void;
+  // Secondary line drawn inside the clip body under the title. Called once
+  // per VISIBLE clip per frame: must be an O(1) cached lookup returning a
+  // stable string. null → no detail line.
+  getClipDetail?: (clipId: string) => string | null;
+  // Per-renderer sparkline data; takes precedence over the global
+  // setSparklineProvider. null → existing behaviour, [] → no bars. Called
+  // once per VISIBLE pattern clip per frame: must be an O(1) cached lookup
+  // that returns the SAME array reference while the bars are unchanged (a
+  // new reference repaints that clip body). See ClipNodeProviders in
+  // clip-node-registry.ts.
+  getClipSparkline?: (clipId: string) => readonly number[] | null;
 }
 
 export interface PlaylistRenderer {
   destroy: () => void;
+  // Ask for a repaint without a core notify — for hosts whose provider data
+  // (getClipDetail / getClipSparkline) changed while PlaylistState did not.
+  // Goes through the same rAF-coalesced requestRender as core notifies
+  // (canon §3.10): any number of calls (and notifies) within one frame
+  // paint once; no extra tick is started (canon §3.11). Safe before the
+  // Pixi app is ready (the first ready frame picks it up) and a no-op after
+  // destroy().
+  invalidate: () => void;
 }
 
 export function createPlaylistRenderer(
@@ -58,16 +77,22 @@ export function createPlaylistRenderer(
   // See clip-node-registry.ts (canon §3.8).
   const clipsLayer = new Container();
   clipsLayer.eventMode = "none";
-  const clipNodeRegistry = createClipNodeRegistry({
-    text: COLORS.text,
-    textMuted: COLORS.textMuted,
-    selected: COLORS.selected,
-    hover: COLORS.hover,
-    rowLine: COLORS.rowLine,
-    panel: COLORS.panel,
-    panelStrong: COLORS.panelStrong,
-    automationLine: COLORS.automationLine,
-  });
+  const clipNodeRegistry = createClipNodeRegistry(
+    {
+      text: COLORS.text,
+      textMuted: COLORS.textMuted,
+      selected: COLORS.selected,
+      hover: COLORS.hover,
+      rowLine: COLORS.rowLine,
+      panel: COLORS.panel,
+      panelStrong: COLORS.panelStrong,
+      automationLine: COLORS.automationLine,
+    },
+    {
+      getClipDetail: callbacks.getClipDetail,
+      getClipSparkline: callbacks.getClipSparkline,
+    },
+  );
   const overlayGraphics = new Graphics();
   // Drag-preview ghost + snap indicator sit inside the timeline mask so they
   // disappear behind the ruler/header instead of bleeding into the chrome.
@@ -243,14 +268,24 @@ export function createPlaylistRenderer(
     (app as any).render?.();
   };
 
+  // The rAF callback clears the pending id BEFORE renderNow: renderNow bails
+  // out while the Pixi app is still initialising, and an id left set there
+  // would make every later requestRender (notify, resize, invalidate) a
+  // no-op forever. Hoisted so scheduling a frame allocates no closure.
+  const flushRender = (): void => {
+    renderFrameId = 0;
+    renderNow();
+  };
+
   const requestRender = (): void => {
     if (renderQueuedNow || renderFrameId !== 0 || destroyed) return;
     if (typeof requestAnimationFrame === "undefined") {
       renderQueuedNow = true;
       renderNow();
+      renderQueuedNow = false;
       return;
     }
-    renderFrameId = requestAnimationFrame(() => renderNow());
+    renderFrameId = requestAnimationFrame(flushRender);
   };
 
   const resize = (): void => {
@@ -349,6 +384,9 @@ export function createPlaylistRenderer(
     });
 
   return {
+    invalidate() {
+      requestRender();
+    },
     destroy() {
       destroyed = true;
       subscription.unsubscribe();

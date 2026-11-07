@@ -89,7 +89,7 @@ export const drawTool: PlaylistTool = {
       color: "#7aa6d8",
       duration: DEFAULT_CLIP_DURATION_BEATS,
     });
-    if ((event as { detail?: number }).detail === 2) {
+    if ((env.clickCount ?? (event as { detail?: number }).detail) === 2) {
       const id = core.createClip({
         trackIndex,
         start,

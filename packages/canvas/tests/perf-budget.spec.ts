@@ -308,6 +308,78 @@ describe("perf budget — hot-path actions are idempotent", () => {
     sub.unsubscribe();
     expect(count).toBe(0);
   });
+
+  // PERF2-3 — the controller calls moveClips / resizeClip on EVERY
+  // pointermove of a drag; between snap steps the target is where the clip
+  // already is. Inside the drag's gesture, after a first real move, the
+  // repeats must be no-ops (no notify, same clips array → O(1) subscribers).
+  it("MOVE_CLIPS to the clip's current start / track (mid-drag)", () => {
+    const core = createPlaylistCore(stateWithManyClips(1000));
+    core.beginGesture();
+    core.moveClips([{ id: "c-3", start: 25, trackIndex: 0 }]);
+    const { clips } = core.getState();
+    let count = 0;
+    const sub = core.subscribe(() => {
+      count += 1;
+    });
+    for (let i = 0; i < 500; i += 1) {
+      core.moveClips([{ id: "c-3", start: 25, trackIndex: 0 }]);
+      core.dispatch({
+        type: "MOVE_CLIPS",
+        updates: [
+          { id: "c-3", start: 25, trackIndex: 0 },
+          { id: "c-4", start: 32, trackIndex: 0 },
+          { id: "c-0", start: -7, trackIndex: 0 }, // clamps to its start 0
+        ],
+      });
+    }
+    sub.unsubscribe();
+    core.endGesture();
+    expect(count).toBe(0);
+    expect(core.getState().clips).toBe(clips);
+  });
+
+  it("MOVE_CLIPS no-op outside a gesture records no undo entry", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    let count = 0;
+    const sub = core.subscribe(() => {
+      count += 1;
+    });
+    for (let i = 0; i < 500; i += 1) {
+      core.moveClips([{ id: "clip-bass-1", start: 4, trackIndex: 1 }]);
+    }
+    sub.unsubscribe();
+    expect(count).toBe(0);
+    expect(core.canUndo()).toBe(false);
+  });
+
+  it("RESIZE_CLIP to the clip's current edge (mid-drag)", () => {
+    const core = createPlaylistCore(stateWithManyClips(1000));
+    core.setClipContentOffset("c-5", 1.5);
+    core.beginGesture();
+    core.resizeClip("c-3", "right", 30); // c-3: 24..28 → 24..30
+    core.resizeClip("c-6", "right", 48.1); // c-6: clamped to minClipDuration
+    const { clips } = core.getState();
+    let count = 0;
+    const sub = core.subscribe(() => {
+      count += 1;
+    });
+    for (let i = 0; i < 500; i += 1) {
+      core.resizeClip("c-3", "right", 30);
+      core.resizeClip("c-3", "left", 24);
+      // Still below the minimum: clamps to the duration it already has.
+      core.resizeClip("c-6", "right", 48.05);
+      // Left edge of a slipped clip at its own start: offset shifts by 0.
+      core.resizeClip("c-5", "left", 40);
+    }
+    sub.unsubscribe();
+    core.endGesture();
+    expect(count).toBe(0);
+    expect(core.getState().clips).toBe(clips);
+    expect(core.getState().clips.find((c) => c.id === "c-6")!.duration).toBe(
+      M.minClipDuration,
+    );
+  });
 });
 
 describe("perf budget — getMaxScrollY/X stay infinite (timeline is unbounded)", () => {
@@ -335,5 +407,80 @@ describe("perf budget — dispatch is cheap when state is stable", () => {
     }
     const elapsed = performance.now() - t0;
     expect(elapsed).toBeLessThan(100);
+  });
+});
+
+// SYNC-15 — a dispatch that does not touch clips/tracks must hand back the
+// SAME state.clips / state.tracks arrays. normalizeState used to clone every
+// clip on every dispatch, so hover / playhead / viewport (60 Hz) cost O(N)
+// allocations and defeated every `state.clips === last` short-circuit in
+// subscribers (renderer, financial bridge). Canon §1.1.
+describe("perf budget — UI dispatches keep clips/tracks identity", () => {
+  function expectIdentityKept(label: string, run: (core: ReturnType<typeof createPlaylistCore>, i: number) => void) {
+    const core = createPlaylistCore(stateWithManyClips(1000));
+    core.setPlayPositionRunning(true);
+    const { clips, tracks } = core.getState();
+    let notifies = 0;
+    const sub = core.subscribe(() => {
+      notifies += 1;
+    });
+    for (let i = 0; i < 60; i += 1) {
+      run(core, i);
+    }
+    sub.unsubscribe();
+    expect(notifies, `${label} must still notify (state changed)`).toBeGreaterThan(0);
+    expect(core.getState().clips, `${label} reallocated state.clips`).toBe(clips);
+    expect(core.getState().tracks, `${label} reallocated state.tracks`).toBe(tracks);
+  }
+
+  it("setHover across clips", () => {
+    expectIdentityKept("setHover", (core, i) =>
+      core.setHover({ kind: "clip", clipId: `c-${i % 2}` }),
+    );
+  });
+
+  it("setPlayPosition", () => {
+    expectIdentityKept("setPlayPosition", (core, i) => core.setPlayPosition(i + 1));
+  });
+
+  it("advancePlayPosition while playing", () => {
+    expectIdentityKept("advancePlayPosition", (core) =>
+      core.advancePlayPosition(0.25),
+    );
+  });
+
+  it("updateViewport scroll + zoom", () => {
+    expectIdentityKept("updateViewport", (core, i) =>
+      core.updateViewport({ scrollX: i * 10, pxPerBeat: 20 + (i % 5) }),
+    );
+  });
+
+  it("a clip edit still yields a new, normalized clips array (tracks kept)", () => {
+    const core = createPlaylistCore(stateWithManyClips(10));
+    const { clips, tracks } = core.getState();
+    core.dispatch({
+      type: "MOVE_CLIPS",
+      updates: [{ id: "c-3", start: -5, trackIndex: 0 }],
+    });
+    const next = core.getState();
+    expect(next.clips).not.toBe(clips);
+    expect(next.clips.find((c) => c.id === "c-3")!.start).toBe(0);
+    expect(next.tracks).toBe(tracks);
+    // Track-only edit: tracks rebuilt, clips array reused; undo restores.
+    core.renameTrack(0, "Renamed");
+    expect(core.getState().clips).toBe(next.clips);
+    expect(core.getState().tracks).not.toBe(tracks);
+    core.undo();
+    expect(core.getState().tracks[0]!.label).toBe(tracks[0]!.label);
+    expect(core.getState().clips).toBe(next.clips);
+  });
+
+  it("1000 hover changes over 1000 clips stay under 30 ms", () => {
+    const core = createPlaylistCore(stateWithManyClips(1000));
+    const t0 = performance.now();
+    for (let i = 0; i < 1000; i += 1) {
+      core.setHover({ kind: "clip", clipId: `c-${i % 2}` });
+    }
+    expect(performance.now() - t0).toBeLessThan(30);
   });
 });

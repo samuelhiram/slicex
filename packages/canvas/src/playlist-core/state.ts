@@ -4,6 +4,7 @@ import {
   type PlaylistClipMoveUpdate,
 } from "./actions";
 import {
+  formatBarBeat,
   getContentEndBeat,
   getTrackIdByIndex,
   getTrackIndexById,
@@ -38,6 +39,7 @@ import {
   type PlaylistSnapMode,
   type PlaylistState,
   type PlaylistStateListener,
+  type PlaylistTimeAxis,
   type PlaylistToolId,
   type PlaylistTooltip,
 } from "./types";
@@ -65,6 +67,8 @@ export interface PlaylistCreateClipInput {
   muted?: boolean;
   sourceId?: string;
   points?: PlaylistAutomationPoint[];
+  // true → the clip is skipped by every slice path (see PlaylistClip.noSlice).
+  noSlice?: boolean;
 }
 
 // PlaylistCore is the mutable facade backed by a pure reducer + history stack.
@@ -72,6 +76,16 @@ export interface PlaylistCreateClipInput {
 // shell) keep working unchanged. Internally each mutator dispatches an action.
 export interface PlaylistCoreOptions {
   metrics?: PlaylistMetrics;
+  // Optional pluggable time axis: ruler ticks + tooltip time text. Without
+  // it the playlist keeps the FL bar/beat grid and "bar.beat.tick" format.
+  timeAxis?: PlaylistTimeAxis;
+  // FL stretch mode (Shift+M: edge-resize scales stretchRatio instead of
+  // cropping). Default true. A host whose clips have no stretchable content
+  // passes false: setStretchMode(true) / toggleStretchMode() (and the raw
+  // SET_STRETCH_MODE / TOGGLE_STRETCH_MODE actions) become no-ops, the
+  // initial state is normalized to stretchMode false, and no resize gesture
+  // can enter stretch-resize.
+  stretchEnabled?: boolean;
 }
 
 export interface PlaylistSubscription {
@@ -89,13 +103,33 @@ export class PlaylistCore {
   } | null = null;
 
   private gestureDepth = 0;
-  private gestureSnapshot: PlaylistState | null = null;
+  // Undo target of the open gesture: the present right before its FIRST
+  // undoable dispatch (amend() dispatches excluded). null while no gesture
+  // is open and while the open one has not changed the document yet — so a
+  // gesture made only of selection / marquee / overlay / viewport changes
+  // records no undo entry, exactly as if those dispatches ran outside it.
+  private gestureBase: PlaylistState | null = null;
+  // > 0 while amend() runs: undoable dispatches replace the present instead
+  // of pushing a new undo entry. A counter so nested amend() calls are safe.
+  private amendDepth = 0;
+  private gestureOpenedInAmend = false;
 
   readonly metrics: PlaylistMetrics;
 
+  readonly timeAxis: PlaylistTimeAxis | null;
+
+  // See PlaylistCoreOptions.stretchEnabled.
+  readonly stretchEnabled: boolean;
+
   constructor(initialState: PlaylistState, options: PlaylistCoreOptions = {}) {
     this.metrics = options.metrics ?? DEFAULT_PLAYLIST_METRICS;
-    this.history = createHistory(normalizeState(initialState, this.metrics));
+    this.timeAxis = options.timeAxis ?? null;
+    this.stretchEnabled = options.stretchEnabled !== false;
+    const initial =
+      !this.stretchEnabled && initialState.stretchMode
+        ? { ...initialState, stretchMode: false }
+        : initialState;
+    this.history = createHistory(normalizeState(initial, this.metrics));
   }
 
   // Lifecycle and derived presentation.
@@ -110,12 +144,22 @@ export class PlaylistCore {
     const presentation = createPlaylistPresentation(
       this.history.present,
       this.metrics,
+      this.timeAxis,
     );
     this.presentationCache = {
       state: this.history.present,
       presentation,
     };
     return presentation;
+  }
+
+  // Time text for tooltips. Delegates to the pluggable axis when present;
+  // otherwise the FL "bar.beat.tick" format.
+  formatTime(beat: number): string {
+    if (this.timeAxis) {
+      return this.timeAxis.formatTime(beat);
+    }
+    return formatBarBeat(beat, this.metrics.beatsPerBar);
   }
 
   // Subscription management.
@@ -130,6 +174,14 @@ export class PlaylistCore {
 
   // Generic dispatch — any caller (including future tools/gestures) can use this directly.
   dispatch(action: PlaylistAction): void {
+    if (
+      !this.stretchEnabled &&
+      (action.type === "TOGGLE_STRETCH_MODE" ||
+        (action.type === "SET_STRETCH_MODE" && action.enabled))
+    ) {
+      // Stretch mode is off for this host: it can never be switched on.
+      return;
+    }
     const previous = this.history.present;
     const reduced = playlistReducer(previous, action, this.metrics);
     // Reducer signals "no change" by returning the same reference. Skip
@@ -139,19 +191,54 @@ export class PlaylistCore {
     if (reduced === previous) {
       return;
     }
-    const next = normalizeState(reduced, this.metrics);
-    if (isUndoableAction(action) && this.gestureDepth === 0) {
-      this.history = pushHistory(this.history, next);
+    // Passing `previous` lets normalizeState hand back previous.clips /
+    // previous.tracks untouched when the reducer did not replace them, so a
+    // hover / playhead / viewport dispatch keeps their identity (SYNC-15).
+    const next = normalizeState(reduced, this.metrics, previous);
+    if (isUndoableAction(action) && this.amendDepth === 0) {
+      if (this.gestureDepth === 0) {
+        this.history = pushHistory(this.history, next);
+      } else {
+        // First document change of the open gesture: what endGesture()
+        // pushes as the undo target.
+        if (this.gestureBase === null) this.gestureBase = previous;
+        this.history = replacePresent(this.history, next);
+      }
     } else {
       this.history = replacePresent(this.history, next);
     }
     this.notify();
   }
 
-  // Gesture brackets — coalesce many transient mutations into a single undo entry.
+  // Run `mutate` so that every dispatch it makes REPLACES the current undo
+  // entry instead of pushing a new one: follow-up corrections that belong to
+  // the previous step (e.g. a host relabelling a clip it just pasted). Undo
+  // from the amended state goes straight to the entry before it; past and
+  // future are left untouched. Listeners are still notified per dispatch.
+  // Nesting-safe (counter). Inside an open gesture that already changed the
+  // document it folds into the gesture's entry; inside one that has not, it
+  // folds into the entry before it (amend never starts an undo step, so it
+  // never fixes the gesture base). A gesture opened inside `mutate` folds
+  // into the present entry too instead of pushing its own step.
+  amend(mutate: () => void): void {
+    this.amendDepth += 1;
+    try {
+      mutate();
+    } finally {
+      this.amendDepth -= 1;
+    }
+  }
+
+  // Gesture brackets — coalesce many transient mutations into a single undo
+  // entry. Every undoable dispatch between the outermost begin/end lands in
+  // ONE entry whose undo target is the present before the first of them
+  // (see getGestureBase). A gesture with no undoable dispatch records
+  // nothing, so opening one "just in case" (the controller does it around
+  // every tool pointer-down) never creates an entry on its own.
   beginGesture(): void {
     if (this.gestureDepth === 0) {
-      this.gestureSnapshot = this.history.present;
+      this.gestureBase = null;
+      this.gestureOpenedInAmend = this.amendDepth > 0;
     }
     this.gestureDepth += 1;
   }
@@ -161,20 +248,35 @@ export class PlaylistCore {
       return;
     }
     this.gestureDepth -= 1;
-    if (this.gestureDepth > 0 || !this.gestureSnapshot) {
+    if (this.gestureDepth > 0) {
       return;
     }
-    const snapshot = this.gestureSnapshot;
-    this.gestureSnapshot = null;
-    if (snapshot === this.history.present) {
+    const base = this.gestureBase;
+    const openedInAmend = this.gestureOpenedInAmend;
+    this.gestureBase = null;
+    this.gestureOpenedInAmend = false;
+    // Opened inside amend(): its dispatches already replaced the present
+    // entry (and notified), so there is no new undo step to record.
+    if (base === null || base === this.history.present || openedInAmend) {
       return;
     }
-    this.history = {
-      past: [...this.history.past, snapshot],
-      present: this.history.present,
-      future: [],
-    };
+    this.history = pushHistory(
+      { ...this.history, present: base },
+      this.history.present,
+    );
     this.notify();
+  }
+
+  // The state the open gesture's undo entry returns to — the present right
+  // before its first undoable dispatch; while it has made none yet, the
+  // present itself. Its clips / tracks are those at gesture start (only
+  // undoable dispatches change them, amend() aside). null when no gesture
+  // is open. Nested gestures report the outermost one.
+  getGestureBase(): PlaylistState | null {
+    if (this.gestureDepth === 0) {
+      return null;
+    }
+    return this.gestureBase ?? this.history.present;
   }
 
   // Undo / redo.
@@ -183,8 +285,7 @@ export class PlaylistCore {
       return false;
     }
     this.history = undoHistory(this.history);
-    this.gestureDepth = 0;
-    this.gestureSnapshot = null;
+    this.resetGesture();
     this.notify();
     return true;
   }
@@ -194,10 +295,15 @@ export class PlaylistCore {
       return false;
     }
     this.history = redoHistory(this.history);
-    this.gestureDepth = 0;
-    this.gestureSnapshot = null;
+    this.resetGesture();
     this.notify();
     return true;
+  }
+
+  private resetGesture(): void {
+    this.gestureDepth = 0;
+    this.gestureBase = null;
+    this.gestureOpenedInAmend = false;
   }
 
   canUndo(): boolean {
@@ -456,6 +562,23 @@ export class PlaylistCore {
     this.dispatch({ type: "SET_CLIP_STRETCH_RATIO", clipId, stretchRatio });
   }
 
+  // Mark a clip as (un)sliceable. Undoable; setting the value the clip
+  // already has is a no-op (same state, no notify, no undo entry).
+  setClipNoSlice(clipId: string, noSlice: boolean): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
+    this.dispatch({ type: "SET_CLIP_NO_SLICE", clipId, noSlice });
+  }
+
+  // Undo checkpoint without a playlist change: the present is replaced by a
+  // content-identical state with a new identity (clips/tracks arrays are
+  // reused). Outside a gesture it is its own undo entry; inside a gesture it
+  // makes the gesture commit an entry even when nothing else changed. Hosts
+  // that key their own data by state identity (the financial bridge) use it
+  // so their edits undo/redo in step with the playlist.
+  touch(): void {
+    this.dispatch({ type: "TOUCH" });
+  }
+
   // Resize-with-stretch: scales the clip's stretchRatio by the duration
   // change instead of cropping content. Used while stretchMode is on.
   stretchResizeClip(
@@ -470,7 +593,8 @@ export class PlaylistCore {
   // Slice every clip whose body crosses `time` (Slice tool drag / Insert key).
   // Each affected clip becomes a left half (truncated in place) plus a right
   // half pushed back into the state with a fresh id and a contentOffset that
-  // represents the drop-in time of the cut. Locked tracks are skipped.
+  // represents the drop-in time of the cut. Locked tracks and noSlice clips
+  // are skipped.
   sliceClipsAtTime(time: number): string[] {
     const state = this.history.present;
     const lockedTrackIds = new Set(
@@ -480,6 +604,7 @@ export class PlaylistCore {
     );
     const candidates = state.clips.filter(
       (clip) =>
+        clip.noSlice !== true &&
         !lockedTrackIds.has(clip.trackId) &&
         time > clip.start + 1e-6 &&
         time < clip.start + clip.duration - 1e-6,
@@ -572,30 +697,29 @@ export class PlaylistCore {
 
   // Clone the selected clips in place (same start, same track) with fresh
   // ids but matching sourceId. Returns the new clip ids and selects them.
-  // Used by Shift-drag clone-drag in the select tool.
+  // Used by Shift-drag clone-drag in the select tool. Like createClip(s),
+  // never lands a clone on a locked track (the destination is the source's
+  // own track here).
   cloneClipsInPlace(clipIds: string[]): string[] {
     const state = this.history.present;
     const ids = new Set(clipIds);
-    const sourceClips = state.clips.filter(
-      (clip) => ids.has(clip.id) && !this.isClipOnLockedTrack(clip.id),
-    );
-    if (sourceClips.length === 0) {
-      return [];
-    }
     let working = [...state.clips];
     const entries: { clip: PlaylistClip; trackIndex: number }[] = [];
-    for (const source of sourceClips) {
+    for (const source of state.clips) {
+      if (!ids.has(source.id)) continue;
+      const trackIndex = getTrackIndexById(state, source.trackId);
+      if (state.tracks[trackIndex]?.locked) continue;
       const id = makeClipId(working);
       const newClip: PlaylistClip = {
         ...cloneClip(source),
         id,
         sourceId: source.sourceId ?? source.id,
       };
-      entries.push({
-        clip: newClip,
-        trackIndex: getTrackIndexById(state, source.trackId),
-      });
+      entries.push({ clip: newClip, trackIndex });
       working = [...working, newClip];
+    }
+    if (entries.length === 0) {
+      return [];
     }
     const selectIds = entries.map((entry) => entry.clip.id);
     this.dispatch({ type: "PASTE_CLIPS", entries, selectIds });
@@ -837,6 +961,7 @@ export class PlaylistCore {
       color: input.color ?? "#888888",
       muted: input.muted,
       sourceId: input.sourceId ?? id,
+      ...(input.noSlice === true ? { noSlice: true } : null),
     };
     const clip: PlaylistClip =
       baseClip.type === "automation"
@@ -882,6 +1007,7 @@ export class PlaylistCore {
         color: input.color ?? "#888888",
         muted: input.muted,
         sourceId: input.sourceId ?? id,
+        ...(input.noSlice === true ? { noSlice: true } : null),
       };
       const clip: PlaylistClip =
         baseClip.type === "automation"
@@ -1061,8 +1187,11 @@ export class PlaylistCore {
       }
     }
     for (const entry of state.clipboard.entries) {
-      const id = makeClipId(workingClips);
       const trackIndex = Math.max(0, baseTrackIndex + entry.trackOffset);
+      // Like createClip(s): nothing lands on a locked track. The rest of the
+      // clipboard still pastes at its relative position.
+      if (state.tracks[trackIndex]?.locked) continue;
+      const id = makeClipId(workingClips);
       const nextGroupId =
         entry.clip.groupId !== undefined
           ? groupIdRemap.get(entry.clip.groupId)!
@@ -1082,6 +1211,9 @@ export class PlaylistCore {
       newEntries.push({ clip: newClip, trackIndex });
       workingClips = [...workingClips, newClip];
     }
+    if (newEntries.length === 0) {
+      return [];
+    }
     const selectIds = newEntries.map((entry) => entry.clip.id);
     this.dispatch({
       type: "PASTE_CLIPS",
@@ -1091,6 +1223,10 @@ export class PlaylistCore {
     return selectIds;
   }
 
+  // Ctrl+B: duplicates the selection right after itself (shifted by the
+  // selection's span). Clips on a locked track are not duplicated (the copy
+  // would land on that same track); the span still covers the whole
+  // selection so the unlocked copies keep their relative layout.
   duplicateSelectionRight(): string[] {
     const state = this.history.present;
     const ids = new Set(state.selection.clipIds);
@@ -1110,6 +1246,8 @@ export class PlaylistCore {
     const newEntries: { clip: PlaylistClip; trackIndex: number }[] = [];
     let workingClips = [...state.clips];
     for (const clip of selected) {
+      const trackIndex = getTrackIndexById(state, clip.trackId);
+      if (state.tracks[trackIndex]?.locked) continue;
       const id = makeClipId(workingClips);
       const newClip: PlaylistClip = {
         ...cloneClip(clip),
@@ -1117,11 +1255,11 @@ export class PlaylistCore {
         start: clip.start + span,
         sourceId: clip.sourceId ?? clip.id,
       };
-      newEntries.push({
-        clip: newClip,
-        trackIndex: getTrackIndexById(state, clip.trackId),
-      });
+      newEntries.push({ clip: newClip, trackIndex });
       workingClips = [...workingClips, newClip];
+    }
+    if (newEntries.length === 0) {
+      return [];
     }
     const selectIds = newEntries.map((entry) => entry.clip.id);
     this.dispatch({
