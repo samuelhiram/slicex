@@ -1,4 +1,5 @@
 import {
+  getTracksTop,
   pointInRect,
   type PlaylistAutomationClip,
   type PlaylistClip,
@@ -9,6 +10,8 @@ import {
 
 export type PlaylistHit =
   | { kind: "empty" }
+  // Inert chrome (the overview lane's header cell): no tool, no gesture.
+  | { kind: "chrome" }
   | { kind: "marker"; markerId: string }
   | { kind: "scrollbar-horizontal"; onThumb: boolean }
   | { kind: "scrollbar-vertical"; onThumb: boolean }
@@ -126,6 +129,16 @@ export function hitTestPlaylist(
       }
     }
     return { kind: "ruler" };
+  }
+
+  // Overview lane (between ruler and tracks): behaves like the ruler — seek
+  // and scrub the play position. Its header cell is inert chrome. Tracks
+  // and clips scrolled up under the lane are never hit through it.
+  const tracksTop = getTracksTop(metrics);
+  if (point.y <= tracksTop && tracksTop > metrics.rulerHeight) {
+    return point.x >= metrics.trackHeaderWidth
+      ? { kind: "ruler" }
+      : { kind: "chrome" };
   }
 
   if (point.y > metrics.rulerHeight) {

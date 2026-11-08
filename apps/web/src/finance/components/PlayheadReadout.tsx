@@ -1,14 +1,15 @@
-// Small overlay that reads the projection at the playhead day: date, cash
-// and total debt. Re-renders only when the integer day or the bridge
-// revision changes (never per frame).
+// Compact readout of the projection at the playhead day: date, cash and
+// total debt. It lives in the shell's tool row (never over the canvas), so
+// it can't cover the money lane, the ruler or the tools. Re-renders only
+// when the integer day or the bridge revision changes (never per frame).
 import * as React from "react";
 import type { FinancialBridgeApi } from "../bridge-api";
-import { formatDateLong, formatMoneyWhole } from "../format";
+import { formatDateWeekday, formatMoneyWhole } from "../format";
 import { useFinancialRevision, usePlayheadDay } from "./FinancialUi";
 
 export interface PlayheadReadoutProps {
   bridge: FinancialBridgeApi;
-  /** Extra class to override the default bottom-left placement. */
+  /** Extra class (placement is up to the container; in-flow by default). */
   className?: string;
 }
 
@@ -34,7 +35,7 @@ export function PlayheadReadout({ bridge, className }: PlayheadReadoutProps) {
       aria-live="off"
       aria-label="Lectura del playhead"
     >
-      <span className="fin-readout__date">{formatDateLong(view.date)}</span>
+      <span className="fin-readout__date">{formatDateWeekday(view.date)}</span>
       <span className="fin-readout__cell">
         <span className="fin-readout__label">Cash</span>
         <span className="fin-readout__cash">

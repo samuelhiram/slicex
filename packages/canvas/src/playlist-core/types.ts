@@ -136,7 +136,11 @@ export type PlaylistSnapMode =
   | "half-beat"
   | "beat"
   | "bar"
-  | "events";
+  | "events"
+  // Snap to the host time axis' targets (PlaylistTimeAxis.snapTargets),
+  // e.g. the start of each pay period. Falls back to "beat" when the axis
+  // provides none.
+  | "axis";
 
 export interface PlaylistSnap {
   mode: PlaylistSnapMode;
@@ -342,6 +346,9 @@ export interface PlaylistMetrics {
   scrollbarVirtualRangePx: number;
   contextMenuWidth: number;
   contextMenuItemHeight: number;
+  // Height of the overview lane between the ruler and the first track.
+  // 0 = no lane (default; layout identical to before).
+  overviewLaneHeight: number;
 }
 
 export type PlaylistStateListener = (state: PlaylistState) => void;
@@ -366,6 +373,96 @@ export interface PlaylistTimeAxis {
   // Text for time tooltips (drag / resize / slice / ruler hover). Replaces
   // the default bar.beat.tick format.
   formatTime(beat: number): string;
+  // Optional snap targets for the "axis" snap mode, ascending, covering at
+  // least [fromBeat, toBeat]. Pure function of its arguments.
+  snapTargets?(fromBeat: number, toBeat: number): readonly number[];
+}
+
+// ---------------------------------------------------------------------------
+// Host-provided visual data. The canvas never interprets the domain: it
+// draws step series, events and annotations expressed in beats. Every
+// provider follows the same contract as getClipSparkline: called from the
+// render loop, it must be an O(1) cached lookup that returns the SAME object
+// while its data is unchanged (a new reference = repaint).
+
+/**
+ * Step function over beats: values[i] holds on [beats[i], beats[i+1]);
+ * before beats[0] the value is `initial`. `beats` ascending, same length as
+ * `values`.
+ */
+export interface PlaylistStepSeries {
+  initial: number;
+  beats: readonly number[];
+  values: readonly number[];
+}
+
+export interface PlaylistOverviewThreshold {
+  value: number;
+  // Below a "warning" threshold the area is tinted warning; below a
+  // "danger" threshold it is tinted danger. Above all thresholds: positive.
+  tone: "warning" | "danger";
+  label?: string;
+}
+
+export interface PlaylistOverviewAnnotation {
+  beat: number;
+  value: number;
+  label: string;
+  tone: "danger" | "warning" | "info";
+}
+
+/** Data of the overview lane (a "master" band between ruler and tracks). */
+export interface PlaylistOverviewData {
+  title: string;
+  /** Main curve (e.g. cash), drawn as a filled step area toned by thresholds. */
+  primary: PlaylistStepSeries;
+  /** Secondary curve (e.g. total debt), faint, on its own scale. */
+  secondary?: PlaylistStepSeries | null;
+  /** Ghost curve on the primary scale (e.g. before the current gesture). */
+  baseline?: PlaylistStepSeries | null;
+  thresholds: readonly PlaylistOverviewThreshold[];
+  annotations: readonly PlaylistOverviewAnnotation[];
+  /** Formats values for annotation / scale labels (called only on rebuild). */
+  formatValue?: (value: number) => string;
+  /**
+   * Vertical scale of the primary curve. "symlog" (sign(v)·log(1+|v|/c))
+   * keeps detail near zero when values span orders of magnitude; `constant`
+   * is the value where it turns from linear-ish to logarithmic. Default
+   * linear.
+   */
+  scale?: { kind: "linear" } | { kind: "symlog"; constant: number };
+  /** Data ends here (e.g. a projection horizon): no curve past it. */
+  endBeat?: number;
+}
+
+/** Content drawn inside a clip body, positioned at absolute beats. */
+export type PlaylistClipContent =
+  | {
+      kind: "events";
+      beats: readonly number[];
+      // In [-1, 1]. > 0: bar rising from the body bottom; < 0: bar hanging
+      // from under the title bar. |value| = relative height.
+      values: readonly number[];
+    }
+  | {
+      kind: "level";
+      // A level over time (e.g. remaining debt) drawn as a filled area from
+      // the body bottom; value / max = relative height.
+      series: PlaylistStepSeries;
+      max: number;
+    };
+
+/** A pill attached to the drag tooltip (e.g. the effect of the gesture). */
+export interface PlaylistDragAnnotation {
+  text: string;
+  tone: "positive" | "negative" | "neutral";
+}
+
+/** Extra header info for a track (e.g. its yearly impact). */
+export interface PlaylistTrackMeta {
+  subtitle?: string;
+  /** In [-1, 1]: a thin meter bar, right/positive or left/negative. */
+  meter?: number;
 }
 
 export const DEFAULT_PLAYLIST_METRICS: PlaylistMetrics = {
@@ -392,4 +489,5 @@ export const DEFAULT_PLAYLIST_METRICS: PlaylistMetrics = {
   scrollbarVirtualRangePx: 120000,
   contextMenuWidth: 228,
   contextMenuItemHeight: 28,
+  overviewLaneHeight: 0,
 };

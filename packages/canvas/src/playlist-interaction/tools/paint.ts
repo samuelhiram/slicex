@@ -1,7 +1,6 @@
 import {
   screenXToTime,
   screenYToTrackIndex,
-  snapTime,
 } from "../../playlist-core";
 import { brushSnapStep, buildBrushOcclusion } from "../brush";
 import { clipCreateTemplateFromSelection } from "./clip-template";
@@ -34,7 +33,7 @@ export const paintTool: PlaylistTool = {
     const trackIndex = screenYToTrackIndex(state, point.y, metrics);
     const start = Math.max(
       0,
-      snapTime(screenXToTime(state, point.x, metrics), state, event.altKey),
+      core.snapTime(screenXToTime(state, point.x, metrics), event.altKey, state),
     );
     const snapStep = brushSnapStep(state, metrics);
     const occupied = buildBrushOcclusion(state, snapStep);

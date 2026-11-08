@@ -18,7 +18,13 @@ import type {
   LiquidityWarning,
   UpcomingPayment,
 } from "@slicex/core";
-import type { PlaylistCore } from "@slicex/canvas";
+import type {
+  PlaylistClipContent,
+  PlaylistCore,
+  PlaylistDragAnnotation,
+  PlaylistOverviewData,
+  PlaylistTrackMeta,
+} from "@slicex/canvas";
 
 export interface FinancialBridgeApi {
   readonly core: PlaylistCore;
@@ -75,10 +81,22 @@ export interface FinancialBridgeApi {
   /** Episodes below `minimumCashReserve` in the current projection. */
   getWarnings(): LiquidityWarning[];
 
-  /** Secondary text drawn inside a clip (amount · frequency), or null. */
+  // --- Renderer providers. All are called from the render loop: O(1)
+  // cached lookups that return the SAME object while unchanged.
+
+  /** Secondary text drawn inside a clip (follows the playhead day), or null. */
   getClipDetail(clipId: string): string | null;
   /** Sparkline bars (0..1) for a clip, or null to fall back to default. */
   getClipSparkline(clipId: string): number[] | null;
+  /** Payments at their real dates (events) or remaining debt (level). */
+  getClipContent(clipId: string): PlaylistClipContent | null;
+  /** The money waveform: cash (primary), debt (secondary), reserve/0, valleys,
+   *  and while a gesture is open the curve before it (baseline). */
+  getOverviewData(): PlaylistOverviewData | null;
+  /** While a gesture is open: its effect ("Mín −$1,292 → +$2,208 · sales del rojo"). */
+  getDragAnnotation(): PlaylistDragAnnotation | null;
+  /** Track header subtitle + yearly-impact meter. */
+  getTrackMeta(trackId: string): PlaylistTrackMeta | null;
 
   destroy(): void;
 }

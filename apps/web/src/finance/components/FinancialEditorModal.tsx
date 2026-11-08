@@ -24,7 +24,14 @@ import type {
   RecurrenceFrequency,
 } from "@slicex/core";
 import type { FinancialBridgeApi } from "../bridge-api";
-import { formatMoney } from "../format";
+import {
+  formatDateInput,
+  formatDateWeekday,
+  formatMoney,
+  parseDateInput,
+  shiftISODate,
+  type DateYearPreference,
+} from "../format";
 import { FREQUENCY_LABELS, KIND_COLORS, KIND_LABELS, KIND_ORDER } from "../labels";
 import { parseNumberInput, useFinancialRevision } from "./FinancialUi";
 
@@ -338,6 +345,120 @@ function NumberField({
         {suffix ? <span className="fin-editor__suffix">{suffix}</span> : null}
       </span>
     </label>
+  );
+}
+
+/**
+ * es-MX date entry (never the browser's locale-dependent date picker, which
+ * renders mm/dd/yyyy in en-US browsers). Free text parsed by
+ * `parseDateInput` ("15/11/2026", "15 nov", "2026-11-15"…) with a live
+ * canonical preview ("dom 15 NOV 2026") and inline validation. ↑/↓ move
+ * the date one day (Shift: one week), never below `min`.
+ *
+ * Emits the ISO date, or "" while the text is not a date (the form's
+ * validation then blocks Guardar). Keeps the raw text locally so typing is
+ * never clobbered; canonicalises it ("15/11/2026") on blur.
+ */
+function DateField({
+  label,
+  value,
+  onChange,
+  reference,
+  prefer = "nearest",
+  min,
+  disabled = false,
+  children,
+}: {
+  label: string;
+  /** ISO date, "" (invalid entry) or undefined (no date, e.g. Indefinido). */
+  value: string | undefined;
+  onChange: (iso: string) => void;
+  /** Where a date typed without a year ("15 nov") takes its year from. */
+  reference: string;
+  prefer?: DateYearPreference;
+  min?: string;
+  disabled?: boolean;
+  /** Extra controls on the input row (e.g. the "Indefinido" checkbox). */
+  children?: React.ReactNode;
+}) {
+  const id = React.useId();
+  const [text, setText] = React.useState(() => formatDateInput(value));
+  const emittedRef = React.useRef(value);
+  React.useEffect(() => {
+    if (value !== emittedRef.current) {
+      emittedRef.current = value;
+      setText(formatDateInput(value));
+    }
+  }, [value]);
+
+  const emit = (iso: string) => {
+    if (iso === emittedRef.current) return;
+    emittedRef.current = iso;
+    onChange(iso);
+  };
+
+  const parsed = parseDateInput(text, reference, prefer);
+  const empty = text.trim() === "";
+  const status = disabled ? "off" : parsed ? "ok" : empty ? "empty" : "invalid";
+  const message =
+    status === "off"
+      ? ""
+      : parsed
+        ? formatDateWeekday(parsed)
+        : empty
+          ? "ej. 15/11/2026 o 15 nov"
+          : "No reconocida · ej. 15/11/2026";
+
+  return (
+    <div className="fin-editor__field fin-date">
+      <label className="fin-editor__label" htmlFor={id}>
+        {label}
+      </label>
+      <span className="fin-editor__control">
+        <input
+          id={id}
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          className="fin-date__input"
+          placeholder="dd/mm/aaaa"
+          value={text}
+          disabled={disabled}
+          aria-invalid={status === "invalid" || status === "empty"}
+          aria-describedby={`${id}-preview`}
+          onChange={(event) => {
+            const raw = event.target.value;
+            setText(raw);
+            emit(parseDateInput(raw, reference, prefer) ?? "");
+          }}
+          onBlur={() => {
+            if (parsed) setText(formatDateInput(parsed));
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+            if (event.altKey || event.ctrlKey || event.metaKey) return;
+            event.preventDefault();
+            const base = parsed ?? (value || reference);
+            const step = (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 7 : 1);
+            let next = shiftISODate(base, step);
+            if (next === null) return;
+            if (min !== undefined && isISODate(min) && compareISODate(next, min) < 0) {
+              next = min;
+            }
+            setText(formatDateInput(next));
+            emit(next);
+          }}
+        />
+        {children}
+      </span>
+      <span
+        id={`${id}-preview`}
+        className="fin-date__preview"
+        data-state={status}
+      >
+        {message}
+      </span>
+    </div>
   );
 }
 
@@ -744,14 +865,12 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
               patch={patch}
             />
 
-            <label className="fin-editor__field">
-              <span className="fin-editor__label">Fecha</span>
-              <input
-                type="date"
-                value={recurrence.startDate}
-                onChange={(event) => onStartDateChange(event.target.value)}
-              />
-            </label>
+            <DateField
+              label="Fecha"
+              value={recurrence.startDate}
+              reference={doc.startDate}
+              onChange={onStartDateChange}
+            />
             {showFrequency ? (
               <label className="fin-editor__field">
                 <span className="fin-editor__label">Frecuencia</span>
@@ -770,35 +889,34 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
               </label>
             ) : null}
             {showEndDate ? (
-              <div className="fin-editor__field">
-                <span className="fin-editor__label">Fecha final</span>
-                <span className="fin-editor__control">
+              <DateField
+                label="Fecha final"
+                value={recurrence.endDate}
+                disabled={indefinite}
+                // "15 nov" for an end date means the next 15 NOV on or
+                // after the start, never one before it.
+                reference={
+                  isISODate(recurrence.startDate)
+                    ? recurrence.startDate
+                    : doc.startDate
+                }
+                prefer="on-or-after"
+                min={
+                  isISODate(recurrence.startDate)
+                    ? recurrence.startDate
+                    : undefined
+                }
+                onChange={(endDate) => patchRecurrence({ endDate })}
+              >
+                <label className="fin-editor__check">
                   <input
-                    type="date"
-                    aria-label="Fecha final"
-                    value={recurrence.endDate ?? ""}
-                    disabled={indefinite}
-                    min={
-                      isISODate(recurrence.startDate)
-                        ? recurrence.startDate
-                        : undefined
-                    }
-                    onChange={(event) =>
-                      patchRecurrence({ endDate: event.target.value })
-                    }
+                    type="checkbox"
+                    checked={indefinite}
+                    onChange={(event) => onIndefiniteChange(event.target.checked)}
                   />
-                  <label className="fin-editor__check">
-                    <input
-                      type="checkbox"
-                      checked={indefinite}
-                      onChange={(event) =>
-                        onIndefiniteChange(event.target.checked)
-                      }
-                    />
-                    <span>Indefinido</span>
-                  </label>
-                </span>
-              </div>
+                  <span>Indefinido</span>
+                </label>
+              </DateField>
             ) : null}
           </fieldset>
 

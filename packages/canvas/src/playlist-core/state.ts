@@ -4,11 +4,15 @@ import {
   type PlaylistClipMoveUpdate,
 } from "./actions";
 import {
+  clamp,
   formatBarBeat,
   getContentEndBeat,
+  getRealTracksScrollLimit,
   getTrackIdByIndex,
   getTrackIndexById,
   isAutomationClip,
+  snapTime,
+  type PlaylistLayoutOptions,
 } from "./geometry";
 import {
   canRedo,
@@ -86,6 +90,18 @@ export interface PlaylistCoreOptions {
   // initial state is normalized to stretchMode false, and no resize gesture
   // can enter stretch-resize.
   stretchEnabled?: boolean;
+  // FL "infinite tracks": virtual "Track N" rows below the real tracks that
+  // materialise when a clip lands on them. Default true. A host whose tracks
+  // are its own model (e.g. one per category) passes false:
+  //   - no virtual rows are drawn below the real tracks (just background);
+  //   - the vertical extent / scrollbar cover the real tracks only, and
+  //     updateViewport / setViewportSize clamp scrollY so the last track
+  //     rests above the horizontal scrollbar (nothing below to reveal;
+  //     getMaxScrollY itself stays infinite — canon §2.5 is the X axis);
+  //   - no gesture materialises a track: createClip(s) beyond the last real
+  //     track are no-ops (like a locked track) and moveClips clamps the
+  //     destination to the last real track.
+  virtualTracks?: boolean;
 }
 
 export interface PlaylistSubscription {
@@ -121,10 +137,17 @@ export class PlaylistCore {
   // See PlaylistCoreOptions.stretchEnabled.
   readonly stretchEnabled: boolean;
 
+  // See PlaylistCoreOptions.virtualTracks.
+  readonly virtualTracks: boolean;
+
+  private readonly layoutOptions: PlaylistLayoutOptions;
+
   constructor(initialState: PlaylistState, options: PlaylistCoreOptions = {}) {
     this.metrics = options.metrics ?? DEFAULT_PLAYLIST_METRICS;
     this.timeAxis = options.timeAxis ?? null;
     this.stretchEnabled = options.stretchEnabled !== false;
+    this.virtualTracks = options.virtualTracks !== false;
+    this.layoutOptions = { virtualTracks: this.virtualTracks };
     const initial =
       !this.stretchEnabled && initialState.stretchMode
         ? { ...initialState, stretchMode: false }
@@ -145,12 +168,19 @@ export class PlaylistCore {
       this.history.present,
       this.metrics,
       this.timeAxis,
+      this.layoutOptions,
     );
     this.presentationCache = {
       state: this.history.present,
       presentation,
     };
     return presentation;
+  }
+
+  // Layout switches the core was created with (for geometry helpers that
+  // take PlaylistLayoutOptions, e.g. the vertical scrollbar maths).
+  getLayoutOptions(): PlaylistLayoutOptions {
+    return this.layoutOptions;
   }
 
   // Time text for tooltips. Delegates to the pluggable axis when present;
@@ -160,6 +190,26 @@ export class PlaylistCore {
       return this.timeAxis.formatTime(beat);
     }
     return formatBarBeat(beat, this.metrics.beatsPerBar);
+  }
+
+  // Snap a raw time with the active snap mode, this core's metrics (bar
+  // length) and time axis ("axis" mode). `ignoreSnap` = Alt held. `state`
+  // defaults to the present; gesture handlers pass the snapshot they read
+  // so "events" snapping sees the same clips as the rest of the handler.
+  snapTime(
+    value: number,
+    ignoreSnap = false,
+    state: PlaylistState = this.history.present,
+  ): number {
+    return snapTime(value, state, ignoreSnap, this.metrics, this.timeAxis);
+  }
+
+  // Last valid real-track index for gestures, or +Infinity when virtual
+  // tracks are on (any index materialises). -1 when there are no tracks.
+  maxTrackIndex(): number {
+    return this.virtualTracks
+      ? Number.POSITIVE_INFINITY
+      : this.history.present.tracks.length - 1;
   }
 
   // Subscription management.
@@ -317,15 +367,33 @@ export class PlaylistCore {
   // Viewport and selection.
   setViewportSize(width: number, height: number): void {
     this.dispatch({ type: "SET_VIEWPORT_SIZE", width, height });
+    if (!this.virtualTracks) {
+      // A taller viewport can leave scrollY past the real tracks: pull it
+      // back (no dispatch, hence no notify, when it is already in range).
+      const state = this.history.present;
+      const limit = getRealTracksScrollLimit(state, this.metrics);
+      if (state.viewport.scrollY > limit) {
+        this.updateViewport({ scrollY: limit });
+      }
+    }
   }
 
   updateViewport(
     patch: Partial<PlaylistState["viewport"]>,
     options: { clamp?: boolean } = {},
   ): void {
+    let effective = patch;
+    if (!this.virtualTracks && patch.scrollY !== undefined) {
+      // virtualTracks: false — nothing to reveal below the real tracks.
+      const limit = getRealTracksScrollLimit(this.history.present, this.metrics);
+      const scrollY = clamp(patch.scrollY, 0, limit);
+      if (scrollY !== patch.scrollY) {
+        effective = { ...patch, scrollY };
+      }
+    }
     this.dispatch({
       type: "UPDATE_VIEWPORT",
-      patch,
+      patch: effective,
       clamp: options.clamp !== false,
     });
   }
@@ -369,7 +437,7 @@ export class PlaylistCore {
   // Track and clip mutations.
   moveClips(updates: PlaylistClipMoveUpdate[]): void {
     const state = this.history.present;
-    const filtered = updates.filter((update) => {
+    const filtered = this.clampMoveTargets(updates).filter((update) => {
       const clip = state.clips.find((candidate) => candidate.id === update.id);
       if (!clip) return false;
       // Cannot move a clip that lives on a locked track.
@@ -384,8 +452,29 @@ export class PlaylistCore {
     // every sibling missing from the updates with the same start/track delta.
     // Idempotent — if the caller (e.g. the controller after pointerdown
     // expansion) already passed every member, no extras are appended.
-    const expanded = expandMoveUpdatesToGroups(state, filtered);
+    const expanded = this.clampMoveTargets(
+      expandMoveUpdatesToGroups(state, filtered),
+    );
     this.dispatch({ type: "MOVE_CLIPS", updates: expanded });
+  }
+
+  // virtualTracks: false — a move never targets a row past the last real
+  // track (it would materialise a track the host does not know about).
+  // Identity when nothing needs clamping (always, with virtual tracks on).
+  private clampMoveTargets(
+    updates: PlaylistClipMoveUpdate[],
+  ): PlaylistClipMoveUpdate[] {
+    const maxTrack = this.maxTrackIndex();
+    if (maxTrack === Number.POSITIVE_INFINITY) return updates;
+    const last = Math.max(0, maxTrack);
+    let out: PlaylistClipMoveUpdate[] | null = null;
+    for (let i = 0; i < updates.length; i += 1) {
+      const update = updates[i]!;
+      if (update.trackIndex <= last) continue;
+      out ??= updates.slice();
+      out[i] = { ...update, trackIndex: last };
+    }
+    return out ?? updates;
   }
 
   clearTrackClips(trackIndex: number): void {
@@ -949,6 +1038,11 @@ export class PlaylistCore {
     if (state.tracks[input.trackIndex]?.locked) {
       return "";
     }
+    // virtualTracks: false — rows past the last real track are background,
+    // not tracks: nothing is created there (same contract as a locked track).
+    if (input.trackIndex > this.maxTrackIndex()) {
+      return "";
+    }
     const trackId = getTrackIdByIndex(state, input.trackIndex);
     const id = input.id ?? makeClipId(state.clips);
     const baseClip = {
@@ -992,8 +1086,12 @@ export class PlaylistCore {
     let working = state.clips;
     const entries: { clip: PlaylistClip; trackIndex: number }[] = [];
     const ids: string[] = [];
+    const maxTrack = this.maxTrackIndex();
     for (const input of inputs) {
       if (state.tracks[input.trackIndex]?.locked) {
+        continue;
+      }
+      if (input.trackIndex > maxTrack) {
         continue;
       }
       const id = input.id ?? makeClipId(working);
@@ -1188,9 +1286,11 @@ export class PlaylistCore {
     }
     for (const entry of state.clipboard.entries) {
       const trackIndex = Math.max(0, baseTrackIndex + entry.trackOffset);
-      // Like createClip(s): nothing lands on a locked track. The rest of the
+      // Like createClip(s): nothing lands on a locked track (nor, with
+      // virtualTracks: false, past the last real one). The rest of the
       // clipboard still pastes at its relative position.
       if (state.tracks[trackIndex]?.locked) continue;
+      if (trackIndex > this.maxTrackIndex()) continue;
       const id = makeClipId(workingClips);
       const nextGroupId =
         entry.clip.groupId !== undefined

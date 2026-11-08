@@ -11,7 +11,13 @@
 // layers (mask, grid) keep a dirty-key cache so hover/selection updates
 // don't redraw them.
 import { Application, Container, Graphics } from "pixi.js";
-import type { PlaylistCore } from "../playlist-core";
+import type {
+  PlaylistClipContent,
+  PlaylistCore,
+  PlaylistDragAnnotation,
+  PlaylistOverviewData,
+  PlaylistTrackMeta,
+} from "../playlist-core";
 import { createClipNodeRegistry } from "./clip-node-registry";
 import { COLORS } from "./palette";
 import {
@@ -23,7 +29,9 @@ import {
   drawTrackRowsBackground,
 } from "./layers/background";
 import { drawRulerChrome, drawTimelineGrid } from "./layers/ruler";
-import { drawTrackRows } from "./layers/track-rows";
+import { createTrackMetaSource, drawTrackRows } from "./layers/track-rows";
+import { createOverviewLaneLayer } from "./layers/overview-lane";
+import { createDragAnnotationLayer } from "./layers/drag-annotation";
 import { drawMarkers } from "./layers/markers";
 import { drawLoopRegion } from "./layers/loop-region";
 import { drawPlayPositionRulerMarker } from "./layers/play-position";
@@ -47,6 +55,22 @@ export interface PlaylistRendererCallbacks {
   // new reference repaints that clip body). See ClipNodeProviders in
   // clip-node-registry.ts.
   getClipSparkline?: (clipId: string) => readonly number[] | null;
+  // Content drawn inside a clip body at absolute beats (events / level).
+  // Non-null wins over the sparkline for that clip. Called once per VISIBLE
+  // non-automation clip per frame: O(1) lookup returning the SAME object
+  // while unchanged (a new reference repaints that body).
+  getClipContent?: (clipId: string) => PlaylistClipContent | null;
+  // Data of the overview lane (metrics.overviewLaneHeight > 0). Called once
+  // per frame: O(1), the SAME object while unchanged. A new reference (or
+  // a scroll / zoom / resize) rebuilds the lane geometry; nothing else does.
+  getOverviewData?: () => PlaylistOverviewData | null;
+  // Pill attached below the floating tooltip while it is visible. Called
+  // once per frame while a tooltip shows: O(1), same object while unchanged
+  // (a new reference repaints the pill; following the cursor is free).
+  getDragAnnotation?: () => PlaylistDragAnnotation | null;
+  // Header extras per track (subtitle + meter). Called once per VISIBLE
+  // real row per frame: O(1), same object while unchanged.
+  getTrackMeta?: (trackId: string) => PlaylistTrackMeta | null;
 }
 
 export interface PlaylistRenderer {
@@ -91,8 +115,38 @@ export function createPlaylistRenderer(
     {
       getClipDetail: callbacks.getClipDetail,
       getClipSparkline: callbacks.getClipSparkline,
+      getClipContent: callbacks.getClipContent,
     },
   );
+  // Overview lane (canon §3.10 cached layer): frame + curves rebuilt only
+  // on their dirty keys; a tiny dynamic Graphics for the playhead.
+  const overviewContainer = new Container();
+  overviewContainer.eventMode = "none";
+  overviewContainer.visible = false;
+  const overviewFrameGraphics = new Graphics();
+  const overviewFrameText = new Container();
+  const overviewCurveGraphics = new Graphics();
+  const overviewCurveText = new Container();
+  const overviewDynamicGraphics = new Graphics();
+  overviewContainer.addChild(
+    overviewFrameGraphics,
+    overviewFrameText,
+    overviewCurveGraphics,
+    overviewCurveText,
+    overviewDynamicGraphics,
+  );
+  const overviewLane = createOverviewLaneLayer({
+    container: overviewContainer,
+    frameGraphics: overviewFrameGraphics,
+    frameText: overviewFrameText,
+    curveGraphics: overviewCurveGraphics,
+    curveText: overviewCurveText,
+    dynamicGraphics: overviewDynamicGraphics,
+  });
+  const getOverviewData = callbacks.getOverviewData;
+  const trackMetaSource = callbacks.getTrackMeta
+    ? createTrackMetaSource(callbacks.getTrackMeta)
+    : null;
   const overlayGraphics = new Graphics();
   // Drag-preview ghost + snap indicator sit inside the timeline mask so they
   // disappear behind the ruler/header instead of bleeding into the chrome.
@@ -114,6 +168,23 @@ export function createPlaylistRenderer(
   const tooltipBackground = new Graphics();
   const tooltipTextLayer = new Container();
   tooltipContainer.addChild(tooltipBackground, tooltipTextLayer);
+  // Drag annotation pill under the tooltip: drawn once per reference in
+  // local coords, moved by transform (see layers/drag-annotation.ts).
+  const dragAnnotationContainer = new Container();
+  dragAnnotationContainer.eventMode = "none";
+  dragAnnotationContainer.visible = false;
+  const dragAnnotationBackground = new Graphics();
+  const dragAnnotationTextLayer = new Container();
+  dragAnnotationContainer.addChild(
+    dragAnnotationBackground,
+    dragAnnotationTextLayer,
+  );
+  const dragAnnotation = createDragAnnotationLayer({
+    container: dragAnnotationContainer,
+    background: dragAnnotationBackground,
+    textLayer: dragAnnotationTextLayer,
+  });
+  const getDragAnnotation = callbacks.getDragAnnotation;
 
   let destroyed = false;
   let ready = false;
@@ -154,10 +225,14 @@ export function createPlaylistRenderer(
     timelineContainer,
     chromeGraphics,
     chromeTextLayer,
+    // Above the chrome so track headers scrolled up under the lane never
+    // bleed into it; below the scrollbars / tooltip.
+    overviewContainer,
     foregroundGraphics,
     foregroundTextLayer,
     recordingPulseGraphics,
     tooltipContainer,
+    dragAnnotationContainer,
   );
 
   // Canon §3.10: coalesce notifications into a single rAF frame.
@@ -238,10 +313,20 @@ export function createPlaylistRenderer(
     drawSnapIndicator(snapIndicatorGraphics, presentation);
 
     drawRulerChrome(chromeGraphics, chromeTextLayer, presentation);
-    drawTrackRows(chromeGraphics, chromeTextLayer, presentation);
+    drawTrackRows(chromeGraphics, chromeTextLayer, presentation, trackMetaSource);
     drawLoopRegion(chromeGraphics, presentation);
     drawMarkers(chromeGraphics, chromeTextLayer, presentation);
     drawPlayPositionRulerMarker(chromeGraphics, presentation);
+
+    // Overview lane: returns immediately (and stays hidden) with no lane;
+    // otherwise rebuilds only on its dirty keys (data ref, scroll, zoom,
+    // width, lane geometry). The provider is not queried without a lane.
+    overviewLane.sync(
+      presentation,
+      presentation.layout.overviewRect.height > 0 && getOverviewData
+        ? getOverviewData()
+        : null,
+    );
 
     drawScrollbars(foregroundGraphics, presentation);
 
@@ -263,6 +348,10 @@ export function createPlaylistRenderer(
         textLayer: tooltipTextLayer,
       },
       presentation,
+    );
+    dragAnnotation.sync(
+      presentation,
+      presentation.tooltipView && getDragAnnotation ? getDragAnnotation() : null,
     );
 
     (app as any).render?.();
@@ -426,6 +515,8 @@ export function createPlaylistRenderer(
       disposeTextLayer(foregroundTextLayer);
       tooltipBackground.clear();
       disposeTextLayer(tooltipTextLayer);
+      overviewLane.dispose();
+      dragAnnotation.dispose();
       disposeApp();
     },
   };

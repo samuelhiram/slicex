@@ -484,3 +484,172 @@ describe("perf budget — UI dispatches keep clips/tracks identity", () => {
     expect(performance.now() - t0).toBeLessThan(30);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ola 1 — host visual providers (canon §3.8 / §3.10 "Providers del host").
+// The overview lane and the clip content are cached scene graphs: steady
+// frames (hover, playhead, selection) must not re-emit their geometry, and
+// a long step series costs O(log n + visible steps) per rebuild.
+import { Container, Graphics } from "pixi.js";
+import type {
+  PlaylistClipContent,
+  PlaylistOverviewData,
+  PlaylistStepSeries,
+} from "../src/playlist-core";
+import { createClipNodeRegistry } from "../src/playlist-renderer-pixi/clip-node-registry";
+import { createOverviewLaneLayer } from "../src/playlist-renderer-pixi/layers/overview-lane";
+
+const LANE_METRICS = { ...M, overviewLaneHeight: 96 };
+
+function dailySeries(count: number): PlaylistStepSeries {
+  const beats = new Array<number>(count);
+  const values = new Array<number>(count);
+  for (let i = 0; i < count; i += 1) {
+    beats[i] = i;
+    values[i] = Math.round(Math.sin(i / 9) * 5000 + Math.cos(i / 31) * 3000);
+  }
+  return { initial: 0, beats, values };
+}
+
+function laneData(primary: PlaylistStepSeries): PlaylistOverviewData {
+  return {
+    title: "Primary",
+    primary,
+    secondary: primary,
+    baseline: primary,
+    thresholds: [
+      { value: 0, tone: "danger", label: "0" },
+      { value: 2000, tone: "warning", label: "reserve" },
+    ],
+    annotations: [{ beat: 40, value: -3000, label: "low", tone: "danger" }],
+  };
+}
+
+function laneLayer() {
+  const parts = {
+    container: new Container(),
+    frameGraphics: new Graphics(),
+    frameText: new Container(),
+    curveGraphics: new Graphics(),
+    curveText: new Container(),
+    dynamicGraphics: new Graphics(),
+  };
+  return { parts, layer: createOverviewLaneLayer(parts) };
+}
+
+describe("perf budget — overview lane is a cached layer", () => {
+  it("0 geometry rebuilds across 100 hover / playhead / selection frames", () => {
+    const core = createPlaylistCore(viewportState({}), { metrics: LANE_METRICS });
+    const data = laneData(dailySeries(1000));
+    const { layer } = laneLayer();
+    layer.sync(core.getPresentation(), data);
+    const rebuilds = layer.stats.rebuilds;
+    for (let i = 0; i < 100; i += 1) {
+      if (i % 3 === 0) core.setHover({ kind: "clip", clipId: `clip-drums-${1 + (i % 2)}` });
+      else if (i % 3 === 1) core.setPlayPosition(i / 3);
+      else core.setSelection({ clipIds: i % 2 ? ["clip-bass-1"] : [], automationPointIds: [] });
+      layer.sync(core.getPresentation(), data);
+    }
+    expect(layer.stats.rebuilds - rebuilds).toBe(0);
+  });
+
+  it("1000-point series: a rebuild walks only the visible steps", () => {
+    // 1200px wide at 28 px/beat ≈ 38 visible beats of a 1000-step series.
+    const core = createPlaylistCore(viewportState({ scrollX: 400 * 28 }), {
+      metrics: LANE_METRICS,
+    });
+    const countLineTos = (series: PlaylistStepSeries): number => {
+      const { parts, layer } = laneLayer();
+      let lineTos = 0;
+      for (const graphics of [parts.frameGraphics, parts.curveGraphics]) {
+        const lineTo = graphics.lineTo.bind(graphics);
+        graphics.lineTo = ((x: number, y: number) => {
+          lineTos += 1;
+          return lineTo(x, y);
+        }) as typeof graphics.lineTo;
+      }
+      layer.sync(core.getPresentation(), laneData(series));
+      return lineTos;
+    };
+    const thousand = countLineTos(dailySeries(1000));
+    // Same visible window over a 100x longer series: identical geometry.
+    expect(countLineTos(dailySeries(100_000))).toBe(thousand);
+    // ~38 visible steps × 4 curve passes × 2 points + dashed thresholds /
+    // baseline. Walking the whole 1000-step series would be ≥ 8000.
+    expect(thousand).toBeLessThan(1000);
+  });
+
+  // Measured ≈ 0.26 ms / rebuild isolated, ≤ 0.7 ms under the full parallel
+  // suite. 1.5 ms (< 10% of a 60 Hz frame) is the regression line.
+  it("1000-point series: 100 scroll rebuilds < 150 ms; 100k points too (O(log n + visible))", () => {
+    const core = createPlaylistCore(viewportState({}), { metrics: LANE_METRICS });
+    const data = laneData(dailySeries(1000));
+    const { layer } = laneLayer();
+    layer.sync(core.getPresentation(), data); // warm-up (scale computed once)
+    const t0 = performance.now();
+    for (let i = 1; i <= 100; i += 1) {
+      core.updateViewport({ scrollX: i * 37 });
+      layer.sync(core.getPresentation(), data);
+    }
+    const thousand = performance.now() - t0;
+    expect(layer.stats.rebuilds).toBe(101);
+    expect(thousand).toBeLessThan(150);
+
+    const huge = laneData(dailySeries(100_000));
+    layer.sync(core.getPresentation(), huge); // scale pass over 100k (once)
+    const t1 = performance.now();
+    for (let i = 1; i <= 100; i += 1) {
+      core.updateViewport({ scrollX: 50_000 * 28 + i * 37 });
+      layer.sync(core.getPresentation(), huge);
+    }
+    expect(performance.now() - t1).toBeLessThan(150);
+  });
+});
+
+describe("perf budget — clip content repaints only on reference change", () => {
+  it("100 hover / playhead frames with stable content refs → 0 body redraws", () => {
+    const core = createPlaylistCore(stateWithManyClips(1000));
+    core.setViewportSize(1200, 700);
+    const cache = new Map<string, PlaylistClipContent>();
+    const registry = createClipNodeRegistry(
+      {
+        text: 0xffffff,
+        textMuted: 0x999999,
+        selected: 0x00ff00,
+        hover: 0x0000ff,
+        rowLine: 0x333333,
+        panel: 0x111111,
+        panelStrong: 0x222222,
+        automationLine: 0xff00ff,
+      },
+      {
+        getClipContent: (id) => {
+          let content = cache.get(id);
+          if (!content) {
+            content = { kind: "events", beats: [1, 2, 3, 900], values: [1, -1, 0.5, 1] };
+            cache.set(id, content);
+          }
+          return content;
+        },
+      },
+    );
+    const parent = new Container();
+    registry.syncFrame(parent, core.getPresentation().visibleClipViews);
+    let redraws = 0;
+    for (const child of parent.children) {
+      const body = (child as Container).children[0] as Graphics;
+      const clear = body.clear.bind(body);
+      body.clear = () => {
+        redraws += 1;
+        return clear();
+      };
+    }
+    for (let i = 0; i < 100; i += 1) {
+      if (i % 2) core.setPlayPosition(i);
+      else core.setSelection({ clipIds: [], automationPointIds: [] });
+      registry.syncFrame(parent, core.getPresentation().visibleClipViews);
+    }
+    expect(redraws).toBe(0);
+    registry.destroy();
+  });
+});

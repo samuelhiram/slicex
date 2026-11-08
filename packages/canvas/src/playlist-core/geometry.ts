@@ -8,14 +8,47 @@ import {
   type PlaylistRect,
   type PlaylistSnapMode,
   type PlaylistState,
+  type PlaylistStepSeries,
+  type PlaylistTimeAxis,
   type PlaylistTrack,
 } from "./types";
 
 const SNAP_EVENTS_TOLERANCE_PX = 8;
 const SNAP_EVENTS_FALLBACK_TOLERANCE_BEATS = 0.5;
+// "axis" snap: targets are requested on a window of ±AXIS_SNAP_WINDOW beats
+// around the raw time (quantized so consecutive pointermoves reuse the same
+// request), widened ×8 up to AXIS_SNAP_ATTEMPTS times while empty.
+const AXIS_SNAP_WINDOW = 64;
+const AXIS_SNAP_ATTEMPTS = 4;
+
+// Layout switches that live on the core (PlaylistCoreOptions), not in the
+// metrics. Absent = the historical layout.
+export interface PlaylistLayoutOptions {
+  // false: no virtual "Track N" rows below the real tracks, and the vertical
+  // extent / scroll stop at the last real track (see PlaylistCoreOptions).
+  virtualTracks?: boolean;
+}
+
+// Height of the overview lane (0 when the metrics have none). Defensive
+// against metrics objects built before the field existed.
+export function getOverviewLaneHeight(
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  const height = metrics.overviewLaneHeight;
+  return height > 0 ? height : 0;
+}
+
+// Screen Y where the track area starts: ruler + overview lane. Every
+// consumer that used to start the tracks at `rulerHeight` goes through this
+// (with no lane it IS rulerHeight, so the layout is unchanged).
+export function getTracksTop(
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  return metrics.rulerHeight + getOverviewLaneHeight(metrics);
+}
 
 // Resolve the step (in beats) used by mode-driven snap. Returns 0 for
-// non-grid modes ("none" and "events") so callers can branch.
+// non-grid modes ("none", "events" and "axis") so callers can branch.
 export function snapStepBeats(
   mode: PlaylistSnapMode,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
@@ -23,6 +56,7 @@ export function snapStepBeats(
   switch (mode) {
     case "none":
     case "events":
+    case "axis":
       return 0;
     case "main":
     case "beat":
@@ -120,7 +154,7 @@ export function getHorizontalScrollbarRect(
 ): PlaylistRect {
   return {
     x: metrics.trackHeaderWidth,
-    y: Math.max(metrics.rulerHeight, state.viewport.height - metrics.scrollbarSize),
+    y: Math.max(getTracksTop(metrics), state.viewport.height - metrics.scrollbarSize),
     width: Math.max(
       metrics.scrollbarThumbMin,
       state.viewport.width - metrics.trackHeaderWidth - metrics.scrollbarSize,
@@ -133,13 +167,14 @@ export function getVerticalScrollbarRect(
   state: PlaylistState,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): PlaylistRect {
+  const tracksTop = getTracksTop(metrics);
   return {
     x: Math.max(metrics.trackHeaderWidth, state.viewport.width - metrics.scrollbarSize),
-    y: metrics.rulerHeight,
+    y: tracksTop,
     width: metrics.scrollbarSize,
     height: Math.max(
       metrics.scrollbarThumbMin,
-      state.viewport.height - metrics.rulerHeight - metrics.scrollbarSize,
+      state.viewport.height - tracksTop - metrics.scrollbarSize,
     ),
   };
 }
@@ -175,7 +210,16 @@ export function getHorizontalScrollableRange(
   return Math.max(1, getHorizontalContentExtent(state, metrics) - viewportWidth);
 }
 
-export function getVerticalContentExtent(
+// Height of the track area: viewport minus ruler and overview lane.
+function getTrackAreaHeight(
+  state: PlaylistState,
+  metrics: PlaylistMetrics,
+): number {
+  return Math.max(0, state.viewport.height - getTracksTop(metrics));
+}
+
+// Sum of the real (materialised) track heights.
+export function getRealTracksHeight(
   state: PlaylistState,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): number {
@@ -183,13 +227,46 @@ export function getVerticalContentExtent(
   for (const track of state.tracks) {
     totalHeight += getTrackHeight(track, metrics);
   }
+  return totalHeight;
+}
+
+// Vertical scroll limit with virtual tracks OFF: the last real track's
+// bottom rests right above the horizontal scrollbar. Below it there is
+// nothing to reveal, so scrolling further only shows empty background.
+// getMaxScrollY stays infinite (canon §2.5: the infinite axis is X, and the
+// cost is bounded by the presentation cull, not by this limit); the core
+// applies this limit only when created with virtualTracks: false.
+export function getRealTracksScrollLimit(
+  state: PlaylistState,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  return Math.max(
+    0,
+    getRealTracksHeight(state, metrics) +
+      metrics.scrollbarSize -
+      getTrackAreaHeight(state, metrics),
+  );
+}
+
+export function getVerticalContentExtent(
+  state: PlaylistState,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+  layout: PlaylistLayoutOptions = {},
+): number {
+  const totalHeight = getRealTracksHeight(state, metrics);
+  const viewportHeight = getTrackAreaHeight(state, metrics);
+  if (layout.virtualTracks === false) {
+    // No virtual rows: the content is the real tracks plus room for the
+    // horizontal scrollbar (consistent with getRealTracksScrollLimit).
+    return Math.max(
+      totalHeight + metrics.scrollbarSize,
+      state.viewport.scrollY + viewportHeight,
+      viewportHeight,
+    );
+  }
   // Buffer a few virtual tracks beyond materialised content so the thumb has
   // somewhere to go for placing brand-new tracks.
   const buffer = 4 * metrics.trackHeight;
-  const viewportHeight = Math.max(
-    0,
-    state.viewport.height - metrics.rulerHeight,
-  );
   return Math.max(
     totalHeight + buffer,
     state.viewport.scrollY + viewportHeight,
@@ -200,12 +277,13 @@ export function getVerticalContentExtent(
 export function getVerticalScrollableRange(
   state: PlaylistState,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+  layout: PlaylistLayoutOptions = {},
 ): number {
-  const viewportHeight = Math.max(
-    0,
-    state.viewport.height - metrics.rulerHeight,
+  const viewportHeight = getTrackAreaHeight(state, metrics);
+  return Math.max(
+    1,
+    getVerticalContentExtent(state, metrics, layout) - viewportHeight,
   );
-  return Math.max(1, getVerticalContentExtent(state, metrics) - viewportHeight);
 }
 
 export function getHorizontalScrollbarThumbRect(
@@ -239,13 +317,11 @@ export function getHorizontalScrollbarThumbRect(
 export function getVerticalScrollbarThumbRect(
   state: PlaylistState,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+  layout: PlaylistLayoutOptions = {},
 ): PlaylistRect {
   const track = getVerticalScrollbarRect(state, metrics);
-  const extent = getVerticalContentExtent(state, metrics);
-  const viewportHeight = Math.max(
-    0,
-    state.viewport.height - metrics.rulerHeight,
-  );
+  const extent = getVerticalContentExtent(state, metrics, layout);
+  const viewportHeight = getTrackAreaHeight(state, metrics);
   const ratio = extent > 0 ? viewportHeight / extent : 1;
   const height = clamp(
     track.height * ratio,
@@ -413,7 +489,7 @@ export function trackIndexToScreenY(
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): number {
   return (
-    metrics.rulerHeight +
+    getTracksTop(metrics) +
     getTrackTopByIndex(state, trackIndex, metrics) -
     state.viewport.scrollY
   );
@@ -424,7 +500,7 @@ export function screenYToTrackIndex(
   screenY: number,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): number {
-  const localY = screenY - metrics.rulerHeight + state.viewport.scrollY;
+  const localY = screenY - getTracksTop(metrics) + state.viewport.scrollY;
   if (localY <= 0) {
     return 0;
   }
@@ -513,11 +589,15 @@ export function automationPointFromScreen(
   };
 }
 
+// `timeAxis` feeds the "axis" mode (PlaylistTimeAxis.snapTargets). Without an
+// axis, or an axis without targets near the value, "axis" snaps like "beat".
+// Prefer PlaylistCore.snapTime, which passes the core's metrics + axis.
 export function snapTime(
   value: number,
   state: PlaylistState,
   ignoreSnap = false,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+  timeAxis: PlaylistTimeAxis | null = null,
 ): number {
   if (ignoreSnap) {
     return Math.max(0, value);
@@ -528,12 +608,104 @@ export function snapTime(
   if (state.snap.mode === "events") {
     return snapTimeToEvents(value, state);
   }
+  if (state.snap.mode === "axis") {
+    const target = snapTimeToAxis(value, timeAxis);
+    if (target !== null) {
+      return Math.max(0, Number(target.toFixed(4)));
+    }
+    const snappedBeat = Math.round(value);
+    return Math.max(0, snappedBeat);
+  }
   const step = snapStepBeats(state.snap.mode, metrics);
   if (step <= 0) {
     return Math.max(0, value);
   }
   const snapped = Math.round(value / step) * step;
   return Math.max(0, Number(snapped.toFixed(4)));
+}
+
+// One-entry cache per axis: consecutive pointermoves of a drag ask for the
+// same quantized window, so the host's snapTargets runs once per window, not
+// once per move. Safe because snapTargets is a pure function (contract).
+const axisTargetsCache = new WeakMap<
+  PlaylistTimeAxis,
+  { from: number; to: number; targets: readonly number[] }
+>();
+
+function axisTargets(
+  timeAxis: PlaylistTimeAxis,
+  from: number,
+  to: number,
+): readonly number[] {
+  const cached = axisTargetsCache.get(timeAxis);
+  if (cached && cached.from === from && cached.to === to) {
+    return cached.targets;
+  }
+  const targets = timeAxis.snapTargets?.(from, to) ?? [];
+  axisTargetsCache.set(timeAxis, { from, to, targets });
+  return targets;
+}
+
+// Index of the first element > value in an ascending array (binary search,
+// O(log n), no allocation).
+export function sortedUpperBound(
+  sorted: readonly number[],
+  value: number,
+): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (sorted[mid]! <= value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+// Value of a step series at `beat`: values[i] holds on [beats[i],
+// beats[i+1]), `initial` before beats[0]. O(log n), no allocation — safe to
+// call per frame (e.g. the playhead dot of the overview lane).
+export function stepSeriesValueAt(
+  series: PlaylistStepSeries,
+  beat: number,
+): number {
+  const index = sortedUpperBound(series.beats, beat);
+  return index === 0 ? series.initial : series.values[index - 1]!;
+}
+
+// Nearest axis target to `value`, or null when the axis has none near it.
+// The window [from, to] keeps at least `span` beats on each side of the
+// value, so a target found within `span` is the global nearest; a farther
+// one may not be, and the search widens (×8) to confirm it.
+function snapTimeToAxis(
+  value: number,
+  timeAxis: PlaylistTimeAxis | null,
+): number | null {
+  if (!timeAxis || !timeAxis.snapTargets || !Number.isFinite(value)) {
+    return null;
+  }
+  let span = AXIS_SNAP_WINDOW;
+  for (let attempt = 0; attempt < AXIS_SNAP_ATTEMPTS; attempt += 1) {
+    const from = Math.floor(value / span) * span - span;
+    const to = from + span * 3;
+    const targets = axisTargets(timeAxis, from, to);
+    const index = sortedUpperBound(targets, value);
+    let best: number | null = null;
+    let bestDelta = Number.POSITIVE_INFINITY;
+    if (index < targets.length) {
+      bestDelta = targets[index]! - value;
+      best = targets[index]!;
+    }
+    if (index > 0 && value - targets[index - 1]! <= bestDelta) {
+      bestDelta = value - targets[index - 1]!;
+      best = targets[index - 1]!;
+    }
+    if (best !== null && bestDelta <= span) {
+      return best;
+    }
+    span *= 8;
+  }
+  return null;
 }
 
 // Snap to the nearest clip edge or marker. Falls back to the raw value when

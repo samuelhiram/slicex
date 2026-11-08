@@ -3,7 +3,9 @@
 // mocked out (no WebGL in jsdom) and an in-memory bridge: the real
 // PlaylistCore, the real React tree, the real globals.css. Regression tests
 // for SYNC-12, canvas-renderer-no-invalidate-for-providers (shell side),
-// react-4 (shell side), react-8 and react-9.
+// react-4 (shell side), react-8 and react-9, plus the Ola 1 wiring: the
+// four render-loop providers, the money lane metrics and the finance-native
+// tool row.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 import { act } from "react";
@@ -11,7 +13,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FinancialItem } from "@slicex/core";
-import type { PlaylistCore, PlaylistCoreOptions } from "@slicex/canvas";
+import type {
+  PlaylistCore,
+  PlaylistCoreOptions,
+  PlaylistRendererCallbacks,
+} from "@slicex/canvas";
+import { FINANCE_PLAYLIST_METRICS } from "../src/finance/mapping";
 
 interface FakeRenderer {
   destroy: ReturnType<typeof vi.fn>;
@@ -24,10 +31,15 @@ interface ShellBridge {
   listenerCount(): number;
   getDocument(): { items: FinancialItem[] };
   addItem: ReturnType<typeof vi.fn>;
+  getClipContent: ReturnType<typeof vi.fn>;
+  getOverviewData: ReturnType<typeof vi.fn>;
+  getDragAnnotation: ReturnType<typeof vi.fn>;
+  getTrackMeta: ReturnType<typeof vi.fn>;
 }
 
 const hoisted = vi.hoisted(() => ({
   renderers: [] as FakeRenderer[],
+  rendererCallbacks: [] as Array<PlaylistRendererCallbacks | undefined>,
   coreOptions: [] as Array<PlaylistCoreOptions | undefined>,
   bridges: [] as ShellBridge[],
 }));
@@ -43,9 +55,14 @@ vi.mock("@slicex/canvas", async (importOriginal) => {
       return actual.createPlaylistCore(...args);
     },
     createPlaylistInteractionController: () => ({ destroy() {} }),
-    createPlaylistRenderer: () => {
+    createPlaylistRenderer: (
+      _host: HTMLElement,
+      _core: PlaylistCore,
+      callbacks?: PlaylistRendererCallbacks,
+    ) => {
       const renderer: FakeRenderer = { destroy: vi.fn(), invalidate: vi.fn() };
       hoisted.renderers.push(renderer);
+      hoisted.rendererCallbacks.push(callbacks);
       return renderer;
     },
   };
@@ -136,6 +153,30 @@ vi.mock("../src/finance/financial-bridge", async () => {
     getClipSparkline() {
       return null;
     }
+    // One stable object each, like the real cached providers.
+    private readonly overview: import("@slicex/canvas").PlaylistOverviewData = {
+      title: "Cash",
+      primary: { initial: 0, beats: [], values: [] },
+      thresholds: [],
+      annotations: [],
+    };
+    private readonly content: import("@slicex/canvas").PlaylistClipContent = {
+      kind: "events",
+      beats: [3],
+      values: [1],
+    };
+    private readonly annotation: import("@slicex/canvas").PlaylistDragAnnotation = {
+      text: "Mín +$1",
+      tone: "positive",
+    };
+    private readonly meta: import("@slicex/canvas").PlaylistTrackMeta = {
+      subtitle: "+$1/año",
+      meter: 0.5,
+    };
+    readonly getClipContent = vi.fn((_clipId: string) => this.content);
+    readonly getOverviewData = vi.fn(() => this.overview);
+    readonly getDragAnnotation = vi.fn(() => this.annotation);
+    readonly getTrackMeta = vi.fn((_trackId: string) => this.meta);
     destroy() {
       this.listeners.clear();
     }
@@ -171,9 +212,17 @@ function unmountShell() {
 
 beforeEach(() => {
   hoisted.renderers.length = 0;
+  hoisted.rendererCallbacks.length = 0;
   hoisted.coreOptions.length = 0;
   hoisted.bridges.length = 0;
 });
+
+function loadGlobalsCss() {
+  const css = readFileSync(join(__dirname, "../src/styles/globals.css"), "utf8");
+  const style = document.createElement("style");
+  style.textContent = css;
+  document.head.appendChild(style);
+}
 
 afterEach(() => {
   if (root) unmountShell();
@@ -201,6 +250,7 @@ function pressEscape() {
 }
 
 const stage = () => document.querySelector(".playlist-shell__stage")!;
+const toolRow = () => document.querySelector(".playlist-shell__bar")!;
 const summary = () => document.querySelector(".fin-summary")!;
 const dialog = () => document.querySelector<HTMLElement>(".fin-editor");
 
@@ -212,7 +262,7 @@ describe("SYNC-12: no time-stretch on the finance playlist", () => {
     const toolLabels = [
       ...document.querySelectorAll(".playlist-shell__toolbar .playlist-shell__tool-label"),
     ].map((el) => el.textContent);
-    expect(toolLabels).toContain("Sel");
+    expect(toolLabels).toContain("Seleccionar");
     expect(toolLabels).not.toContain("Str");
     expect(document.querySelector('[data-tool="stretch"]')).toBeNull();
   });
@@ -273,10 +323,12 @@ describe("react-8: the shell behind the editor is inert; focus comes back", () =
     click(add);
     expect(stage().hasAttribute("inert")).toBe(true);
     expect(summary().hasAttribute("inert")).toBe(true);
+    expect(toolRow().hasAttribute("inert")).toBe(true);
     pressEscape();
     expect(dialog()).toBeNull();
     expect(stage().hasAttribute("inert")).toBe(false);
     expect(summary().hasAttribute("inert")).toBe(false);
+    expect(toolRow().hasAttribute("inert")).toBe(false);
     expect(document.activeElement).toBe(add);
   });
 
@@ -296,21 +348,188 @@ describe("react-8: the shell behind the editor is inert; focus comes back", () =
   });
 });
 
-describe("react-9: the open analysis rail does not cover the playhead readout", () => {
-  it("the readout moves right of the 280px rail while it is open", async () => {
-    const css = readFileSync(join(__dirname, "../src/styles/globals.css"), "utf8");
-    const style = document.createElement("style");
-    style.textContent = css;
-    document.head.appendChild(style);
+describe("react-9: nothing covers the playhead readout", () => {
+  it("sits in the tool row, outside the stage the rails open in", async () => {
+    loadGlobalsCss();
     await mountShell();
     const readout = document.querySelector<HTMLElement>(".fin-readout")!;
-    const left = () => Number.parseFloat(getComputedStyle(readout).left);
-    expect(left()).toBe(156);
+    expect(readout.closest(".playlist-shell__bar")).not.toBeNull();
+    expect(readout.closest(".playlist-shell__stage")).toBeNull();
+    expect(getComputedStyle(readout).position).not.toBe("absolute");
     click(document.querySelector('[aria-label="Abrir análisis financiero"]'));
     const rail = document.querySelector<HTMLElement>(".fin-side")!;
     expect(rail.classList.contains("fin-side--collapsed")).toBe(false);
-    expect(left()).toBeGreaterThanOrEqual(280);
-    click(document.querySelector('[aria-label="Cerrar análisis financiero"]'));
-    expect(left()).toBe(156);
+    // The open rail lives in the stage (over the canvas); the readout not.
+    expect(rail.closest(".playlist-shell__stage")).not.toBeNull();
+    expect(readout.closest(".playlist-shell__bar")).not.toBeNull();
+  });
+
+  it("is compact: weekday date, cash and debt on one line", async () => {
+    await mountShell();
+    const readout = document.querySelector<HTMLElement>(".fin-readout")!;
+    const date = readout.querySelector(".fin-readout__date")!.textContent!;
+    expect(date).toMatch(/^(dom|lun|mar|mié|jue|vie|sáb) \d{1,2} [A-Z]{3} \d{4}$/);
+    expect(readout.querySelectorAll(".fin-readout__cell").length).toBe(2);
+  });
+});
+
+describe("Ola 1 wiring: providers, money lane, real lanes only", () => {
+  it("passes the four new providers to the renderer, delegating to the bridge", async () => {
+    const { bridge } = await mountShell();
+    const callbacks = hoisted.rendererCallbacks.at(-1)!;
+    expect(typeof callbacks.getClipDetail).toBe("function");
+    expect(typeof callbacks.getClipSparkline).toBe("function");
+
+    const content = callbacks.getClipContent!("fin-gasto");
+    expect(bridge.getClipContent).toHaveBeenLastCalledWith("fin-gasto");
+    expect(content).toBe(bridge.getClipContent.mock.results.at(-1)!.value);
+
+    const overview = callbacks.getOverviewData!();
+    expect(bridge.getOverviewData).toHaveBeenCalledTimes(1);
+    expect(overview).toBe(bridge.getOverviewData.mock.results.at(-1)!.value);
+    // Identity passes through: no wrapper object allocated per call.
+    expect(callbacks.getOverviewData!()).toBe(overview);
+
+    const annotation = callbacks.getDragAnnotation!();
+    expect(bridge.getDragAnnotation).toHaveBeenCalledTimes(1);
+    expect(annotation).toBe(bridge.getDragAnnotation.mock.results.at(-1)!.value);
+
+    const meta = callbacks.getTrackMeta!("track-1");
+    expect(bridge.getTrackMeta).toHaveBeenLastCalledWith("track-1");
+    expect(meta).toBe(bridge.getTrackMeta.mock.results.at(-1)!.value);
+  });
+
+  it("creates the core with the 112px money lane and no virtual tracks", async () => {
+    const { bridge } = await mountShell();
+    const options = hoisted.coreOptions[0]!;
+    expect(options.virtualTracks).toBe(false);
+    // Everything else is the finance metrics (weeks as bars, year zoom).
+    expect(options.metrics).toEqual({
+      ...FINANCE_PLAYLIST_METRICS,
+      overviewLaneHeight: 112,
+    });
+    expect(bridge.core.metrics.overviewLaneHeight).toBe(112);
+    // DOM overlays align below ruler + lane through these two variables.
+    const shell = document.querySelector<HTMLElement>(".playlist-shell")!;
+    expect(shell.style.getPropertyValue("--pl-lane-h")).toBe("112px");
+    expect(shell.style.getPropertyValue("--pl-ruler-h")).toBe(
+      `${FINANCE_PLAYLIST_METRICS.rulerHeight}px`,
+    );
+  });
+});
+
+describe("finance-native toolbar", () => {
+  const tools = () => [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      ".playlist-shell__toolbar .playlist-shell__tool",
+    ),
+  ];
+
+  it("six Spanish tools with icons and hotkeys; no Paint / Slip / Sng / Rec", async () => {
+    await mountShell();
+    expect(
+      tools().map((b) => [
+        b.querySelector(".playlist-shell__tool-label")!.textContent,
+        b.querySelector(".playlist-shell__tool-hotkey")!.textContent,
+      ]),
+    ).toEqual([
+      ["Seleccionar", "E"],
+      ["Dibujar", "P"],
+      ["Cortar", "C"],
+      ["Silenciar", "T"],
+      ["Borrar", "D"],
+      ["Zoom", "Z"],
+    ]);
+    for (const b of tools()) {
+      expect(b.querySelector("svg.playlist-shell__tool-icon")).not.toBeNull();
+      expect(b.getAttribute("aria-label")).toBeTruthy();
+    }
+    const text = document.querySelector(".playlist-shell__toolbar")!.textContent!;
+    for (const gone of ["Pnt", "Slp", "Sng", "Pat", "Rec", "Snap", "item"]) {
+      expect(text).not.toContain(gone);
+    }
+    expect(document.querySelector('[data-tool="paint"]')).toBeNull();
+    expect(document.querySelector('[data-tool="slip"]')).toBeNull();
+  });
+
+  it("a tool button sets the core tool and reflects it (aria-pressed)", async () => {
+    const { bridge } = await mountShell();
+    const slice = document.querySelector<HTMLButtonElement>('[data-tool="slice"]')!;
+    click(slice);
+    expect(bridge.core.getState().tool).toBe("slice");
+    expect(slice.getAttribute("aria-pressed")).toBe("true");
+    expect(slice.dataset.active).toBe("true");
+    // Hidden tools still work through the core (hotkeys), just not offered.
+    act(() => bridge.core.setTool("paint"));
+    expect(tools().every((b) => b.getAttribute("aria-pressed") === "false")).toBe(true);
+  });
+
+  it("'Ajustar a': Día / Semana / Quincena / Libre = beat / bar / axis / none", async () => {
+    const { bridge } = await mountShell();
+    const select = document.querySelector<HTMLSelectElement>(
+      ".playlist-shell__snap-select",
+    )!;
+    expect(document.querySelector(".playlist-shell__snap-label")!.textContent).toBe(
+      "Ajustar a",
+    );
+    expect([...select.options].map((o) => [o.textContent, o.value])).toEqual([
+      ["Día", "beat"],
+      ["Semana", "bar"],
+      ["Quincena", "axis"],
+      ["Libre", "none"],
+    ]);
+    expect(select.value).toBe("beat");
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLSelectElement.prototype,
+      "value",
+    )!.set!;
+    for (const mode of ["bar", "axis", "none", "beat"] as const) {
+      act(() => {
+        setter.call(select, mode);
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      expect(bridge.core.getState().snap.mode).toBe(mode);
+      expect(select.value).toBe(mode);
+    }
+    // A mode the toolbar does not offer is shown as "Otro", not misreported.
+    act(() => bridge.core.setSnapMode("half-beat"));
+    expect(select.value).toBe("half-beat");
+    expect(select.selectedOptions[0]?.textContent).toBe("Otro");
+  });
+
+  it("the counter reads 'N objetos' / 'N sel.'", async () => {
+    const { bridge } = await mountShell();
+    const counter = document.querySelector<HTMLElement>(".playlist-shell__counter")!;
+    const n = bridge.core.getState().clips.length;
+    expect(n).toBeGreaterThan(1);
+    expect(counter.querySelector(".playlist-shell__counter-value")!.textContent).toBe(
+      String(n),
+    );
+    expect(counter.querySelector(".playlist-shell__counter-label")!.textContent).toBe(
+      "objetos",
+    );
+    expect(counter.querySelector(".playlist-shell__counter-selected")).toBeNull();
+    act(() => bridge.core.selectAllClips());
+    expect(counter.querySelector(".playlist-shell__counter-selected")!.textContent).toBe(
+      `${n} sel.`,
+    );
+    expect(counter.dataset.hasSelection).toBe("true");
+  });
+
+  it("has its own row above the canvas: never over the ruler or the lane", async () => {
+    loadGlobalsCss();
+    await mountShell();
+    const toolbar = document.querySelector<HTMLElement>(".playlist-shell__toolbar")!;
+    expect(toolbar.closest(".playlist-shell__stage")).toBeNull();
+    expect(toolbar.parentElement).toBe(toolRow());
+    expect(getComputedStyle(toolbar).position).not.toBe("absolute");
+    expect(getComputedStyle(toolRow()).position).not.toBe("absolute");
+    // Row order: summary bar, tool row, stage (canvas host inside).
+    const rows = [...document.querySelector(".playlist-shell")!.children].map(
+      (el) => el.className,
+    );
+    const bar = rows.indexOf("playlist-shell__bar");
+    expect(bar).toBe(rows.indexOf("fin-summary") + 1);
+    expect(rows.indexOf("playlist-shell__stage")).toBe(bar + 1);
   });
 });

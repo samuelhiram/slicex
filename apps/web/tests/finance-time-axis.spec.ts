@@ -55,6 +55,17 @@ describe("calendar time axis", () => {
     expect(first.ticks(0, 400, 1.5)[0]?.label).toBeNull();
   });
 
+  it("snaps to the start of each quincena (1st and 16th)", () => {
+    // 2026-11-16 → beat 9; 2026-12-01 → 24; 2026-12-16 → 39
+    const targets = axis.snapTargets!(5, 40);
+    expect(targets).toContain(9);
+    expect(targets).toContain(24);
+    expect(targets).toContain(39);
+    for (let i = 1; i < targets.length; i += 1) {
+      expect(targets[i]!).toBeGreaterThan(targets[i - 1]!);
+    }
+  });
+
   it("never emits negative beats", () => {
     expect(axis.ticks(-20, 5, 12).every((t) => t.beat >= 0)).toBe(true);
   });

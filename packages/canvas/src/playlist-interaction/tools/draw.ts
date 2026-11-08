@@ -2,7 +2,6 @@ import {
   getTrackIndexById,
   screenXToTime,
   screenYToTrackIndex,
-  snapTime,
   type PlaylistAutomationPoint,
 } from "../../playlist-core";
 import { clipCreateTemplateFromSelection } from "./clip-template";
@@ -82,7 +81,7 @@ export const drawTool: PlaylistTool = {
     // already committed to a default-duration clip with two clicks).
     const trackIndex = screenYToTrackIndex(state, point.y, metrics);
     const rawTime = screenXToTime(state, point.x, metrics);
-    const start = Math.max(0, snapTime(rawTime, state, event.altKey));
+    const start = Math.max(0, core.snapTime(rawTime, event.altKey, state));
     const template = clipCreateTemplateFromSelection(state, {
       type: "pattern",
       label: "Clip",

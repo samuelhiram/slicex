@@ -321,3 +321,41 @@ export interface ProjectionComparison {
   finalDebtDelta: number;
   minimumCashDelta: number;
 }
+
+// ---------------------------------------------------------------------------
+// Payoff estimates and per-account activity (implemented in payoff.ts and
+// queries.ts).
+
+export interface DebtPayoffOptions {
+  /** Simulation window in months from `doc.startDate` (default 360). */
+  maxMonths?: number;
+}
+
+/** When a debt account is paid off, simulating only that account's own events. */
+export interface DebtPayoffEstimate {
+  accountId: string;
+  name: string;
+  kind: "credit-card" | "loan" | "installment-plan";
+  /**
+   * Date of the payment that clears the account for good (see
+   * `estimateDebtPayoffs`); `doc.startDate` when nothing is owed from the
+   * start; null = still owing after `maxMonths`.
+   */
+  payoffDate: ISODate | null;
+  /** Interest accrued from `doc.startDate` to the payoff (or to the end of the cap date). */
+  totalInterest: number;
+  /** Payments applied to the debt up to the payoff (or the cap), interest included. */
+  totalPaid: number;
+  /** Debt at the payoff (0) or at the end of the cap date (accrued interest included). */
+  finalDebt: number;
+}
+
+/** Account movements over a date range, as positive magnitudes. */
+export interface AccountActivity {
+  /** Card interest posted to the account. */
+  interest: number;
+  /** Cash paid to the account (card / loan / MSI payments). */
+  payments: number;
+  /** Purchases charged and debts opened on the account. */
+  charges: number;
+}

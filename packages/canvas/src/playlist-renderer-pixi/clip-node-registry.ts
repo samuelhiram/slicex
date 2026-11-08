@@ -1,5 +1,9 @@
 import { Container, Graphics, Text } from "pixi.js";
-import type { PlaylistClipPresentation } from "../playlist-core";
+import {
+  sortedUpperBound,
+  type PlaylistClipContent,
+  type PlaylistClipPresentation,
+} from "../playlist-core";
 
 // Canon §3.8 — per-clip factory + cache with diffed redraws.
 //
@@ -53,6 +57,13 @@ interface ClipNode {
   // null). A different reference forces a body redraw even when the visual
   // hash is unchanged — see ClipNodeProviders.
   bars: readonly number[] | null;
+  // Content the body was last drawn with (getClipContent; null = none) and
+  // the clip geometry it was laid out for. Content sits at absolute beats,
+  // so a move (start) or zoom (px per beat) re-lays it out even when the
+  // host keeps the same reference.
+  content: PlaylistClipContent | null;
+  contentStart: number;
+  contentPxPerBeat: number;
   // Visual hash captures everything that would force a redraw. Position and
   // size are kept separate so we can skip a redraw when only x/y changed.
   hash: string;
@@ -117,6 +128,9 @@ export type ClipSparklineProvider = (
   clipId: string,
 ) => readonly number[] | null;
 export type ClipDetailProvider = (clipId: string) => string | null;
+export type ClipContentProvider = (
+  clipId: string,
+) => PlaylistClipContent | null;
 
 // Per-renderer providers (PlaylistRendererCallbacks.getClipDetail /
 // getClipSparkline). Both are called by syncFrame for VISIBLE clips only,
@@ -138,9 +152,17 @@ export type ClipDetailProvider = (clipId: string) => string | null;
 //
 // Neither provider schedules a frame by itself: when provider data changes
 // without a core notify, the host calls PlaylistRenderer.invalidate().
+//
+// getClipContent: same identity contract as getClipSparkline (SAME object
+// while unchanged, a NEW object when it changes). Queried once per VISIBLE
+// non-automation clip per frame. Non-null wins over the sparkline for that
+// clip (getClipSparkline is then not queried). The body redraws only when
+// the visual hash, the content reference, the clip start or the zoom
+// changes; see drawClipContent for the layout.
 export interface ClipNodeProviders {
   getClipDetail?: ClipDetailProvider;
   getClipSparkline?: ClipSparklineProvider;
+  getClipContent?: ClipContentProvider;
 }
 
 function getSparklineBars(
@@ -220,12 +242,131 @@ export function truncateClipDetail(text: string, width: number): string {
   return `${text.slice(0, maxChars - 1)}…`;
 }
 
+// Content area of the body: below the title bar (and the detail line when
+// it is shown, so the text stays readable), 3px above the bottom edge.
+const CONTENT_BOTTOM_PAD = 3;
+const CONTENT_EVENT_ALPHA_POS = 0.62;
+const CONTENT_EVENT_ALPHA_NEG = 0.5;
+const CONTENT_LEVEL_FILL_ALPHA = 0.26;
+const CONTENT_LEVEL_LINE_ALPHA = 0.7;
+const CONTENT_DARK = 0x0b0b0b;
+
+// Draws PlaylistClipContent in the body (local coords). Beats are absolute:
+// x = (beat - clip.start) * pxPerBeat. Only what falls inside the clip window
+// [start, start + duration] is drawn; the window start is found by binary
+// search, so a long series costs O(log n + items inside the clip).
+//   events: one 2-3px bar per event; value > 0 rises from the bottom of the
+//           content area, value < 0 hangs from its top; |value| = height.
+//   level:  filled step area from the bottom; value / max = height.
+export function drawClipContent(
+  body: Graphics,
+  view: PlaylistClipPresentation,
+  palette: PixiPaletteColors,
+  content: PlaylistClipContent,
+  detailVisible: boolean,
+): void {
+  const width = view.rect.width;
+  const height = view.rect.height;
+  const clip = view.clip;
+  const pxPerBeat = width / Math.max(clip.duration, 1e-9);
+  const top =
+    view.titleRect.height + (detailVisible ? DETAIL_LINE_HEIGHT : 0) + 2;
+  const bottom = height - CONTENT_BOTTOM_PAD;
+  const available = bottom - top;
+  if (available < 2 || width < 4) return;
+  const start = clip.start;
+  const end = start + clip.duration;
+  const alphaScale = view.effectivelyMuted ? 0.45 : 1;
+
+  if (content.kind === "events") {
+    const beats = content.beats;
+    const values = content.values;
+    const count = Math.min(beats.length, values.length);
+    const barWidth = Math.min(3, Math.max(2, pxPerBeat * 0.6));
+    const maxX = width - barWidth - 1;
+    // First event at or after the clip start.
+    let index = sortedUpperBound(beats, start - 1e-9);
+    for (; index < count; index += 1) {
+      const beat = beats[index]!;
+      if (beat > end + 1e-9) break;
+      const raw = values[index]!;
+      if (raw === 0 || !Number.isFinite(raw)) continue;
+      const magnitude = Math.min(1, Math.abs(raw));
+      const h = Math.max(1, Math.round(available * magnitude));
+      const center = (beat - start) * pxPerBeat;
+      const x = Math.min(maxX, Math.max(1, Math.round(center - barWidth / 2)));
+      if (raw > 0) {
+        body.rect(x, bottom - h, barWidth, h).fill({
+          color: palette.text,
+          alpha: CONTENT_EVENT_ALPHA_POS * alphaScale,
+        });
+      } else {
+        body.rect(x, top, barWidth, h).fill({
+          color: CONTENT_DARK,
+          alpha: CONTENT_EVENT_ALPHA_NEG * alphaScale,
+        });
+      }
+    }
+    return;
+  }
+
+  // level
+  const series = content.series;
+  const max = content.max;
+  if (!(max > 0)) return;
+  const beats = series.beats;
+  const values = series.values;
+  const count = Math.min(beats.length, values.length);
+  const yOf = (value: number): number => {
+    const ratio = value <= 0 ? 0 : value >= max ? 1 : value / max;
+    return bottom - ratio * available;
+  };
+  const firstIndex = Math.min(sortedUpperBound(beats, start), count);
+  const firstValue = firstIndex === 0 ? series.initial : values[firstIndex - 1]!;
+  // Filled area.
+  let y = yOf(firstValue);
+  body.moveTo(0, bottom).lineTo(0, y);
+  for (let index = firstIndex; index < count; index += 1) {
+    const beat = beats[index]!;
+    if (beat >= end) break;
+    const x = (beat - start) * pxPerBeat;
+    const nextY = yOf(values[index]!);
+    body.lineTo(x, y).lineTo(x, nextY);
+    y = nextY;
+  }
+  body
+    .lineTo(width, y)
+    .lineTo(width, bottom)
+    .closePath()
+    .fill({
+      color: palette.text,
+      alpha: CONTENT_LEVEL_FILL_ALPHA * alphaScale,
+    });
+  // Top edge as a crisp line (same walk, stroke only).
+  y = yOf(firstValue);
+  body.moveTo(0, y);
+  for (let index = firstIndex; index < count; index += 1) {
+    const beat = beats[index]!;
+    if (beat >= end) break;
+    const x = (beat - start) * pxPerBeat;
+    const nextY = yOf(values[index]!);
+    body.lineTo(x, y).lineTo(x, nextY);
+    y = nextY;
+  }
+  body.lineTo(width, y).stroke({
+    color: palette.text,
+    width: 1.25,
+    alpha: CONTENT_LEVEL_LINE_ALPHA * alphaScale,
+  });
+}
+
 function drawClipBodyLocal(
   body: Graphics,
   view: PlaylistClipPresentation,
   palette: PixiPaletteColors,
   localBars: readonly number[] | null,
   detailVisible: boolean,
+  content: PlaylistClipContent | null = null,
 ): void {
   body.clear();
   const width = view.rect.width;
@@ -251,6 +392,11 @@ function drawClipBodyLocal(
         .lineTo(clampedX2, clampedX2 - x1)
         .stroke({ color: palette.text, alpha: 0.18, width: 1 });
     }
+  }
+  // Host content (getClipContent) replaces the sparkline for this clip.
+  if (content !== null) {
+    drawClipContent(body, view, palette, content, detailVisible);
+    return;
   }
   // F9: sparkline stub for pattern clips. Skipped on automation (drawn by
   // the overlay polyline) and on audio (no internal preview today). The
@@ -409,6 +555,7 @@ export function createClipNodeRegistry(
   const cache = new Map<string, ClipNode>();
   const getClipDetail = providers.getClipDetail;
   const getClipSparkline = providers.getClipSparkline;
+  const getClipContent = providers.getClipContent;
 
   // Secondary line under the title bar. Created lazily ONCE per node (same
   // factory pattern as the title label), never per frame.
@@ -551,6 +698,9 @@ export function createClipNodeRegistry(
       detailWidth: -1,
       detailDisplay: "",
       bars: null,
+      content: null,
+      contentStart: 0,
+      contentPxPerBeat: 0,
       hash: "",
       width: 0,
       height: 0,
@@ -578,8 +728,12 @@ export function createClipNodeRegistry(
       // Queried every frame for visible pattern clips (O(1) by contract) so
       // bars that depend on data outside the hash — e.g. the clip's calendar
       // position — still repaint; the reference compare keeps it free.
+      const content =
+        getClipContent && !view.isAutomation
+          ? getClipContent(view.clip.id)
+          : null;
       const bars =
-        getClipSparkline && view.clip.type === "pattern"
+        content === null && getClipSparkline && view.clip.type === "pattern"
           ? getClipSparkline(view.clip.id)
           : null;
       const hash = clipVisualHash(view, detail);
@@ -587,11 +741,32 @@ export function createClipNodeRegistry(
         hash !== node.hash ||
         node.width !== view.rect.width ||
         node.height !== view.rect.height;
-      if (visualChanged || bars !== node.bars) {
-        // New bars alone only touch the body; the overlay (outline, handles,
-        // automation polyline) does not depend on them.
-        drawClipBodyLocal(node.body, view, palette, bars, detailVisible);
+      // Content is laid out at absolute beats: a move or a zoom re-lays it
+      // out even with the same reference (number compares, no allocation).
+      const contentPxPerBeat =
+        content !== null
+          ? view.rect.width / Math.max(view.clip.duration, 1e-9)
+          : 0;
+      const contentChanged =
+        content !== node.content ||
+        (content !== null &&
+          (node.contentStart !== view.clip.start ||
+            node.contentPxPerBeat !== contentPxPerBeat));
+      if (visualChanged || bars !== node.bars || contentChanged) {
+        // New bars / content alone only touch the body; the overlay
+        // (outline, handles, automation polyline) does not depend on them.
+        drawClipBodyLocal(
+          node.body,
+          view,
+          palette,
+          bars,
+          detailVisible,
+          content,
+        );
         node.bars = bars;
+        node.content = content;
+        node.contentStart = view.clip.start;
+        node.contentPxPerBeat = contentPxPerBeat;
       }
       if (visualChanged) {
         drawClipOverlayLocal(node.overlay, view, palette);

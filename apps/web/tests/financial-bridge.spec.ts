@@ -767,3 +767,103 @@ describe("FinancialBridge — second review regressions", () => {
     );
   });
 });
+
+describe("FinancialBridge — Ola 1 renderer providers", () => {
+  it("overview: cash curve with reserve/zero thresholds, stable across UI-only notifies", () => {
+    const { core, bridge } = setup();
+    const data = bridge.getOverviewData();
+    expect(data.title).toBe("Caja");
+    expect(data.primary.initial).toBe(5000);
+    expect(data.thresholds.map((t) => t.tone)).toEqual(["warning", "danger"]);
+    core.setHover({ kind: "clip", clipId: "sal" });
+    core.setPlayPosition(30);
+    expect(bridge.getOverviewData()).toBe(data);
+  });
+
+  it("overview: valleys are annotated where they happen", () => {
+    const { bridge } = setup();
+    bridge.setMinimumCashReserve(1_000_000);
+    const data = bridge.getOverviewData();
+    expect(data.annotations.length).toBeGreaterThan(0);
+    expect(data.annotations[0]!.tone).toBe("warning");
+  });
+
+  it("during a gesture: ghost baseline + effect pill; gone after it", () => {
+    const { core, bridge, trackIndexOf } = setup();
+    expect(bridge.getDragAnnotation()).toBeNull();
+    core.beginGesture();
+    core.moveClips([{ id: "gas", start: 40, trackIndex: trackIndexOf("gas") }]);
+    const overview = bridge.getOverviewData();
+    expect(overview.baseline).not.toBeNull();
+    const pill = bridge.getDragAnnotation();
+    expect(pill).not.toBeNull();
+    expect(bridge.getDragAnnotation()).toBe(pill);
+    core.endGesture();
+    expect(bridge.getDragAnnotation()).toBeNull();
+    expect(bridge.getOverviewData().baseline).toBeNull();
+  });
+
+  it("drag pill says when you get out of the red", () => {
+    const doc = makeDoc();
+    doc.initialCash = 3000;
+    const { core, bridge, trackIndexOf } = setup(doc);
+    // gas (−2000 on 2026-11-20) before the first payday (11-13)? move it
+    // from after the payday to before it and back.
+    core.moveClips([{ id: "gas", start: 2, trackIndex: trackIndexOf("gas") }]);
+    expect(bridge.getProjection().minimumCash.cash).toBeLessThan(0);
+    core.beginGesture();
+    core.moveClips([{ id: "gas", start: 20, trackIndex: trackIndexOf("gas") }]);
+    const pill = bridge.getDragAnnotation()!;
+    expect(pill.tone).toBe("positive");
+    expect(pill.text).toContain("sales del rojo");
+    core.endGesture();
+  });
+
+  it("clip content: payments at their real dates; identity kept when unaffected", () => {
+    const { core, bridge, trackIndexOf } = setup();
+    const salary = bridge.getClipContent("sal");
+    expect(salary?.kind).toBe("events");
+    if (salary?.kind !== "events") throw new Error("expected events");
+    expect(salary.beats[0]).toBe(6); // 2026-11-13
+    expect(salary.values.every((v) => v > 0)).toBe(true);
+    const gas = bridge.getClipContent("gas");
+    if (gas?.kind !== "events") throw new Error("expected events");
+    expect(gas.values[0]!).toBeLessThan(0);
+    core.moveClips([{ id: "gas", start: 30, trackIndex: trackIndexOf("gas") }]);
+    expect(bridge.getClipContent("sal")).toBe(salary);
+    expect(bridge.getClipContent("gas")).not.toBe(gas);
+  });
+
+  it("clip content: a card shows its debt melting (level)", () => {
+    const { bridge } = setup(createDemoFinancialDocument("2026-11-07"));
+    const nu = bridge.getClipContent("fin-nu");
+    expect(nu?.kind).toBe("level");
+    if (nu?.kind !== "level") throw new Error("expected level");
+    expect(nu.series.initial).toBe(30069);
+    expect(nu.max).toBeGreaterThanOrEqual(30069);
+  });
+
+  it("track meta: cards tell when you're free, incomes their yearly impact", () => {
+    const { core, bridge } = setup(createDemoFinancialDocument("2026-11-07"));
+    const trackOf = (id: string) =>
+      core.getState().clips.find((c) => c.id === id)!.trackId;
+    const nu = bridge.getTrackMeta(trackOf("fin-nu"));
+    expect(nu?.subtitle).toMatch(/Libre|No se liquida/);
+    const salary = bridge.getTrackMeta(trackOf("fin-sueldo"));
+    expect(salary?.subtitle?.startsWith("+")).toBe(true);
+    expect(salary?.meter).toBe(1);
+    expect(bridge.getTrackMeta(trackOf("fin-sueldo"))).toBe(salary);
+  });
+
+  it("clip detail follows the playhead day", () => {
+    const { core, bridge } = setup(createDemoFinancialDocument("2026-11-07"));
+    const today = bridge.getClipDetail("fin-nu");
+    expect(today).toContain("Debes $30,069");
+    core.setPlayPosition(200);
+    const later = bridge.getClipDetail("fin-nu");
+    expect(later).not.toBe(today);
+    expect(later).toContain("Debes");
+    core.setPlayPosition(200.7);
+    expect(bridge.getClipDetail("fin-nu")).toBe(later);
+  });
+});

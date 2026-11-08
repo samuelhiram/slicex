@@ -82,16 +82,16 @@ export function expandMonthlyOnDay(
   return out;
 }
 
-/** Day number of `dayOfMonth` (clamped to the month length) in month index `mi` (= year × 12 + month − 1). */
-function monthDayNumber(mi: number, dom: number): number {
+/** Internal: day number of `dayOfMonth` (clamped to the month length) in month index `mi` (= year × 12 + month − 1). */
+export function monthDayNumber(mi: number, dom: number): number {
   const y = Math.floor(mi / 12);
   const m = mi - y * 12 + 1;
   const dim = daysInMonth(y, m);
   return dayNumberFromParts(y, m, dom > dim ? dim : dom);
 }
 
-/** Month index (year × 12 + month − 1) of a day number. */
-function monthIndexOf(dayNumber: number): number {
+/** Internal: month index (year × 12 + month − 1) of a day number. */
+export function monthIndexOf(dayNumber: number): number {
   const [y, m] = partsFromDayNumber(dayNumber);
   return y * 12 + (m - 1);
 }

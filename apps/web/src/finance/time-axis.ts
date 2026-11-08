@@ -86,6 +86,30 @@ export function createCalendarTimeAxis(startDate: ISODate): PlaylistTimeAxis {
     formatTime(beat) {
       return formatAxisDate(origin + Math.floor(beat));
     },
+
+    // "Quincena" snap: the first day of each pay period (the 1st and the
+    // 16th), i.e. the day right after each payday. Steps month by month
+    // from the first month in range — never day by day.
+    snapTargets(fromBeat, toBeat) {
+      const targets: number[] = [];
+      const start = partsOf(origin + Math.floor(fromBeat));
+      let year = start.year;
+      let month = start.month;
+      for (;;) {
+        const prefix = `${year}-${String(month).padStart(2, "0")}`;
+        const first = toDayNumber(`${prefix}-01`) - origin;
+        if (first > toBeat) break;
+        const sixteenth = toDayNumber(`${prefix}-16`) - origin;
+        if (first >= fromBeat - 16) targets.push(first);
+        if (sixteenth >= fromBeat - 16 && sixteenth <= toBeat + 16) targets.push(sixteenth);
+        month += 1;
+        if (month > 12) {
+          month = 1;
+          year += 1;
+        }
+      }
+      return targets;
+    },
   };
 
   function buildTicks(

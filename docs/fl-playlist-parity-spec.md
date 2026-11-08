@@ -38,6 +38,19 @@ exigir `!event.ctrlKey` para no dispararse al teclear con AltGr.
 - Grid sigue al ruler.
 - Hover en ruler emite tooltip "bar.beat.tick" cerca del cursor (F3).
 
+## Overview lane (Ola 1, extension SliceX)
+No existe en FL. Banda opcional entre la regla y el primer track
+(`metrics.overviewLaneHeight > 0`; default 0 = layout identico a FL) que
+dibuja datos del host (`getOverviewData`): curva primaria escalonada como
+area tonificada por umbrales (positivo / warning / danger), linea encima,
+umbrales punteados con label, secundaria tenue con escala propia, baseline
+gris punteada (p. ej. la curva antes del gesto en curso), anotaciones
+(pin + label) y un punto donde el playhead cruza la curva.
+- Click / drag en el lane = regla: seek + scrub del playhead (con snap; Alt lo ignora).
+- La celda del lane en la columna de headers es chrome inerte (ningun tool, ningun menu).
+- Todo lo que empezaba en `rulerHeight` (tracks, grid, mascara, scrollbar
+  vertical, ghost, snap line) empieza en `getTracksTop = rulerHeight + overviewLaneHeight`.
+
 ## Play Position Marker
 - Estado real: `playlist-core.playPosition.time`.
 - Renderer calcula `screenX = worldToScreenX(playPosition.time)`.
@@ -56,11 +69,24 @@ exigir `!event.ctrlKey` para no dispararse al teclear con AltGr.
 - Selection simple: click.
 - Marquee: drag en vacio.
 - Snap: activo por defecto; Alt lo ignora.
+- Modo de snap `axis` (extension SliceX): al target mas cercano de
+  `PlaylistTimeAxis.snapTargets` (p. ej. inicio de cada periodo de pago),
+  buscando en una ventana de ±64 beats que se ensancha ×8 si esta vacia.
+  Sin eje o sin targets se comporta como `beat`. La brocha (Paint) usa paso
+  de 1 beat en este modo. Todo snap del controller usa `core.snapTime`, que
+  aplica las metrics del core (`bar` respeta `beatsPerBar` del host).
 - Drag emite snap-indicator vertical (F3) y drop-ghost en destino (F3).
 - Dot 3px en esquina superior derecha cuando el clip esta en un grupo y
   esta hovered (F6).
 - Halo + stroke 2.5px en seleccion (F10).
 - Clips pattern muestran sparkline interna (F9).
+- Contenido del host (`getClipContent`, Ola 1) reemplaza la sparkline:
+  `events` = barras de 2-3px en su beat real (>0 suben desde abajo, <0 cuelgan
+  desde arriba del area de contenido); `level` = area escalonada desde abajo
+  (valor / max). Solo lo que cae dentro de la ventana del clip; titulo y
+  detalle quedan legibles encima.
+- Pill bajo el tooltip de drag (`getDragAnnotation`, Ola 1): el host describe
+  el efecto del gesto en curso.
 
 ## Slip tool (S)
 - LMB-drag dentro de un clip desliza el contenido interno (`contentOffset`)
@@ -194,6 +220,9 @@ exigir `!event.ctrlKey` para no dispararse al teclear con AltGr.
 - Header es zona interactiva propia.
 - Right click en header abre menu contextual custom del track.
 - Tracks reales sin clips muestran microtext "—" (F10).
+- Extras del host (`getTrackMeta`, Ola 1): subtitulo tenue bajo el nombre y un
+  medidor fino centrado (positivo crece a la derecha en verde, negativo a la
+  izquierda en rojo). Solo en filas reales visibles con altura suficiente.
 
 ## Tracklist Context Menu
 - Abre en posicion del cursor.
@@ -211,6 +240,7 @@ exigir `!event.ctrlKey` para no dispararse al teclear con AltGr.
 
 ## Hit-Testing
 Prioridad:
+0. Overview lane (si existe): `ruler`; su celda de header: `chrome` (inerte).
 1. Play Position Marker en ruler.
 2. Menu contextual abierto.
 3. Scrollbar H/V.
@@ -239,8 +269,9 @@ Prioridad:
 - Tiempo/world: beats positivos.
 - `worldToScreenX(time) = trackHeaderWidth + time * pxPerBeat - scrollX`.
 - `screenToWorldX(x) = (x - trackHeaderWidth + scrollX) / pxPerBeat`.
-- `trackToY(index) = rulerHeight + index * trackHeight - scrollY`.
-- `yToTrack(y) = floor((y - rulerHeight + scrollY) / trackHeight)`.
+- `tracksTop = rulerHeight + overviewLaneHeight` (`getTracksTop`).
+- `trackToY(index) = tracksTop + index * trackHeight - scrollY`.
+- `yToTrack(y) = floor((y - tracksTop + scrollY) / trackHeight)`.
 - Guardar siempre tiempo/track; nunca screen como verdad.
 
 ## Virtualizacion
@@ -250,6 +281,13 @@ Prioridad:
 - Tracks reales se materializan solo cuando un clip cae en track virtual.
 - Filas virtuales se pintan bajo demanda.
 - Scrollbars usan rango virtual movil; no representan documento finito rigido.
+- `virtualTracks: false` (opcion del core, decision del host, divergencia
+  declarada): sin filas virtuales "Track N" (solo fondo bajo el ultimo track);
+  el scroll vertical se detiene cuando el ultimo track queda sobre el
+  scrollbar horizontal y el thumb cubre solo los tracks reales; ningun gesto
+  materializa tracks (createClip(s) / paste fuera de rango = no-op, como un
+  track bloqueado; moveClips / drag se clampean al ultimo track real). El eje
+  X sigue infinito.
 
 ## Inspector (F11)
 - Right-side rail, collapsed por defecto, toggle ◀/▶.

@@ -16,9 +16,11 @@ import {
   getClipTitleRect,
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
+  getOverviewLaneHeight,
   getTrackByIndex,
   getTrackHeight,
   getTrackIdByIndex,
+  getTracksTop,
   getVerticalScrollbarRect,
   getVerticalScrollbarThumbRect,
   isAutomationClip,
@@ -28,6 +30,7 @@ import {
   rectsIntersect,
   screenXToTime,
   timeToScreenX,
+  type PlaylistLayoutOptions,
 } from "./geometry";
 
 // Per-presentation caches that turn the inner loops from O(clips × tracks)
@@ -108,9 +111,15 @@ export interface PlaylistLayoutPresentation {
   sceneRect: PlaylistRect;
   trackHeaderRect: PlaylistRect;
   rulerRect: PlaylistRect;
+  // Track area (below ruler + overview lane). The renderer masks clips,
+  // grid and timeline overlays to it.
   timelineRect: PlaylistRect;
   trackBodyRect: PlaylistRect;
   scrollbarCornerRect: PlaylistRect;
+  // Overview lane band between the ruler and the first track (timeline
+  // part) and its cell in the header column. Height 0 = no lane.
+  overviewRect: PlaylistRect;
+  overviewHeaderRect: PlaylistRect;
 }
 
 export interface PlaylistTrackHeaderButtons {
@@ -293,29 +302,40 @@ function createLayout(
     width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth),
     height: metrics.rulerHeight,
   };
+  const tracksTop = getTracksTop(metrics);
+  const laneHeight = getOverviewLaneHeight(metrics);
   const timelineRect = {
     x: metrics.trackHeaderWidth,
-    y: metrics.rulerHeight,
+    y: tracksTop,
     width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth),
-    height: Math.max(0, state.viewport.height - metrics.rulerHeight),
+    height: Math.max(0, state.viewport.height - tracksTop),
   };
   const trackBodyRect = {
     x: metrics.trackHeaderWidth,
-    y: metrics.rulerHeight,
+    y: tracksTop,
     width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth),
-    height: Math.max(0, state.viewport.height - metrics.rulerHeight),
+    height: Math.max(0, state.viewport.height - tracksTop),
   };
   const scrollbarCornerRect = {
     x: Math.max(
       metrics.trackHeaderWidth,
       state.viewport.width - metrics.scrollbarSize,
     ),
-    y: Math.max(
-      metrics.rulerHeight,
-      state.viewport.height - metrics.scrollbarSize,
-    ),
+    y: Math.max(tracksTop, state.viewport.height - metrics.scrollbarSize),
     width: metrics.scrollbarSize,
     height: metrics.scrollbarSize,
+  };
+  const overviewRect = {
+    x: metrics.trackHeaderWidth,
+    y: metrics.rulerHeight,
+    width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth),
+    height: laneHeight,
+  };
+  const overviewHeaderRect = {
+    x: 0,
+    y: metrics.rulerHeight,
+    width: metrics.trackHeaderWidth,
+    height: laneHeight,
   };
 
   return {
@@ -325,6 +345,8 @@ function createLayout(
     timelineRect,
     trackBodyRect,
     scrollbarCornerRect,
+    overviewRect,
+    overviewHeaderRect,
   };
 }
 
@@ -360,13 +382,14 @@ function createTrackRows(
   metrics: PlaylistMetrics,
   flagsByTrackId: Map<string, { hasClips: boolean; hasSelectedClips: boolean }>,
   cache: TrackLayoutCache,
+  virtualTracks: boolean,
 ): PlaylistTrackRowPresentation[] {
   const top =
     state.viewport.scrollY - metrics.trackOverscan * metrics.trackHeight;
   const bottom =
     state.viewport.scrollY +
     state.viewport.height -
-    metrics.rulerHeight +
+    getTracksTop(metrics) +
     metrics.trackOverscan * metrics.trackHeight;
   const rows: PlaylistTrackRowPresentation[] = [];
 
@@ -388,6 +411,11 @@ function createTrackRows(
         ),
       );
     }
+  }
+
+  // virtualTracks: false — nothing below the real tracks but background.
+  if (!virtualTracks) {
+    return rows;
   }
 
   // Virtual tracks past the materialised range, using the metric default
@@ -437,7 +465,7 @@ function buildTrackRow(
   height: number,
   flagsByTrackId: Map<string, { hasClips: boolean; hasSelectedClips: boolean }>,
 ): PlaylistTrackRowPresentation {
-  const rowTop = metrics.rulerHeight + topInScene - state.viewport.scrollY;
+  const rowTop = getTracksTop(metrics) + topInScene - state.viewport.scrollY;
   const rowRect = {
     x: metrics.trackHeaderWidth,
     y: rowTop,
@@ -524,7 +552,7 @@ function createClipViews(
     x: Math.max(0, metrics.trackHeaderWidth - metrics.timelineOverscanPx),
     y: Math.max(
       0,
-      metrics.rulerHeight - metrics.trackOverscan * metrics.trackHeight,
+      getTracksTop(metrics) - metrics.trackOverscan * metrics.trackHeight,
     ),
     width: Math.max(
       0,
@@ -535,7 +563,7 @@ function createClipViews(
     height: Math.max(
       0,
       state.viewport.height -
-        metrics.rulerHeight +
+        getTracksTop(metrics) +
         metrics.trackOverscan * metrics.trackHeight * 2,
     ),
   });
@@ -554,17 +582,17 @@ function createClipViews(
     metrics,
   );
   const visibleStartLocalY =
-    clipVisibilityBounds.y - metrics.rulerHeight + state.viewport.scrollY;
+    clipVisibilityBounds.y - getTracksTop(metrics) + state.viewport.scrollY;
   const visibleEndLocalY =
     clipVisibilityBounds.y +
     clipVisibilityBounds.height -
-    metrics.rulerHeight +
+    getTracksTop(metrics) +
     state.viewport.scrollY;
 
   const views: PlaylistClipPresentation[] = [];
   const pxPerBeat = state.viewport.pxPerBeat;
   const headerOffset = metrics.trackHeaderWidth - state.viewport.scrollX;
-  const rulerOffset = metrics.rulerHeight - state.viewport.scrollY;
+  const rulerOffset = getTracksTop(metrics) - state.viewport.scrollY;
 
   for (const clip of state.clips) {
     const clipEnd = clip.start + clip.duration;
@@ -659,7 +687,7 @@ function createDragPreviewView(
   if (!preview) return null;
   const pxPerBeat = state.viewport.pxPerBeat;
   const headerOffset = metrics.trackHeaderWidth - state.viewport.scrollX;
-  const rulerOffset = metrics.rulerHeight - state.viewport.scrollY;
+  const rulerOffset = getTracksTop(metrics) - state.viewport.scrollY;
   const clipById = new Map(state.clips.map((c) => [c.id, c] as const));
   const buildRect = (
     start: number,
@@ -804,6 +832,7 @@ function createRulerTicks(
 function createScrollbars(
   state: PlaylistState,
   metrics: PlaylistMetrics,
+  layoutOptions: PlaylistLayoutOptions,
 ): PlaylistPresentation["scrollbars"] {
   return {
     horizontal: {
@@ -812,7 +841,7 @@ function createScrollbars(
     },
     vertical: {
       trackRect: getVerticalScrollbarRect(state, metrics),
-      thumbRect: getVerticalScrollbarThumbRect(state, metrics),
+      thumbRect: getVerticalScrollbarThumbRect(state, metrics, layoutOptions),
     },
   };
 }
@@ -903,11 +932,18 @@ export function createPlaylistPresentation(
   state: PlaylistState,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
   timeAxis: PlaylistTimeAxis | null = null,
+  layoutOptions: PlaylistLayoutOptions = {},
 ): PlaylistPresentation {
   const cache = buildTrackLayoutCache(state, metrics);
   const flagsByTrackId = getTrackFlags(state);
   const layout = createLayout(state, metrics);
-  const trackRows = createTrackRows(state, metrics, flagsByTrackId, cache);
+  const trackRows = createTrackRows(
+    state,
+    metrics,
+    flagsByTrackId,
+    cache,
+    layoutOptions.virtualTracks !== false,
+  );
   const trackRowsByIndex = new Map(
     trackRows.map((row) => [row.index, row] as const),
   );
@@ -919,7 +955,7 @@ export function createPlaylistPresentation(
   // visibility flag remains a strict-intersect filter for the renderer.
   const visibleClipViews = clipViews.filter((view) => view.isVisible);
   const rulerTicks = createRulerTicks(state, metrics, timeAxis);
-  const scrollbars = createScrollbars(state, metrics);
+  const scrollbars = createScrollbars(state, metrics, layoutOptions);
 
   return {
     state,
@@ -942,11 +978,11 @@ export function createPlaylistPresentation(
     timeToScreenX: (time: number) => timeToScreenX(state, time, metrics),
     screenXToTime: (screenX: number) => screenXToTime(state, screenX, metrics),
     trackIndexToScreenY: (trackIndex: number) =>
-      metrics.rulerHeight +
+      getTracksTop(metrics) +
       trackTopAt(trackIndex, cache, metrics) -
       state.viewport.scrollY,
     screenYToTrackIndex: (screenY: number) => {
-      const localY = screenY - metrics.rulerHeight + state.viewport.scrollY;
+      const localY = screenY - getTracksTop(metrics) + state.viewport.scrollY;
       if (localY <= 0) return 0;
       for (let i = 0; i < cache.trackTops.length; i += 1) {
         const top = cache.trackTops[i]!;

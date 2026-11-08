@@ -73,34 +73,46 @@ textarea {
   user-select: none;
 }
 
-.playlist-shell__toolbar {
-  position: absolute;
-  top: 6px;
-  right: 12px;
+/* Tool row: its own strip between the summary bar and the canvas, so
+   nothing floats over the ruler dates or the money lane. */
+.playlist-shell__bar {
+  position: relative;
+  z-index: 6;
+  flex: none;
   display: flex;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: rgba(20, 20, 20, 0.85);
-  backdrop-filter: blur(4px);
-  z-index: 5;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  min-width: 0;
+  padding: 0 8px 0 4px;
+  border-bottom: 1px solid var(--line);
+  background: #1c1c1c;
+  overflow: hidden;
+}
+
+.playlist-shell__toolbar {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
 }
 
 .playlist-shell__tool {
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
+  flex: none;
   align-items: center;
-  justify-content: center;
-  min-width: 36px;
-  padding: 4px 6px;
+  gap: 5px;
+  height: 24px;
+  padding: 0 7px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
 }
@@ -116,29 +128,43 @@ textarea {
   color: var(--text);
 }
 
+.playlist-shell__tool-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.playlist-shell__tool[data-active="true"] .playlist-shell__tool-icon {
+  color: var(--accent);
+}
+
 .playlist-shell__tool-label {
-  display: block;
-  line-height: 1.1;
+  line-height: 1;
 }
 
 .playlist-shell__tool-hotkey {
-  display: block;
-  margin-top: 1px;
+  min-width: 14px;
+  padding: 1px 3px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
   font-size: 9px;
-  color: var(--muted);
+  line-height: 1;
+  text-align: center;
   letter-spacing: 0.04em;
-}
-
-.playlist-shell__tool[data-active="true"] .playlist-shell__tool-hotkey {
-  color: var(--muted);
 }
 
 .playlist-shell__counter {
   display: inline-flex;
+  flex: none;
   align-items: baseline;
   gap: 4px;
-  padding: 4px 8px;
-  margin-left: 6px;
+  padding: 3px 8px;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--panel);
@@ -146,6 +172,7 @@ textarea {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
+  white-space: nowrap;
   user-select: none;
   transition: border-color 80ms ease, color 80ms ease;
 }
@@ -155,47 +182,63 @@ textarea {
 }
 
 .playlist-shell__counter-value {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .playlist-shell__counter-label {
   color: var(--muted);
-  text-transform: uppercase;
-  font-size: 9px;
-  letter-spacing: 0.06em;
+  font-size: 10px;
+  letter-spacing: 0.02em;
 }
 
 .playlist-shell__counter-selected {
   color: var(--accent, #f4d35e);
   font-size: 10px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
 }
 
 .playlist-shell__snap {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 6px;
   padding: 0 8px;
-  margin-left: 6px;
   border-left: 1px solid var(--line);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .playlist-shell__snap-select {
-  padding: 4px 6px;
+  padding: 2px 6px;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--panel);
   color: var(--text);
   font-size: 11px;
   font-weight: 600;
+  text-transform: none;
   cursor: pointer;
+}
+
+/* Narrow windows: icons + hotkeys only (the title keeps the name). */
+@media (max-width: 1240px) {
+  .playlist-shell__tool-label {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .playlist-shell__tool-hotkey,
+  .playlist-shell__snap-label {
+    display: none;
+  }
 }
 
 .playlist-shell__menu {
@@ -768,36 +811,26 @@ textarea {
   background: rgba(255, 255, 255, 0.08);
 }
 
-/* --- Playhead readout (overlay on the canvas) ------------------------ */
-/* Default: bottom-left of the clip lane, right of the 148px track headers
-   and above the 14px horizontal scrollbar. Never intercepts the pointer. */
+/* --- Playhead readout (in the tool row, right-aligned) ---------------- */
+/* In flow inside .playlist-shell__bar: never over the canvas, so it can't
+   cover the money lane, the ruler or the tools. Never intercepts input. */
 .fin-readout {
-  position: absolute;
-  left: 156px;
-  bottom: 22px;
-  z-index: 4;
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 3px 8px;
+  gap: 8px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: 4px;
-  background: rgba(20, 20, 20, 0.85);
-  backdrop-filter: blur(4px);
+  background: var(--panel);
   color: var(--text);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   pointer-events: none;
   user-select: none;
-}
-
-/* The open analysis rail (280px, z-index 6) would cover the readout's
-   date and cash: shift it right of the rail. FinancialSidePanel renders
-   before PlayheadReadout in the stage, so a sibling selector is enough
-   (no :has(), nothing per frame). */
-.fin-side:not(.fin-side--collapsed) ~ .fin-readout {
-  left: 288px;
 }
 
 .fin-readout__date {
@@ -809,7 +842,7 @@ textarea {
   display: inline-flex;
   align-items: baseline;
   gap: 4px;
-  padding-left: 10px;
+  padding-left: 8px;
   border-left: 1px solid var(--line);
 }
 
@@ -1180,7 +1213,6 @@ textarea {
 }
 
 .fin-editor input[type="text"],
-.fin-editor input[type="date"],
 .fin-editor select {
   width: 100%;
   min-width: 0;
@@ -1196,7 +1228,6 @@ textarea {
 }
 
 .fin-editor input[type="text"]:focus,
-.fin-editor input[type="date"]:focus,
 .fin-editor select:focus {
   border-color: var(--accent);
   outline: none;
@@ -1204,6 +1235,28 @@ textarea {
 
 .fin-editor input:disabled {
   opacity: 0.45;
+}
+
+/* es-MX date field: free text + canonical preview ("dom 15 NOV 2026"). */
+.fin-editor .fin-date__input[aria-invalid="true"]:not(:disabled) {
+  border-color: rgba(224, 100, 92, 0.65);
+}
+
+.fin-date__preview {
+  min-height: 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.fin-date__preview[data-state="ok"] {
+  color: var(--text);
+}
+
+.fin-date__preview[data-state="invalid"] {
+  color: var(--fin-negative);
 }
 
 .fin-editor__suffix {
@@ -1321,4 +1374,30 @@ textarea {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Overlays open BELOW the ruler + money lane (the shell sets both heights
+   from the playlist metrics), so the rails never cover the curve. */
+.playlist-shell--finance .fin-side,
+.playlist-shell--finance .playlist-inspector {
+  top: calc(var(--pl-ruler-h, 38px) + var(--pl-lane-h, 0px));
+}
+
+/* Collapsed "Análisis" toggle lives in the money lane's header cell (an
+   inert area under the "Caja" title) instead of over the first track
+   header, where it used to cover the track name. */
+.playlist-shell--finance .fin-side--collapsed {
+  top: calc(var(--pl-ruler-h, 38px) + var(--pl-lane-h, 0px) - 30px);
+  left: 10px;
+}
+.playlist-shell--finance .fin-side--collapsed .fin-side__tab {
+  flex-direction: row;
+  width: auto;
+  padding: 3px 8px;
+  border-left: 1px solid var(--line);
+  border-radius: 4px;
+}
+.playlist-shell--finance .fin-side--collapsed .fin-side__tab-label {
+  writing-mode: horizontal-tb;
+  transform: none;
 }

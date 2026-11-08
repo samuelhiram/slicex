@@ -39,8 +39,19 @@ import {
   type ISODate,
   type LiquidityWarning,
   type UpcomingPayment,
+  debtByAccountAt,
+  estimateDebtPayoffs,
+  type DebtPayoffEstimate,
 } from "@slicex/core";
-import type { PlaylistClip, PlaylistCore, PlaylistState } from "@slicex/canvas";
+import type {
+  PlaylistClip,
+  PlaylistClipContent,
+  PlaylistCore,
+  PlaylistDragAnnotation,
+  PlaylistOverviewData,
+  PlaylistState,
+  PlaylistTrackMeta,
+} from "@slicex/canvas";
 import type { FinancialBridgeApi } from "./bridge-api";
 import { formatMoney } from "./format";
 import { FREQUENCY_SHORT, KIND_COLORS, KIND_LABELS } from "./labels";
@@ -58,6 +69,14 @@ import {
   openEndBeat,
   type ObservedGeometry,
 } from "./mapping";
+import {
+  buildClipContents,
+  buildOverview,
+  buildTrackMeta,
+  cashSeries,
+  describeItemAt,
+  dragAnnotation,
+} from "./visuals";
 
 // Label the playlist gives to clips created without a template.
 const GENERIC_CLIP_LABEL = "Clip";
@@ -156,6 +175,29 @@ export class FinancialBridge implements FinancialBridgeApi {
 
   private itemIndex = new Map<string, FinancialItem>();
   private readonly detailCache = new Map<string, string | null>();
+  private detailDay = Number.NaN;
+  private debtAtDay: { revision: number; day: number; value: Map<string, number> } | null =
+    null;
+  // Renderer providers: rebuilt lazily once per revision, identity-stable.
+  private contentIndex: Map<string, PlaylistClipContent> | null = null;
+  private previousContent: Map<string, PlaylistClipContent> = new Map();
+  private trackMetaIndex: Map<string, PlaylistTrackMeta> | null = null;
+  private previousTrackMeta: Map<string, PlaylistTrackMeta> = new Map();
+  private overviewCache: {
+    revision: number;
+    baseline: DocSnapshot | null;
+    data: PlaylistOverviewData;
+  } | null = null;
+  private dragCache: {
+    revision: number;
+    baseline: DocSnapshot;
+    data: PlaylistDragAnnotation;
+  } | null = null;
+  private readonly snapshotProjections = new WeakMap<DocSnapshot, FinancialProjection>();
+  private payoffCache: {
+    key: FinancialItem[];
+    value: Map<string, DebtPayoffEstimate>;
+  } | null = null;
   private sparkIndex: Map<string, number[]> | null = null;
   private previousSpark = new Map<string, number[]>();
 
@@ -241,13 +283,72 @@ export class FinancialBridge implements FinancialBridgeApi {
     return this.warnings;
   }
 
+  // Follows the playhead day (debt left, interest share, MSI n/12): the
+  // cache is per (revision, day), so it changes at most once per day.
   getClipDetail(clipId: string): string | null {
+    const day = this.playheadDay();
+    if (day !== this.detailDay) {
+      this.detailCache.clear();
+      this.detailDay = day;
+    }
     const cached = this.detailCache.get(clipId);
     if (cached !== undefined) return cached;
     const item = this.itemIndex.get(clipId);
-    const text = item ? describeItem(item, this.doc) : null;
+    const text = item
+      ? describeItemAt(item, this.doc, this.projection, dateOf(this.doc, day), this.debtAt(day))
+      : null;
     this.detailCache.set(clipId, text);
     return text;
+  }
+
+  getClipContent(clipId: string): PlaylistClipContent | null {
+    if (!this.contentIndex) {
+      this.contentIndex = buildClipContents(this.doc, this.projection, this.previousContent);
+    }
+    return this.contentIndex.get(clipId) ?? null;
+  }
+
+  getOverviewData(): PlaylistOverviewData {
+    const baseline = this.gestureBaseline();
+    const cached = this.overviewCache;
+    if (cached && cached.revision === this.revision && cached.baseline === baseline) {
+      return cached.data;
+    }
+    const data = buildOverview(
+      this.doc,
+      this.projection,
+      this.warnings,
+      baseline ? cashSeries(this.doc, this.projectionOf(baseline)) : null,
+    );
+    this.overviewCache = { revision: this.revision, baseline, data };
+    return data;
+  }
+
+  getDragAnnotation(): PlaylistDragAnnotation | null {
+    const baseline = this.gestureBaseline();
+    if (!baseline) return null;
+    const cached = this.dragCache;
+    if (cached && cached.revision === this.revision && cached.baseline === baseline) {
+      return cached.data;
+    }
+    const data = dragAnnotation(this.doc, this.projectionOf(baseline), this.projection);
+    this.dragCache = { revision: this.revision, baseline, data };
+    return data;
+  }
+
+  getTrackMeta(trackId: string): PlaylistTrackMeta | null {
+    if (!this.trackMetaIndex) {
+      const trackOfItem = new Map<string, string>();
+      for (const [id, observed] of this.observed) trackOfItem.set(id, observed.trackId);
+      this.trackMetaIndex = buildTrackMeta(
+        this.doc,
+        this.projection,
+        trackOfItem,
+        this.payoffs(),
+        this.previousTrackMeta,
+      );
+    }
+    return this.trackMetaIndex.get(trackId) ?? null;
   }
 
   // Called by the renderer every frame for visible clips: O(1) after the
@@ -850,6 +951,11 @@ export class FinancialBridge implements FinancialBridgeApi {
     for (const item of this.doc.items) index.set(item.id, item);
     this.itemIndex = index;
     this.detailCache.clear();
+    this.detailDay = Number.NaN;
+    if (this.contentIndex) this.previousContent = this.contentIndex;
+    this.contentIndex = null;
+    if (this.trackMetaIndex) this.previousTrackMeta = this.trackMetaIndex;
+    this.trackMetaIndex = null;
     if (this.sparkIndex) this.previousSpark = this.sparkIndex;
     this.sparkIndex = null;
   }
@@ -912,11 +1018,72 @@ export class FinancialBridge implements FinancialBridgeApi {
     this.observed = observed;
     this.lastClips = state.clips;
     this.lastTracks = state.tracks;
+    if (this.trackMetaIndex) this.previousTrackMeta = this.trackMetaIndex;
+    this.trackMetaIndex = null;
   }
 
   private isClipLocked(clip: PlaylistClip): boolean {
     const state = this.core.getState();
     return state.tracks.some((track) => track.id === clip.trackId && track.locked === true);
+  }
+
+  private playheadDay(): number {
+    return Math.max(0, Math.floor(this.core.getState().playPosition.time));
+  }
+
+  private debtAt(day: number): Map<string, number> {
+    const cached = this.debtAtDay;
+    if (cached && cached.revision === this.revision && cached.day === day) return cached.value;
+    const value = debtByAccountAt(this.projection, dateOf(this.doc, day));
+    this.debtAtDay = { revision: this.revision, day, value };
+    return value;
+  }
+
+  // The document as it was when the open pointer gesture started, when it
+  // differs from now (null otherwise): the "before" of the gesture.
+  private gestureBaseline(): DocSnapshot | null {
+    const base = this.core.getGestureBase();
+    if (!base) return null;
+    const snapshot = this.snapshots.get(base);
+    return snapshot && snapshot !== this.snap ? snapshot : null;
+  }
+
+  private projectionOf(snapshot: DocSnapshot): FinancialProjection {
+    if (snapshot === this.snap) return this.projection;
+    let projection = this.snapshotProjections.get(snapshot);
+    if (!projection) {
+      projection = projectFinancialDocument({
+        ...this.doc,
+        items: snapshot.items,
+        initialCash: snapshot.initialCash,
+        minimumCashReserve: snapshot.minimumCashReserve,
+      });
+      this.snapshotProjections.set(snapshot, projection);
+    }
+    return projection;
+  }
+
+  // Payoff estimates only depend on debt-related items: reuse them while
+  // those item objects are unchanged (dragging income doesn't recompute).
+  private payoffs(): Map<string, DebtPayoffEstimate> {
+    const key = this.doc.items.filter(
+      (item) =>
+        item.kind === "credit-card" ||
+        item.kind === "loan" ||
+        item.kind === "installment-plan" ||
+        item.kind === "card-purchase",
+    );
+    const cached = this.payoffCache;
+    if (
+      cached &&
+      cached.key.length === key.length &&
+      cached.key.every((item, index) => item === key[index])
+    ) {
+      return cached.value;
+    }
+    const value = estimateDebtPayoffs(this.doc);
+    this.payoffCache = { key, value };
+    return value;
   }
 
   private findClip(id: string): PlaylistClip | undefined {

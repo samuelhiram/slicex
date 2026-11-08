@@ -234,7 +234,11 @@ describe("expandFinancialEvents — memoised path equals the reference algorithm
         );
       }
     }
-  });
+    // Correctness fuzz, not a perf budget: the cost is the deliberately
+    // slow cache-bypassed REFERENCE expansion recomputed 160 times (~3 s
+    // alone, >5 s under the parallel full suite). The memoised path's speed
+    // is budgeted separately in finance-perf.spec.ts.
+  }, 30_000);
 
   it("recounts '#n' ids across items that share an id (and the same object listed twice)", () => {
     const day = "2026-11-10";

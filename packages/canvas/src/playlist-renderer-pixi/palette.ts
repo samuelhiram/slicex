@@ -33,6 +33,17 @@ export const COLORS = {
   markerRecording: 0xe85c5c,
   loopRegion: 0x6fd28a,
   recordingIndicator: 0xe85c5c,
+  // Generic value tones (overview lane, meters, drag annotation). The
+  // canvas does not know what they mean; the host picks the tone.
+  tonePositive: 0x5fcf8a,
+  toneWarning: 0xe6a85a,
+  toneDanger: 0xf0625a,
+  toneInfo: 0x7ec1ff,
+  // Overview lane chrome.
+  overviewBackground: 0x141414,
+  overviewZeroLine: 0x6a6a6a,
+  overviewBaseline: 0xa8a8a8,
+  overviewSecondary: 0x9ecbff,
 } as const;
 
 export type PlaylistRendererColors = typeof COLORS;

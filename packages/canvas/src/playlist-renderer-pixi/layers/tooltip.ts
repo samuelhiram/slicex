@@ -18,11 +18,11 @@ export interface TooltipContext {
   textLayer: Container;
 }
 
-const TOOLTIP_OFFSET_X = 12;
-const TOOLTIP_OFFSET_Y = -22;
-const TOOLTIP_HEIGHT = 18;
-const TOOLTIP_PADDING_X = 8;
-const TOOLTIP_CHAR_WIDTH = 6.2; // approximate advance for size-11 sans
+export const TOOLTIP_OFFSET_X = 12;
+export const TOOLTIP_OFFSET_Y = -22;
+export const TOOLTIP_HEIGHT = 18;
+export const TOOLTIP_PADDING_X = 8;
+export const TOOLTIP_CHAR_WIDTH = 6.2; // approximate advance for size-11 sans
 
 export function drawTooltip(
   ctx: TooltipContext,

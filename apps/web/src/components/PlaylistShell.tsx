@@ -7,6 +7,7 @@ import {
   type PlaylistContextMenu,
   type PlaylistCore,
   type PlaylistMarkerKind,
+  type PlaylistMetrics,
   type PlaylistSnapMode,
   type PlaylistToolId,
 } from "@slicex/canvas";
@@ -28,6 +29,22 @@ import { FinancialSidePanel } from "../finance/components/FinancialSidePanel";
 // Playback speed of the financial timeline: 1 beat = 1 day.
 const PLAYBACK_DAYS_PER_SECOND = 7;
 
+// The finance playlist draws the money waveform in an overview lane between
+// the ruler and the first track.
+const OVERVIEW_LANE_HEIGHT = 112;
+const SHELL_METRICS: PlaylistMetrics = {
+  ...FINANCE_PLAYLIST_METRICS,
+  overviewLaneHeight: OVERVIEW_LANE_HEIGHT,
+};
+
+// Canvas geometry the DOM overlays (side rail, inspector) align to, so they
+// open BELOW the ruler + money lane instead of covering the curve. A
+// module-level constant: React never re-applies an unchanged style object.
+const SHELL_LAYOUT_STYLE = {
+  "--pl-ruler-h": `${SHELL_METRICS.rulerHeight}px`,
+  "--pl-lane-h": `${SHELL_METRICS.overviewLaneHeight}px`,
+} as React.CSSProperties;
+
 // Financial item editor: edit an existing item (double-click on its clip)
 // or create one from a draft ("+ Ingreso" & co.; added only on "Guardar").
 type EditorState =
@@ -45,39 +62,74 @@ function localTodayISO(): string {
   return `${y}-${m}-${d}`;
 }
 
+// Finance-native snap: 1 beat = 1 day, 1 bar = 1 week (beatsPerBar 7),
+// "axis" = the calendar axis' snap targets (quincenas; falls back to the
+// day when the axis provides none).
 const SNAP_OPTIONS: ReadonlyArray<{ value: PlaylistSnapMode; label: string }> =
   [
-    { value: "main", label: "Main" },
-    { value: "line", label: "Line" },
-    { value: "cell", label: "Cell" },
-    { value: "none", label: "None" },
-    { value: "sixth-step", label: "1/6 Step" },
-    { value: "quarter-step", label: "1/4 Step" },
-    { value: "third-step", label: "1/3 Step" },
-    { value: "half-step", label: "1/2 Step" },
-    { value: "step", label: "Step" },
-    { value: "sixth-beat", label: "1/6 Beat" },
-    { value: "quarter-beat", label: "1/4 Beat" },
-    { value: "third-beat", label: "1/3 Beat" },
-    { value: "half-beat", label: "1/2 Beat" },
-    { value: "beat", label: "Beat" },
-    { value: "bar", label: "Bar" },
-    { value: "events", label: "Events" },
+    { value: "beat", label: "Día" },
+    { value: "bar", label: "Semana" },
+    { value: "axis", label: "Quincena" },
+    { value: "none", label: "Libre" },
   ];
 
+const SNAP_VALUES: ReadonlySet<PlaylistSnapMode> = new Set(
+  SNAP_OPTIONS.map((option) => option.value),
+);
+
+// Paint (B) and Slip (S) keep their hotkeys; they are just not offered in
+// the toolbar (no clear financial meaning to advertise).
 const TOOL_BUTTONS: ReadonlyArray<{
   id: PlaylistToolId;
   label: string;
-  title: string;
+  icon: React.ReactNode;
 }> = [
-  { id: "select", label: "Sel", title: "Select" },
-  { id: "draw", label: "Drw", title: "Draw" },
-  { id: "paint", label: "Pnt", title: "Paint" },
-  { id: "delete", label: "Del", title: "Delete" },
-  { id: "mute", label: "Mut", title: "Mute" },
-  { id: "slip", label: "Slp", title: "Slip" },
-  { id: "slice", label: "Slc", title: "Slice" },
-  { id: "zoom", label: "Zm", title: "Zoom" },
+  {
+    id: "select",
+    label: "Seleccionar",
+    icon: <path d="M3.5 1.5v10l2.8-2.6 1.9 4.1 1.6-.7-1.9-4.1 3.8-.2z" fill="currentColor" stroke="none" />,
+  },
+  {
+    id: "draw",
+    label: "Dibujar",
+    icon: <path d="M2.5 11.5 3 9l6.6-6.6 2 2L5 11zM8.4 3.6l2 2" />,
+  },
+  {
+    id: "slice",
+    label: "Cortar",
+    icon: (
+      <>
+        <circle cx="4" cy="11" r="1.8" />
+        <circle cx="10" cy="11" r="1.8" />
+        <path d="M5.2 9.6 11 2M8.8 9.6 3 2" />
+      </>
+    ),
+  },
+  {
+    id: "mute",
+    label: "Silenciar",
+    icon: (
+      <>
+        <circle cx="7" cy="7" r="5" />
+        <path d="M3.5 10.5l7-7" />
+      </>
+    ),
+  },
+  {
+    id: "delete",
+    label: "Borrar",
+    icon: <path d="M2.5 4h9M5.5 4V2.5h3V4M3.8 4l.6 8h5.2l.6-8" />,
+  },
+  {
+    id: "zoom",
+    label: "Zoom",
+    icon: (
+      <>
+        <circle cx="6" cy="6" r="3.8" />
+        <path d="M8.8 8.8 12.5 12.5" />
+      </>
+    ),
+  },
 ];
 
 interface ToolbarProps {
@@ -459,11 +511,6 @@ function PlaylistContextMenuOverlay({ core }: { core: PlaylistCore | null }) {
 function PlaylistToolbar({ core }: ToolbarProps) {
   const [active, setActive] = React.useState<PlaylistToolId>("select");
   const [snapMode, setSnapMode] = React.useState<PlaylistSnapMode>("beat");
-  const [stretchMode, setStretchMode] = React.useState(false);
-  const [transportMode, setTransportMode] = React.useState<"song" | "pattern">(
-    "song",
-  );
-  const [recording, setRecording] = React.useState(false);
   const [clipCount, setClipCount] = React.useState(0);
   const [selectedCount, setSelectedCount] = React.useState(0);
 
@@ -474,20 +521,13 @@ function PlaylistToolbar({ core }: ToolbarProps) {
     const s0 = core.getState();
     setActive(s0.tool);
     setSnapMode(s0.snap.mode);
-    setStretchMode(s0.stretchMode);
-    setTransportMode(s0.transport.mode);
-    setRecording(s0.transport.recording);
     setClipCount(s0.clips.length);
     setSelectedCount(s0.selection.clipIds.length);
     const sub = core.subscribe((state) => {
+      // Primitives only: React bails out (Object.is) on every notify that
+      // does not change them — hover, play tick, viewport (canon §2.6).
       setActive(state.tool);
       setSnapMode(state.snap.mode);
-      setStretchMode(state.stretchMode);
-      setTransportMode(state.transport.mode);
-      setRecording(state.transport.recording);
-      // React useState bails out when the new value is === the old one
-      // (number identity), so setting these every notify is cheap when
-      // nothing changed (canon §3.10).
       setClipCount(state.clips.length);
       setSelectedCount(state.selection.clipIds.length);
     });
@@ -495,19 +535,33 @@ function PlaylistToolbar({ core }: ToolbarProps) {
   }, [core]);
 
   return (
-    <div className="playlist-shell__toolbar" role="toolbar" aria-label="Tools">
+    <div
+      className="playlist-shell__toolbar"
+      role="toolbar"
+      aria-label="Herramientas"
+    >
       {TOOL_BUTTONS.map((button) => {
         const hotkey = PLAYLIST_TOOL_HOTKEYS[button.id];
+        const isActive = active === button.id;
         return (
           <button
             key={button.id}
             type="button"
             className="playlist-shell__tool"
-            data-active={active === button.id ? "true" : "false"}
+            data-active={isActive ? "true" : "false"}
             data-tool={button.id}
-            title={`${button.title} (${hotkey})`}
+            aria-pressed={isActive}
+            aria-label={button.label}
+            title={`${button.label} (${hotkey})`}
             onClick={() => core?.setTool(button.id)}
           >
+            <svg
+              className="playlist-shell__tool-icon"
+              viewBox="0 0 14 14"
+              aria-hidden="true"
+            >
+              {button.icon}
+            </svg>
             <span className="playlist-shell__tool-label">{button.label}</span>
             <span className="playlist-shell__tool-hotkey">{hotkey}</span>
           </button>
@@ -515,9 +569,9 @@ function PlaylistToolbar({ core }: ToolbarProps) {
       })}
       <label
         className="playlist-shell__snap"
-        title="Snap mode (Backspace toggles None)"
+        title="Ajustar a (Retroceso alterna Libre)"
       >
-        <span className="playlist-shell__snap-label">Snap</span>
+        <span className="playlist-shell__snap-label">Ajustar a</span>
         <select
           value={snapMode}
           onChange={(event) =>
@@ -525,6 +579,13 @@ function PlaylistToolbar({ core }: ToolbarProps) {
           }
           className="playlist-shell__snap-select"
         >
+          {SNAP_VALUES.has(snapMode) ? null : (
+            // A mode set elsewhere (e.g. a keyboard shortcut) that the
+            // finance toolbar does not offer: shown, not selectable.
+            <option value={snapMode} disabled>
+              Otro
+            </option>
+          )}
           {SNAP_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
@@ -532,57 +593,20 @@ function PlaylistToolbar({ core }: ToolbarProps) {
           ))}
         </select>
       </label>
-      {core?.stretchEnabled ? (
-        // Hidden when the core disables time-stretch (the finance playlist:
-        // a clip's content has no time-stretch meaning there).
-        <button
-          type="button"
-          className="playlist-shell__tool"
-          data-active={stretchMode ? "true" : "false"}
-          data-tool="stretch"
-          title="Stretch mode — resize stretches content (Shift+M)"
-          onClick={() => core.toggleStretchMode()}
-        >
-          <span className="playlist-shell__tool-label">Str</span>
-          <span className="playlist-shell__tool-hotkey">⇧M</span>
-        </button>
-      ) : null}
-      <button
-        type="button"
-        className="playlist-shell__tool"
-        data-active={transportMode === "pattern" ? "true" : "false"}
-        title={`Transport: ${transportMode === "song" ? "Song" : "Pattern"} (L)`}
-        onClick={() => core?.toggleTransportMode()}
-      >
-        <span className="playlist-shell__tool-label">
-          {transportMode === "song" ? "Sng" : "Pat"}
-        </span>
-        <span className="playlist-shell__tool-hotkey">L</span>
-      </button>
-      <button
-        type="button"
-        className="playlist-shell__tool"
-        data-active={recording ? "true" : "false"}
-        title="Toggle recording (R)"
-        onClick={() => core?.toggleTransportRecording()}
-      >
-        <span className="playlist-shell__tool-label">Rec</span>
-        <span className="playlist-shell__tool-hotkey">R</span>
-      </button>
       <div
         className="playlist-shell__counter"
         role="status"
-        aria-label="Playlist item counter"
-        title={`${clipCount} item${clipCount === 1 ? "" : "s"} in the playlist${selectedCount > 0 ? ` · ${selectedCount} selected` : ""}`}
+        aria-label="Objetos en el timeline"
+        title={`${clipCount} ${clipCount === 1 ? "objeto" : "objetos"} en el timeline${selectedCount > 0 ? ` · ${selectedCount} seleccionados` : ""}`}
         data-has-selection={selectedCount > 0 ? "true" : "false"}
       >
         <span className="playlist-shell__counter-value">{clipCount}</span>
         <span className="playlist-shell__counter-label">
-          item{clipCount === 1 ? "" : "s"}
+          {clipCount === 1 ? "objeto" : "objetos"}
         </span>
         {selectedCount > 0 ? (
           <span className="playlist-shell__counter-selected">
-            {selectedCount} sel
+            {selectedCount} sel.
           </span>
         ) : null}
       </div>
@@ -638,11 +662,13 @@ export function PlaylistShell() {
       if (cancelled) return;
       const doc = createDemoFinancialDocument(localTodayISO());
       instance = createPlaylistCore(createFinancialPlaylistState(doc), {
-        metrics: FINANCE_PLAYLIST_METRICS,
+        metrics: SHELL_METRICS,
         timeAxis: createCalendarTimeAxis(doc.startDate),
         // Financial clips have no time-stretch meaning: a stretch would
         // rescale the schedule phase and shift every payday.
         stretchEnabled: false,
+        // Only the real lanes: no endless empty tracks under the items.
+        virtualTracks: false,
       });
       const bridgeInstance = new FinancialBridge(instance, doc);
       financial = bridgeInstance;
@@ -653,13 +679,20 @@ export function PlaylistShell() {
         onError: (reason) => {
           setError(reason instanceof Error ? reason.message : "Renderer failed.");
         },
+        // Render-loop providers: O(1) cached lookups on the bridge that
+        // return the SAME object while unchanged (canon: provider contract).
         getClipDetail: (clipId) => bridgeInstance.getClipDetail(clipId),
         getClipSparkline: (clipId) => bridgeInstance.getClipSparkline(clipId),
+        getClipContent: (clipId) => bridgeInstance.getClipContent(clipId),
+        getOverviewData: () => bridgeInstance.getOverviewData(),
+        getDragAnnotation: () => bridgeInstance.getDragAnnotation(),
+        getTrackMeta: (trackId) => bridgeInstance.getTrackMeta(trackId),
       });
-      // Clip detail / sparkline text comes from the bridge, which can change
-      // with no core notify (e.g. only an amount edited in the editor). The
-      // bridge notifies only on real data changes, never per frame, and
-      // invalidate() just schedules the renderer's coalesced rAF frame.
+      // Provider data (clip detail / content, the money lane, track meta)
+      // comes from the bridge, which can change with no core notify (e.g.
+      // only an amount edited in the editor). The bridge notifies only on
+      // real data changes, never per frame, and invalidate() just schedules
+      // the renderer's coalesced rAF frame.
       const rendererInstance = renderer;
       unsubscribeBridge = bridgeInstance.subscribe(() =>
         rendererInstance.invalidate(),
@@ -729,7 +762,11 @@ export function PlaylistShell() {
   const editorOpen = editor !== null && bridge !== null;
 
   return (
-    <section className="playlist-shell playlist-shell--finance" aria-label="Playlist">
+    <section
+      className="playlist-shell playlist-shell--finance"
+      aria-label="Playlist"
+      style={SHELL_LAYOUT_STYLE}
+    >
       {bridge ? (
         <FinancialSummaryBar
           bridge={bridge}
@@ -737,8 +774,13 @@ export function PlaylistShell() {
           inert={editorOpen}
         />
       ) : null}
-      <div className="playlist-shell__stage" inert={editorOpen}>
+      {/* Tools + playhead readout get their own row: nothing floats over
+          the ruler dates or the money lane. */}
+      <div className="playlist-shell__bar" inert={editorOpen}>
         <PlaylistToolbar core={core} />
+        {bridge ? <PlayheadReadout bridge={bridge} /> : null}
+      </div>
+      <div className="playlist-shell__stage" inert={editorOpen}>
         <div
           ref={hostRef}
           className="playlist-shell__surface"
@@ -752,10 +794,7 @@ export function PlaylistShell() {
           </div>
         ) : null}
         <PlaylistInspector core={core} />
-        {/* Side panel BEFORE the readout: the open rail shifts the readout
-            with a sibling selector (globals.css) instead of covering it. */}
         {bridge ? <FinancialSidePanel bridge={bridge} /> : null}
-        {bridge ? <PlayheadReadout bridge={bridge} /> : null}
       </div>
       {editor && bridge ? (
         editor.mode === "edit" ? (

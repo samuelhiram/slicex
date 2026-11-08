@@ -18,7 +18,15 @@ export {
   projectFinancialDocument,
   projectFinancialTimeline,
 } from "./projection";
-export { debtByAccountAt, findLiquidityWarnings, nextPayment, snapshotAt } from "./queries";
+export {
+  accountActivity,
+  annualItemImpact,
+  debtByAccountAt,
+  findLiquidityWarnings,
+  nextPayment,
+  snapshotAt,
+} from "./queries";
+export { estimateDebtPayoffs } from "./payoff";
 export { rankDebtsByAvalanche, suggestAvalanchePayments } from "./strategy";
 export { cloneFinancialDocument, compareProjections, summarizeProjection } from "./scenario";
 export {

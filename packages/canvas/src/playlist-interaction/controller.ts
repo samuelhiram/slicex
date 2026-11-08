@@ -13,7 +13,6 @@ import {
   rectsIntersect,
   screenXToTime,
   screenYToTrackIndex,
-  snapTime,
 } from "../playlist-core";
 import { interpolateBrushPath } from "./brush";
 import type {
@@ -531,6 +530,12 @@ export function createPlaylistInteractionController(
       return;
     }
 
+    // Inert chrome (overview lane header cell): no tool, no menu.
+    if (hit.kind === "chrome") {
+      event.preventDefault();
+      return;
+    }
+
     if (event.button === 2) {
       if (state.tool === "zoom") {
         zoomToolApplyOut({ core, metrics, point, hit, event });
@@ -603,7 +608,7 @@ export function createPlaylistInteractionController(
         const next = automationPointFromScreen(state, hit.clip, point, metrics);
         core.addAutomationPoint(
           hit.clip.id,
-          snapTime(next.time, state, event.altKey),
+          core.snapTime(next.time, event.altKey, state),
           next.value,
         );
         event.preventDefault();
@@ -614,7 +619,7 @@ export function createPlaylistInteractionController(
         const next = automationPointFromScreen(state, hit.clip, point, metrics);
         core.addAutomationPoint(
           hit.clip.id,
-          snapTime(next.time, state, event.altKey),
+          core.snapTime(next.time, event.altKey, state),
           next.value,
         );
         event.preventDefault();
@@ -636,7 +641,7 @@ export function createPlaylistInteractionController(
         if (hit.kind === "empty") {
           const time = Math.max(
             0,
-            snapTime(screenXToTime(state, point.x, metrics), state, event.altKey),
+            core.snapTime(screenXToTime(state, point.x, metrics), event.altKey, state),
           );
           const trackIndex = screenYToTrackIndex(state, point.y, metrics);
           core.openBackgroundContextMenu(time, trackIndex, point);
@@ -689,9 +694,10 @@ export function createPlaylistInteractionController(
     }
 
     if (hit.kind === "scrollbar-vertical") {
+      const layout = core.getLayoutOptions();
       const track = getVerticalScrollbarRect(state, metrics);
-      let thumb = getVerticalScrollbarThumbRect(state, metrics);
-      const scrollableRange = getVerticalScrollableRange(state, metrics);
+      let thumb = getVerticalScrollbarThumbRect(state, metrics, layout);
+      const scrollableRange = getVerticalScrollableRange(state, metrics, layout);
       let startScrollY = state.viewport.scrollY;
       let anchorPoint = point;
       if (!hit.onThumb) {
@@ -703,7 +709,7 @@ export function createPlaylistInteractionController(
         );
         startScrollY = Math.max(0, ratio * scrollableRange);
         core.updateViewport({ scrollY: startScrollY });
-        thumb = getVerticalScrollbarThumbRect(core.getState(), metrics);
+        thumb = getVerticalScrollbarThumbRect(core.getState(), metrics, layout);
         anchorPoint = { x: point.x, y: thumb.y + thumb.height / 2 };
       }
       const travel = Math.max(1, track.height - thumb.height);
@@ -795,7 +801,7 @@ export function createPlaylistInteractionController(
 
     if (hit.kind === "play-position-marker" || hit.kind === "ruler") {
       core.setPlayPosition(
-        snapTime(screenXToTime(state, point.x, metrics), state, event.altKey),
+        core.snapTime(screenXToTime(state, point.x, metrics), event.altKey, state),
       );
       activeGesture = {
         kind: "play-position-drag",
@@ -967,18 +973,17 @@ export function createPlaylistInteractionController(
       const currentTime = screenXToTime(state, point.x, metrics);
       const rawPrimaryStart =
         primary.start + (currentTime - gesture.startPointerTime);
-      const primaryStart = snapTime(rawPrimaryStart, state, event.altKey);
+      const primaryStart = core.snapTime(rawPrimaryStart, event.altKey, state);
       const deltaTime = primaryStart - primary.start;
       const currentTrackIndex = screenYToTrackIndex(state, point.y, metrics);
       const trackDelta = currentTrackIndex - gesture.startTrackIndex;
+      // +Infinity with virtual tracks; the last real track otherwise, so
+      // the ghost never shows a drop on a row that is only background.
+      const maxTrack = Math.max(0, core.maxTrackIndex());
       const allMoves = gesture.originals.map((clip) => ({
         id: clip.id,
         start: clip.start + deltaTime,
-        trackIndex: clamp(
-          clip.trackIndex + trackDelta,
-          0,
-          Number.POSITIVE_INFINITY,
-        ),
+        trackIndex: clamp(clip.trackIndex + trackDelta, 0, maxTrack),
       }));
 
       core.moveClips(allMoves);
@@ -988,7 +993,7 @@ export function createPlaylistInteractionController(
         previewTrackIndex: clamp(
           gesture.startTrackIndex + trackDelta,
           0,
-          Number.POSITIVE_INFINITY,
+          maxTrack,
         ),
         previewStart: primaryStart,
         allMoves,
@@ -998,10 +1003,10 @@ export function createPlaylistInteractionController(
     }
 
     if (gesture.kind === "clip-resize") {
-      const time = snapTime(
+      const time = core.snapTime(
         screenXToTime(state, point.x, metrics),
-        state,
         event.altKey,
+        state,
       );
       // stretchEnabled === false keeps state.stretchMode false already; the
       // explicit check makes "no gesture enters stretch-resize" local.
@@ -1032,7 +1037,7 @@ export function createPlaylistInteractionController(
       // micro-drag (single-click bounce) doesn't leave a stray clip behind.
       // After creation, every subsequent move adjusts the right edge.
       const rawTime = screenXToTime(state, point.x, metrics);
-      const endTime = snapTime(rawTime, state, event.altKey);
+      const endTime = core.snapTime(rawTime, event.altKey, state);
       const minEnd = gesture.startSnappedStart + metrics.minClipDuration;
       if (endTime <= minEnd && gesture.createdClipId === null) {
         event.preventDefault();
@@ -1088,10 +1093,10 @@ export function createPlaylistInteractionController(
 
     if (gesture.kind === "slice-drag") {
       gesture.currentPoint = { ...point };
-      const snapped = snapTime(
+      const snapped = core.snapTime(
         Math.max(0, screenXToTime(state, point.x, metrics)),
-        state,
         event.altKey,
+        state,
       );
       // Reuse the snap-indicator vertical line as the slice guide (a thin
       // full-height line at the cut), plus a B.B.T tooltip. No dedicated
@@ -1123,7 +1128,7 @@ export function createPlaylistInteractionController(
         gesture.pointId,
         event.ctrlKey
           ? gesture.originalTime
-          : snapTime(next.time, state, event.altKey),
+          : core.snapTime(next.time, event.altKey, state),
         event.shiftKey ? gesture.originalValue : next.value,
       );
       event.preventDefault();
@@ -1131,10 +1136,10 @@ export function createPlaylistInteractionController(
     }
 
     if (gesture.kind === "play-position-drag") {
-      const snapped = snapTime(
+      const snapped = core.snapTime(
         screenXToTime(state, point.x, metrics),
-        state,
         event.altKey,
+        state,
       );
       core.setPlayPosition(snapped);
       emitDragOverlays(core, state, point, event.altKey, null, snapped);
@@ -1145,7 +1150,7 @@ export function createPlaylistInteractionController(
     if (gesture.kind === "marker-drag") {
       const currentTime = screenXToTime(state, point.x, metrics);
       const raw = gesture.startTime + (currentTime - gesture.startPointerTime);
-      const snapped = snapTime(Math.max(0, raw), state, event.altKey, metrics);
+      const snapped = core.snapTime(Math.max(0, raw), event.altKey, state);
       core.updateMarker(gesture.markerId, { time: snapped });
       emitDragOverlays(
         core,
@@ -1189,7 +1194,7 @@ export function createPlaylistInteractionController(
       const trackIndex = screenYToTrackIndex(state, point.y, metrics);
       const start = Math.max(
         0,
-        snapTime(screenXToTime(state, point.x, metrics), state, event.altKey),
+        core.snapTime(screenXToTime(state, point.x, metrics), event.altKey, state),
       );
       if (
         trackIndex !== gesture.lastTrackIndex ||
@@ -1321,10 +1326,13 @@ export function createPlaylistInteractionController(
       const state = core.getState();
       // Snap the slice point to the active grid (Alt bypasses snap). The
       // guide line + tooltip are cleared by clearDragOverlays below.
-      const time = snapTime(
-        Math.max(0, screenXToTime(state, activeGesture.currentPoint.x, metrics)),
-        state,
+      const time = core.snapTime(
+        Math.max(
+          0,
+          screenXToTime(state, activeGesture.currentPoint.x, metrics),
+        ),
         event.altKey,
+        state,
       );
       if (time > 0) {
         core.sliceClipsAtTime(time);

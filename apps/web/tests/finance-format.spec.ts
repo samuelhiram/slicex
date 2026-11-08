@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { addDays } from "@slicex/core";
 import {
+  formatDateInput,
   formatDateLong,
   formatDateShort,
+  formatDateWeekday,
   formatMoney,
   formatPercent,
   formatSignedMoney,
+  parseDateInput,
+  shiftISODate,
 } from "../src/finance/format";
 
 describe("formatMoney", () => {
@@ -113,5 +118,151 @@ describe("formatPercent", () => {
 
   it("degrades gracefully on non-finite input", () => {
     expect(formatPercent(Number.NaN)).toBe("—");
+  });
+});
+
+// --- es-MX date entry ----------------------------------------------------------
+
+const TODAY = "2026-11-07";
+
+describe("formatDateWeekday / formatDateInput", () => {
+  it("prefixes the Spanish weekday to the long date", () => {
+    expect(formatDateWeekday("2026-11-15")).toBe("dom 15 NOV 2026");
+    expect(formatDateWeekday("2026-11-14")).toBe("sáb 14 NOV 2026");
+    expect(formatDateWeekday("2026-11-20")).toBe("vie 20 NOV 2026");
+    expect(formatDateWeekday("2027-01-01")).toBe("vie 1 ENE 2027");
+    expect(formatDateWeekday("2000-02-29")).toBe("mar 29 FEB 2000");
+    expect(formatDateWeekday("1970-01-01")).toBe("jue 1 ENE 1970");
+  });
+
+  it("agrees with the UTC calendar for every day of 2026–2028", () => {
+    const names = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+    for (let i = 0; i < 3 * 366; i += 1) {
+      const iso = addDays("2026-01-01", i);
+      const [y, m, d] = iso.split("-").map(Number) as [number, number, number];
+      const expected = names[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+      expect(formatDateWeekday(iso).slice(0, 3)).toBe(expected);
+    }
+  });
+
+  it("numeric es-MX entry text is day first, zero-padded", () => {
+    expect(formatDateInput("2026-11-05")).toBe("05/11/2026");
+    expect(formatDateInput("2027-01-31")).toBe("31/01/2027");
+  });
+
+  it("invalid / missing dates format to an empty entry or unchanged text", () => {
+    expect(formatDateInput(undefined)).toBe("");
+    expect(formatDateInput("")).toBe("");
+    expect(formatDateInput("2026-02-30")).toBe("");
+    expect(formatDateWeekday("2026-02-30")).toBe("2026-02-30");
+    expect(formatDateWeekday("")).toBe("");
+  });
+});
+
+describe("parseDateInput", () => {
+  it.each([
+    "15/11/2026",
+    "15-11-2026",
+    "15.11.2026",
+    "15/11/26",
+    "2026-11-15",
+    "2026/11/15",
+    "15 nov 2026",
+    "15 NOV 2026",
+    "15 Nov. 2026",
+    "15 de noviembre de 2026",
+    "nov 15 2026",
+    "  15/11/2026  ",
+    // What formatDateWeekday prints (and anything with a leading weekday,
+    // which is decoration and never checked against the date).
+    "dom 15 NOV 2026",
+    "sáb 15 nov 2026",
+    "domingo, 15 de noviembre de 2026",
+    "mar 15/11/2026",
+  ])("%s → 2026-11-15", (raw) => {
+    expect(parseDateInput(raw, TODAY)).toBe("2026-11-15");
+  });
+
+  it("accepts single digits, full / alternative month names", () => {
+    expect(parseDateInput("1/2/2027", TODAY)).toBe("2027-02-01");
+    expect(parseDateInput("2026-1-5", TODAY)).toBe("2026-01-05");
+    expect(parseDateInput("15 sept 2026", TODAY)).toBe("2026-09-15");
+    expect(parseDateInput("15 set 2026", TODAY)).toBe("2026-09-15");
+    expect(parseDateInput("3 diciembre 2026", TODAY)).toBe("2026-12-03");
+    expect(parseDateInput("29/02/2028", TODAY)).toBe("2028-02-29");
+  });
+
+  it("without a year: the occurrence nearest to the reference", () => {
+    expect(parseDateInput("15 nov", TODAY)).toBe("2026-11-15");
+    expect(parseDateInput("1 nov", TODAY)).toBe("2026-11-01");
+    expect(parseDateInput("15 ene", TODAY)).toBe("2027-01-15");
+    expect(parseDateInput("15/1", TODAY)).toBe("2027-01-15");
+    expect(parseDateInput("7 may", TODAY)).toBe("2027-05-07");
+    expect(parseDateInput("15 mar", TODAY)).toBe("2027-03-15");
+    expect(parseDateInput("mar 15", TODAY)).toBe("2027-03-15");
+    expect(parseDateInput("29 feb", TODAY)).toBe("2028-02-29");
+  });
+
+  it("without a year, 'on-or-after': never before the reference", () => {
+    expect(parseDateInput("15 nov", "2026-11-20", "on-or-after")).toBe("2027-11-15");
+    expect(parseDateInput("20 nov", "2026-11-20", "on-or-after")).toBe("2026-11-20");
+    expect(parseDateInput("15/11", "2026-11-20", "on-or-after")).toBe("2027-11-15");
+    expect(parseDateInput("1 ene", "2026-11-20", "on-or-after")).toBe("2027-01-01");
+    // An explicit year is never moved.
+    expect(parseDateInput("15/11/2026", "2026-11-20", "on-or-after")).toBe("2026-11-15");
+  });
+
+  it.each([
+    "",
+    "   ",
+    "abc",
+    "15",
+    "nov",
+    "15 xyz",
+    "15 ma",
+    "31/11/2026",
+    "29/02/2027",
+    "2026-13-01",
+    "2026-11-31",
+    // Day first only: a US mm/dd date is rejected, never swapped.
+    "11/15/2026",
+    "15/11/1800",
+    "015/11/2026",
+    "15/11/2026x",
+    "15 nov 2026 2027",
+    // Two-digit years only in the numeric form ("mar 15/11" ≠ 15 MAR 2011).
+    "15 nov 26",
+    "mar 15/11",
+    "15 nov 2026 lunes",
+    "15/11/2026 ?",
+  ])("rejects %j", (raw) => {
+    expect(parseDateInput(raw, TODAY)).toBeNull();
+  });
+
+  it("a date without a year needs a valid reference", () => {
+    expect(parseDateInput("15 nov", "")).toBeNull();
+    expect(parseDateInput("15/11/2026", "")).toBe("2026-11-15");
+  });
+
+  it("round-trips its own output formats", () => {
+    for (let i = 0; i < 800; i += 7) {
+      const iso = addDays(TODAY, i - 200);
+      expect(parseDateInput(formatDateInput(iso), TODAY)).toBe(iso);
+      expect(parseDateInput(formatDateWeekday(iso), TODAY)).toBe(iso);
+      expect(parseDateInput(formatDateLong(iso), TODAY)).toBe(iso);
+    }
+  });
+});
+
+describe("shiftISODate", () => {
+  it("moves by whole days across month / year / leap boundaries", () => {
+    expect(shiftISODate("2026-12-31", 1)).toBe("2027-01-01");
+    expect(shiftISODate("2028-03-01", -1)).toBe("2028-02-29");
+    expect(shiftISODate("2026-11-15", 7)).toBe("2026-11-22");
+  });
+
+  it("returns null for an invalid date", () => {
+    expect(shiftISODate("", 1)).toBeNull();
+    expect(shiftISODate("2026-02-30", 1)).toBeNull();
   });
 });

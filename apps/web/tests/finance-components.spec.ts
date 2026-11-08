@@ -134,6 +134,10 @@ function createFakeBridge(initial: FinancialDocument, options: FakeOptions = {})
     getWarnings: () => findLiquidityWarnings(projection, doc.minimumCashReserve),
     getClipDetail: () => null,
     getClipSparkline: () => null,
+    getClipContent: () => null,
+    getOverviewData: () => null,
+    getDragAnnotation: () => null,
+    getTrackMeta: () => null,
     destroy: () => listeners.clear(),
   } satisfies FinancialBridgeApi;
   return { bridge, locked, fakeCore };
@@ -186,6 +190,39 @@ function field<T extends HTMLElement = HTMLInputElement>(label: string): T {
     ?.querySelector("input, select");
   if (!control) throw new Error(`field "${label}" not found`);
   return control as T;
+}
+
+/** Types into a React-controlled text <input> like a user would. */
+function typeInto(input: HTMLInputElement, text: string) {
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )!.set!;
+  act(() => {
+    setter.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function pressKey(target: HTMLElement, key: string, init: KeyboardEventInit = {}) {
+  act(() => {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }),
+    );
+  });
+}
+
+function blur(input: HTMLElement) {
+  act(() => {
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    input.blur();
+  });
+}
+
+/** The live preview / validation line under a date field. */
+function datePreview(label: string): HTMLElement {
+  const input = field(label);
+  return input.closest(".fin-editor__field")!.querySelector(".fin-date__preview")!;
 }
 
 /** Changes a React-controlled <select> like a user would. */
@@ -289,7 +326,7 @@ describe("react-1 / SYNC-8: a single occurrence is saved on the shown date", () 
     const { bridge } = createFakeBridge(docWith([loan]));
     const onClose = vi.fn();
     mount(h(FinancialEditorModal, { bridge, itemId: loan.id, onClose }));
-    expect(field("Fecha").value).toBe("2026-11-20");
+    expect(field("Fecha").value).toBe("20/11/2026");
     choose(field<HTMLSelectElement>("Frecuencia"), "once");
     click(mustButton(document, "Guardar"));
     expect(bridge.replaceItem).toHaveBeenCalledTimes(1);
@@ -648,5 +685,116 @@ describe("react-5: avalanche uses the debts still owed at the playhead day", () 
       ),
     );
     expect(rows().map((r) => r.name)).not.toContain("Préstamo personal");
+  });
+});
+
+// --- es-MX date fields ----------------------------------------------------------
+
+describe("editor dates: es-MX text fields, never the native date picker", () => {
+  const RENTA: FinancialItem = {
+    id: "fin-renta",
+    kind: "expense",
+    name: "Renta",
+    amount: 8000,
+    recurrence: { frequency: "monthly", startDate: "2026-11-20", endDate: "2027-05-20" },
+  };
+
+  function open(item: FinancialItem = RENTA) {
+    const { bridge } = createFakeBridge(docWith([item]));
+    mount(h(FinancialEditorModal, { bridge, itemId: item.id, onClose: () => {} }));
+    return bridge;
+  }
+
+  it("shows dd/mm/aaaa text with the weekday preview; no type=date inputs", () => {
+    open();
+    expect(document.querySelector('.fin-editor input[type="date"]')).toBeNull();
+    expect(field("Fecha").type).toBe("text");
+    expect(field("Fecha").value).toBe("20/11/2026");
+    expect(datePreview("Fecha").textContent).toBe("vie 20 NOV 2026");
+    expect(field("Fecha final").value).toBe("20/05/2027");
+    expect(datePreview("Fecha final").textContent).toBe("jue 20 MAY 2027");
+  });
+
+  it("typing '15 dic' saves 2026-12-15 (year from today) and the preview follows", () => {
+    const bridge = open();
+    typeInto(field("Fecha"), "15 dic");
+    expect(datePreview("Fecha").textContent).toBe("mar 15 DIC 2026");
+    expect(field("Fecha").getAttribute("aria-invalid")).toBe("false");
+    blur(field("Fecha"));
+    expect(field("Fecha").value).toBe("15/12/2026");
+    click(mustButton(document, "Guardar"));
+    const saved = bridge.replaceItem.mock.calls[0]![0];
+    expect(saved.recurrence.startDate).toBe("2026-12-15");
+    // Moving the date moves the schedule phase too.
+    expect(saved.recurrence.anchorDate).toBe("2026-12-15");
+  });
+
+  it.each(["15/12/2026", "15-12-2026", "2026-12-15", "15 dic 2026", "mar 15 DIC 2026"])(
+    "accepts %s",
+    (raw) => {
+      const bridge = open();
+      typeInto(field("Fecha"), raw);
+      click(mustButton(document, "Guardar"));
+      expect(bridge.replaceItem.mock.calls[0]![0].recurrence.startDate).toBe("2026-12-15");
+    },
+  );
+
+  it("an unrecognised date shows inline validation and blocks Guardar", () => {
+    const bridge = open();
+    typeInto(field("Fecha"), "12/31/2026");
+    const preview = datePreview("Fecha");
+    expect(preview.dataset.state).toBe("invalid");
+    expect(preview.textContent).toMatch(/no reconocida/i);
+    expect(field("Fecha").getAttribute("aria-invalid")).toBe("true");
+    expect(errorText()).toBe("Fecha: inválida.");
+    expect(mustButton(document, "Guardar").disabled).toBe(true);
+    click(mustButton(document, "Guardar"));
+    expect(bridge.replaceItem).not.toHaveBeenCalled();
+    // Fixing the text clears it.
+    typeInto(field("Fecha"), "31/12/2026");
+    expect(errorText()).toBe("");
+    expect(datePreview("Fecha").textContent).toBe("jue 31 DIC 2026");
+  });
+
+  it("↑ / ↓ move the date ±1 day (Shift: ±7)", () => {
+    const bridge = open();
+    const input = field("Fecha");
+    pressKey(input, "ArrowUp");
+    expect(field("Fecha").value).toBe("21/11/2026");
+    pressKey(field("Fecha"), "ArrowDown", { shiftKey: true });
+    expect(field("Fecha").value).toBe("14/11/2026");
+    expect(datePreview("Fecha").textContent).toBe("sáb 14 NOV 2026");
+    click(mustButton(document, "Guardar"));
+    expect(bridge.replaceItem.mock.calls[0]![0].recurrence.startDate).toBe("2026-11-14");
+  });
+
+  it("'Fecha final': year relative to the start, ↓ never goes below it", () => {
+    const bridge = open();
+    // 15 NOV is before the 20 NOV 2026 start: it means 15 NOV 2027.
+    typeInto(field("Fecha final"), "15 nov");
+    expect(datePreview("Fecha final").textContent).toBe("lun 15 NOV 2027");
+    typeInto(field("Fecha final"), "21/11/2026");
+    pressKey(field("Fecha final"), "ArrowDown");
+    pressKey(field("Fecha final"), "ArrowDown");
+    pressKey(field("Fecha final"), "ArrowDown");
+    expect(field("Fecha final").value).toBe("20/11/2026");
+    click(mustButton(document, "Guardar"));
+    expect(bridge.replaceItem.mock.calls[0]![0].recurrence.endDate).toBe("2026-11-20");
+  });
+
+  it("'Indefinido' disables the end date; unticking restores a valid one", () => {
+    open();
+    const indefinite = document.querySelector<HTMLInputElement>(
+      '.fin-editor__check input[type="checkbox"]',
+    )!;
+    click(indefinite);
+    expect(field("Fecha final").disabled).toBe(true);
+    expect(field("Fecha final").value).toBe("");
+    expect(datePreview("Fecha final").textContent).toBe("");
+    click(indefinite);
+    expect(field("Fecha final").disabled).toBe(false);
+    // addMonths(start, 12)
+    expect(field("Fecha final").value).toBe("20/11/2027");
+    expect(errorText()).toBe("");
   });
 });

@@ -123,6 +123,18 @@ El timeline es infinito por diseño. El control de costo va por la
 **presentación** (cull al viewport), no por **clampear el scroll**.
 Volver a poner caps en geometry es regresión.
 
+**Excepción declarada — eje Y con `virtualTracks: false`.** Un host cuyos
+tracks son su propio modelo (`PlaylistCoreOptions.virtualTracks: false`,
+p. ej. un track por categoría) no tiene filas virtuales debajo del último
+track: no hay nada que revelar. Ahí, y sólo ahí, `core.updateViewport` /
+`core.setViewportSize` limitan `scrollY` a `getRealTracksScrollLimit` (el
+fondo del último track queda sobre el scrollbar horizontal) y la extensión
+vertical del scrollbar cubre sólo los tracks reales. No es un control de
+costo (el costo ya lo acota el cull de la presentación) sino UX: el espacio
+vacío no es contenido. `getMaxScrollY` / `getMaxScrollX` **siguen siendo
+infinitos** (lint + test), y con `virtualTracks` por defecto (true) el eje Y
+sigue sin límite. El eje X no tiene excepción.
+
 ### 2.6 Suscriptores que disparan re-render por estado irrelevante
 
 ```ts
@@ -292,6 +304,68 @@ getClipSparkline: (id) => projection.barsFor(id).map(normalize),
 getClipSparkline: (id) => sparkIndex.get(id) ?? null,
 ```
 
+**Providers visuales (Ola 1).** Mismo contrato de identidad para todo lo que
+el host dibuja a través del renderer: se llaman desde el render loop, son
+lookups **O(1)** y devuelven **el mismo objeto** mientras sus datos no
+cambian (referencia nueva = repintar; nunca mutar en sitio un objeto ya
+devuelto). El canvas no interpreta el dominio: recibe beats, valores y tonos.
+
+| Callback | Se llama | Repinta cuando |
+|---|---|---|
+| `getClipContent(clipId)` → `PlaylistClipContent` | 1×/frame por clip **visible** no-automation | cambia la referencia, `clip.start` o el zoom (px/beat) — el contenido vive en beats absolutos. Non-null gana al sparkline (que entonces ni se consulta). |
+| `getOverviewData()` → `PlaylistOverviewData` | 1×/frame, sólo si `metrics.overviewLaneHeight > 0` | ver §3.14 |
+| `getDragAnnotation()` → `PlaylistDragAnnotation` | 1×/frame, sólo mientras hay `state.tooltip` | cambia la referencia. Seguir al cursor es un transform del Container, no un repaint. |
+| `getTrackMeta(trackId)` → `PlaylistTrackMeta` | 1×/frame por fila **real visible** (no overscan, no virtuales) | el header ya es inmediato; el string derivado (subtítulo truncado) se cachea por track y se recalcula sólo si cambia la referencia. |
+
+`PlaylistStepSeries` (`initial` + `beats` ascendentes + `values`) es la
+forma común de las curvas: el canvas la evalúa con búsqueda binaria
+(`stepSeriesValueAt` / `sortedUpperBound`, O(log n), sin allocations) y la
+recorre sólo en el rango visible (`walkVisibleSteps`). **Nunca** iterar una
+serie entera por frame.
+
+```ts
+// ❌ PROHIBIDO: objeto nuevo por llamada → el lane se reconstruye cada frame
+getOverviewData: () => ({ title: "Cash", primary: projection.cash(), ... }),
+```
+
+```ts
+// ✅ OBLIGATORIO: construido una vez por cambio de datos, devuelto tal cual
+getOverviewData: () => overviewCache,
+```
+
+### 3.14 Overview lane (`metrics.overviewLaneHeight`)
+
+`overviewLaneHeight > 0` reserva una banda de esa altura **entre la regla
+(`rulerHeight`) y el primer track**. Con 0 (default) el layout es
+idéntico al histórico.
+
+- **Una sola fuente de verdad para el inicio de los tracks:**
+  `getTracksTop(metrics) = rulerHeight + overviewLaneHeight`. Todo consumidor
+  del área de tracks pasa por ahí (tops de filas, `screenY ↔ track`,
+  hit-test, extensión/scrollbar vertical, máscara del timeline, grid, línea
+  de snap, ghost de drop, headers). `rulerHeight` a secas sólo describe la
+  regla (ticks, markers, loop region, play marker). Prohibido volver a usar
+  `metrics.rulerHeight` como "top de los tracks".
+- **Interacción:** el lane se comporta como la regla (hit `ruler`: seek +
+  scrub del playhead); su celda en la columna de headers es `chrome` inerte.
+  Nada se hit-testea "a través" del lane (filas/clips scrolleados debajo).
+- **Render — capa cacheada en tres niveles** (`layers/overview-lane.ts`,
+  DisplayObjects creados en el init de `renderer-impl.ts`):
+  1. *Frame* (fondos, línea de cero, umbrales punteados + labels, labels de
+     escala, título): se reconstruye sólo si cambia la referencia de datos,
+     `viewport.width` o la geometría del lane. Scroll y zoom **no** lo tocan.
+  2. *Curvas* (secundaria, área+línea primaria por tono, baseline punteada,
+     anotaciones): lo anterior + `scrollX` / `pxPerBeat`. Recorre sólo los
+     steps visibles (búsqueda binaria del primero).
+  3. *Dinámico* (línea del playhead + punto sobre la curva): se redibuja
+     sólo si cambia x del playhead, y del punto o su tono (evaluación por
+     búsqueda binaria, sin allocations).
+  Hover, selección, playhead, `scrollY`, alto del viewport: **0 rebuilds**
+  (test `perf-budget.spec.ts`).
+- **Escala Y:** min/max **globales** de primary ∪ baseline ∪ umbrales ∪ 0
+  (estable al scrollear), calculada una vez por referencia de datos — O(n)
+  por cambio de datos, nunca por frame. La secundaria tiene escala propia.
+
 ### 3.10 rAF coalescing + dirty-layer caching en el renderer
 
 `dispatch()` invoca `notify()` síncronamente; durante un pointermove
@@ -321,12 +395,17 @@ deben cachear su geometría:
 - `timelineGridGraphics` depende solo de `pxPerBeat`, `scrollX`,
   `viewport.width`, `sceneRect.height`, y la lista de ticks. Hover /
   selección / cualquier otra cosa **no** lo invalida.
+- Overview lane: frame / curvas / dinámico con sus propias keys (§3.14),
+  comparadas campo a campo (sin construir strings por frame).
+- Pill de anotación del drag: se pinta una vez por referencia y sigue al
+  tooltip moviendo su Container.
 
 El patrón es: calcula un hash de las dependencies, comparalo con el
 hash del frame anterior, salta `clear()` + re-emit si no cambió.
 
 **Repintar sin notify del core.** Cuando cambian datos de un provider
-(`getClipDetail` / `getClipSparkline`) pero `PlaylistState` no, el host
+(`getClipDetail` / `getClipSparkline` / `getClipContent` / `getOverviewData`
+/ `getDragAnnotation` / `getTrackMeta`) pero `PlaylistState` no, el host
 llama `renderer.invalidate()`. Entra por el mismo `requestRender`
 coalescido: N invalidates + N notifies del mismo frame = 1 `renderNow()`,
 y no arranca ningún tick (§3.11). Prohibido forzar un repaint despachando
@@ -502,6 +581,10 @@ a esta lista y a los tests de `perf-budget.spec.ts`.
 | Mask / grid solo redibujan al cambiar sus deps | sí |
 | hover / playhead / viewport conservan `state.clips` y `state.tracks` (1000 clips) | misma referencia |
 | 1000 cambios de hover con 1000 clips | < 30 ms |
+| Overview lane: rebuilds de geometría en 100 frames de hover / playhead / selección | == 0 |
+| Overview lane: geometría emitida para una ventana visible de una serie de 1000 vs 100 000 steps | idéntica (O(log n + visibles)), < 1000 `lineTo` |
+| Overview lane: 100 rebuilds por scroll (serie de 1000 y de 100 000 steps) | < 150 ms c/u (medido ≈ 26 ms aislado) |
+| Clip content: redraws de body en 100 frames con referencias estables (1000 clips) | == 0 |
 
 Estos números **no se tocan para que pasen los tests**. Si un test
 falla, hay un bug de performance real que arreglar.

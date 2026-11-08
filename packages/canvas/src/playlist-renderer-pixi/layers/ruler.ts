@@ -2,7 +2,7 @@
 // behind clips. The orchestrator owns the dirty-key cache for the grid;
 // this module just emits draw commands when invoked.
 import type { Container, Graphics } from "pixi.js";
-import type { PlaylistPresentation } from "../../playlist-core";
+import { getTracksTop, type PlaylistPresentation } from "../../playlist-core";
 import { COLORS } from "../palette";
 import { addText } from "../text-pool";
 
@@ -72,9 +72,11 @@ export function drawTimelineGrid(
   presentation: PlaylistPresentation,
 ): void {
   const { metrics, rulerTicks, layout } = presentation;
+  // Grid lines run through the track area only (below the overview lane).
+  const top = getTracksTop(metrics);
   for (const tick of rulerTicks) {
     graphics
-      .moveTo(tick.x, metrics.rulerHeight)
+      .moveTo(tick.x, top)
       .lineTo(tick.x, layout.sceneRect.height)
       .stroke({
         alpha: tick.isBar ? 0.72 : 0.42,
