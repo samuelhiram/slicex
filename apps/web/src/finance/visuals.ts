@@ -6,6 +6,7 @@
 import {
   accountActivity,
   summarizeProjection,
+  toDayNumber,
   type DebtPayoffEstimate,
   type FinancialDocument,
   type FinancialItem,
@@ -47,6 +48,29 @@ export function compactMoney(value: number): string {
   return `${sign}$${Math.round(abs)}`;
 }
 
+/**
+ * date → beat for a run over projection points. Points are sorted by date
+ * and ~15k points share ~366 dates, so: reuse the previous answer when the
+ * date repeats, memoise the rest. Never parses the same string twice.
+ */
+function beatResolver(doc: FinancialDocument): (date: ISODate) => number {
+  const origin = toDayNumber(doc.startDate);
+  const memo = new Map<string, number>();
+  let lastDate = "";
+  let lastBeat = 0;
+  return (date) => {
+    if (date === lastDate) return lastBeat;
+    let beat = memo.get(date);
+    if (beat === undefined) {
+      beat = toDayNumber(date) - origin;
+      memo.set(date, beat);
+    }
+    lastDate = date;
+    lastBeat = beat;
+    return beat;
+  };
+}
+
 function isDebtKind(item: FinancialItem): boolean {
   return (
     item.kind === "credit-card" ||
@@ -66,8 +90,9 @@ function endOfDaySeries(
   const beats: number[] = [];
   const values: number[] = [];
   const points = projection.points;
+  const beatAt = beatResolver(doc);
   for (let i = 0; i < points.length; i += 1) {
-    const beat = beatOf(doc, points[i]!.date);
+    const beat = beatAt(points[i]!.date);
     const value = pick(i);
     if (beats.length > 0 && beats[beats.length - 1] === beat) {
       values[values.length - 1] = value;
@@ -213,9 +238,10 @@ export function buildClipContents(
   const levelBeats = new Map<string, number[]>();
   const levelValues = new Map<string, number[]>();
   let maxMagnitude = 0;
+  const beatAt = beatResolver(doc);
 
   for (const point of projection.points) {
-    const beat = beatOf(doc, point.date);
+    const beat = beatAt(point.date);
     if (point.accountId !== undefined && debtItems.has(point.accountId)) {
       const id = point.accountId;
       if (point.accountDebtAfter === undefined) continue;
