@@ -111,6 +111,11 @@ export interface PlaylistHitOptions {
   // The selected clip exposes the extend grabber; the predicate is the
   // host's veto per clip (see getClipExtendHandle).
   clipExtend?: (clipId: string) => boolean;
+  // false: the thin track chrome (the full-width resize divisor, the
+  // mute / solo / lock buttons, the reorder grip) is not hit; the point
+  // resolves to the row header / clip / background under it. The right
+  // button uses this, so a context menu opens wherever it is pressed.
+  trackChrome?: boolean;
 }
 
 // Scratch for the extend-grabber lookup (pointermove rate: no allocation).
@@ -181,7 +186,9 @@ export function hitTestPlaylist(
       : { kind: "chrome" };
   }
 
-  if (point.y > metrics.rulerHeight) {
+  const trackChrome = options.trackChrome !== false;
+
+  if (trackChrome && point.y > metrics.rulerHeight) {
     // Track-resize handle spans the full width to mimic FL Studio: drag the
     // divisor between two tracks at any x (header or timeline).
     const resizeRow = trackRows.find((candidate) =>
@@ -201,7 +208,7 @@ export function hitTestPlaylist(
       pointInRect(point, candidate.headerRect),
     );
 
-    if (row) {
+    if (row && trackChrome) {
       if (pointInRect(point, row.buttons.mute)) {
         return {
           kind: "track-mute-button",
@@ -230,6 +237,8 @@ export function hitTestPlaylist(
           trackId: row.track.id,
         };
       }
+    }
+    if (row) {
       return {
         kind: "track-header",
         trackIndex: row.index,

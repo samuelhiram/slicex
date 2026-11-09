@@ -8,6 +8,8 @@
 // clipping / masking ancestor can hide them.
 import * as React from "react";
 import { useFitInViewport } from "../../ui/fit-in-viewport";
+import { useDismiss } from "../../ui/use-dismiss";
+import { useWheelScrollX } from "../../ui/wheel-scroll-x";
 import { createPortal } from "react-dom";
 import { addDays } from "@slicex/core";
 import type {
@@ -65,6 +67,8 @@ export function FinancialSummaryBar({
   tools,
 }: FinancialSummaryBarProps) {
   const revision = useFinancialRevision(bridge);
+  // The metrics strip scrolls sideways: the mouse wheel moves it too.
+  const metricsRef = useWheelScrollX();
 
   const data = React.useMemo(() => {
     const doc = bridge.getDocument();
@@ -104,7 +108,7 @@ export function FinancialSummaryBar({
         <span className="fin-summary__logo" />
         <span className="fin-summary__wordmark">SliceX</span>
       </div>
-      <div className="fin-summary__metrics">
+      <div className="fin-summary__metrics" ref={metricsRef}>
         <div className="fin-summary__metric">
           <span className="fin-summary__label">Liquidez hoy</span>
           <InlineNumberInput
@@ -278,30 +282,14 @@ function useMenuButton(inert: boolean) {
   }, [inert, open]);
 
   React.useEffect(() => {
-    if (!open) return undefined;
+    if (!open) return;
     menuRef.current
       ?.querySelector<HTMLElement>('[role="menuitem"]')
       ?.focus();
-    const handleDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (
-        target &&
-        (menuRef.current?.contains(target) || triggerRef.current?.contains(target))
-      ) {
-        return;
-      }
-      setAnchor(null);
-    };
-    const dismiss = () => setAnchor(null);
-    window.addEventListener("pointerdown", handleDown, true);
-    window.addEventListener("resize", dismiss);
-    window.addEventListener("scroll", dismiss, true);
-    return () => {
-      window.removeEventListener("pointerdown", handleDown, true);
-      window.removeEventListener("resize", dismiss);
-      window.removeEventListener("scroll", dismiss, true);
-    };
   }, [open]);
+  // Outside press / outside scroll / resize close; the wheel over a long
+  // menu scrolls it (it used to close it).
+  useDismiss(open, [triggerRef, menuRef], () => setAnchor(null));
 
   const onMenuKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {

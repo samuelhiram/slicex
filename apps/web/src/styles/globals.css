@@ -2711,7 +2711,7 @@ kbd {
    bars never let their parts slide under each other; floating UI is kept
    on screen by src/ui/fit-in-viewport.ts. */
 
-/* The tool bar scrolls sideways when it can't fit (swipe / Shift+rueda). */
+/* The tool bar scrolls sideways when it can't fit (wheel, swipe, Shift+rueda; src/ui/wheel-scroll-x.ts). */
 .playlist-shell__bar {
   overflow-x: auto;
   overflow-y: hidden;

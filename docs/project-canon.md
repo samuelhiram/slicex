@@ -116,6 +116,14 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     dentro de la ventana); las barras se desplazan de lado en vez de encimarse. Auditado en
     1920 / 1366 / 1024 / 768 / 390 px (ningún control fuera de pantalla, tapado, sin nombre
     accesible ni menor a 24 px).
+  - **Cierre de lo flotante, una sola regla** (`apps/web/src/ui/use-dismiss.ts`): un menú se
+    cierra con un clic FUERA (de su botón y de su popover), un scroll FUERA, un resize o Escape;
+    nunca con un clic o la rueda DENTRO (texto, bordes, separadores, items deshabilitados). Nada
+    de handlers "clic fuera" escritos a mano por componente.
+  - **La rueda mueve todo lo que se desplaza:** las tiras laterales con scrollbar oculto (cifras
+    del encabezado, barra de herramientas) usan `apps/web/src/ui/wheel-scroll-x.ts` (rueda
+    vertical → lateral). El clic derecho abre menú en cualquier punto del canvas: la línea entre
+    filas y los botones del track no se lo tragan (`trackChrome: false` en el hit-test).
 - **Tracks infinitos y permanentes (como FL)**: el shell usa `virtualTracks` por defecto
   (filas "Track N" vacías siempre debajo). Las filas no se borran solas: el acomodo
   (`FinancialTrackLayout` en `apps/web/src/finance/mapping.ts`: filas, incluso vacías, y

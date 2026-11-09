@@ -423,6 +423,16 @@ lo activa y arrancar/parar el rAF en respuesta. NO mantener un tick
 en el reducer, el callback del rAF, la lectura de `performance.now()`
 y la entrada al dispatch suman.
 
+**Pixi no lleva ticker propio.** `Application.init` va siempre con
+`autoStart: false` (lo enforce `check-perf-patterns`, regla
+`pixi-idle-ticker`): el ticker por defecto de Pixi repinta TODO el stage
+cada frame aunque nada cambie. Pintar es asunto de `requestRender` (§3.10).
+Su `EventSystem` tampoco se usa (el controller es dueño del input): se
+desconecta tras `init` (`renderer.events.setTargetElement(null)`), o escucha
+cada `pointermove` del documento y mantiene un rAF que re-despacha un
+`pointermove` falso cada 10 ms. En reposo el canvas hace 0 draw calls. (2026-11-08: ese repintado continuo,
+bajo el fondo difuminado del editor, congeló Chrome en una máquina modesta.)
+
 Ejemplo canónico: `PlaylistShell` se suscribe a
 `state.playPosition.isRunning`. El tick que llama
 `advancePlayPosition` solo arranca cuando `isRunning` pasa de false a

@@ -48,6 +48,8 @@ import { FinancialEditorModal } from "../finance/components/FinancialEditorModal
 import { FinancialSidePanel } from "../finance/components/FinancialSidePanel";
 import { useTheme } from "../theme";
 import { useFitInViewport } from "../ui/fit-in-viewport";
+import { useDismiss } from "../ui/use-dismiss";
+import { useWheelScrollX } from "../ui/wheel-scroll-x";
 
 // Playback speed of the financial timeline: 1 beat = 1 day.
 const PLAYBACK_DAYS_PER_SECOND = 7;
@@ -535,21 +537,9 @@ function PlaylistContextMenuOverlay({
     return () => sub.unsubscribe();
   }, [core]);
 
-  React.useEffect(() => {
-    if (!menu || !core) return undefined;
-    const handler = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest(".playlist-shell__menu")) return;
-      core.closeContextMenu();
-    };
-    const t = window.setTimeout(() => {
-      window.addEventListener("mousedown", handler);
-    }, 0);
-    return () => {
-      window.clearTimeout(t);
-      window.removeEventListener("mousedown", handler);
-    };
-  }, [menu, core]);
+  useDismiss(menu !== null && core !== null, [menuRef], () => core?.closeContextMenu(), {
+    escape: true,
+  });
 
   if (!menu || !core) return null;
 
@@ -687,6 +677,8 @@ function PlaylistToolbar({ core }: ToolbarProps) {
 
 export function PlaylistShell() {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
+  // The tool bar scrolls sideways when it can't fit: the wheel moves it.
+  const toolBarRef = useWheelScrollX();
   // Light / dark: the DOM follows the CSS tokens; the canvas palette is
   // switched through the renderer (created later, inside the init frame).
   const { theme, toggle: toggleTheme } = useTheme();
@@ -1119,7 +1111,7 @@ export function PlaylistShell() {
           tools={
             // Tools + futures inside the header card: nothing floats over
             // the ruler dates or the money lane.
-            <div className="playlist-shell__bar" inert={editorOpen}>
+            <div className="playlist-shell__bar" inert={editorOpen} ref={toolBarRef}>
               <PlaylistToolbar core={core} />
               {futures ? (
                 <FuturesMenu bridge={bridge} futures={futures} inert={editorOpen} />

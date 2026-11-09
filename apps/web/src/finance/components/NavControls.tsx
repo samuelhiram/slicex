@@ -6,6 +6,7 @@
 // motion jumps). The visible range is announced to screen readers.
 import * as React from "react";
 import { useFitInViewport } from "../../ui/fit-in-viewport";
+import { useDismiss } from "../../ui/use-dismiss";
 import { createPortal } from "react-dom";
 import type { PlaylistCore, ViewportNavigator } from "@slicex/canvas";
 import type { FinancialBridgeApi } from "../bridge-api";
@@ -85,22 +86,8 @@ export function NavControls({ core, navigator, bridge }: NavControlsProps) {
     navigator.zoomTo(timelineWidth(core) / option.days, playheadAnchor());
   };
 
-  React.useEffect(() => {
-    if (!help) return undefined;
-    const close = (event: Event) => {
-      if (event.type === "keydown" && (event as KeyboardEvent).key !== "Escape") return;
-      if (event.type === "pointerdown" && helpRef.current?.contains(event.target as Node)) return;
-      setHelp(null);
-    };
-    window.addEventListener("pointerdown", close, true);
-    window.addEventListener("keydown", close);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("pointerdown", close, true);
-      window.removeEventListener("keydown", close);
-      window.removeEventListener("resize", close);
-    };
-  }, [help]);
+  // Pressing inside the help (text, rows) keeps it open; outside closes.
+  useDismiss(help !== null, [helpRef, helpPopoverRef], () => setHelp(null), { escape: true });
 
   return (
     <div className="fin-navctl" role="group" aria-label="Navegar el tiempo">

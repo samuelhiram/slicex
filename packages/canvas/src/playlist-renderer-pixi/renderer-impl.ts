@@ -517,6 +517,12 @@ export function createPlaylistRenderer(
 
   void app
     .init({
+      // Render on demand only (requestRender, canon §3.10/§3.11). Pixi's
+      // default ticker repaints the whole stage EVERY frame even when
+      // nothing changed: a constant full-canvas GPU load that, under the
+      // editor's blurred backdrop on a modest machine, froze the browser.
+      autoStart: false,
+      sharedTicker: false,
       antialias: true,
       autoDensity: true,
       backgroundColor: COLORS.background,
@@ -530,6 +536,12 @@ export function createPlaylistRenderer(
         disposeApp();
         return;
       }
+
+      // Pixi's EventSystem is unused (the interaction controller owns all
+      // input): detach it. Attached, it listens to every document
+      // pointermove and keeps a rAF ticker alive that re-dispatches a fake
+      // pointermove every 10 ms while the pointer rests on the canvas.
+      (app.renderer as any).events?.setTargetElement?.(null);
 
       const canvas = (app as any).canvas as HTMLCanvasElement;
       canvas.style.display = "block";

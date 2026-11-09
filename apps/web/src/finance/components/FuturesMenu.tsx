@@ -5,6 +5,7 @@
 // deletes. Hold Q anywhere to peek at the other future.
 import * as React from "react";
 import { useFitInViewport } from "../../ui/fit-in-viewport";
+import { useDismiss } from "../../ui/use-dismiss";
 import { createPortal } from "react-dom";
 import type { FinancialBridgeApi } from "../bridge-api";
 import { formatDateShort } from "../format";
@@ -44,23 +45,10 @@ export function FuturesMenu({ bridge, futures, inert = false }: FuturesMenuProps
   }, [inert, open]);
 
   React.useEffect(() => {
-    if (!open) return undefined;
+    if (!open) return;
     menuRef.current?.querySelector<HTMLElement>('[role="menuitemradio"], [role="menuitem"]')?.focus();
-    const handleDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (target && (menuRef.current?.contains(target) || triggerRef.current?.contains(target))) {
-        return;
-      }
-      setAnchor(null);
-    };
-    const dismiss = () => setAnchor(null);
-    window.addEventListener("pointerdown", handleDown, true);
-    window.addEventListener("resize", dismiss);
-    return () => {
-      window.removeEventListener("pointerdown", handleDown, true);
-      window.removeEventListener("resize", dismiss);
-    };
   }, [open]);
+  useDismiss(open, [triggerRef, menuRef], () => setAnchor(null));
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const items = Array.from(

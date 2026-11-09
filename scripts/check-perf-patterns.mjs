@@ -197,6 +197,30 @@ function checkScrollCapRegression(file, content) {
   return violations;
 }
 
+// Pixi's Application ticker repaints the whole stage every frame by default
+// (autoStart: true). The renderer paints on demand (canon §3.10 / §3.11):
+// every `.init({...})` of a Pixi Application must pass `autoStart: false`.
+function checkPixiAutoStart(file, content) {
+  const violations = [];
+  if (!/\bnew\s+Application\s*\(/.test(content)) return violations;
+  const init = /\.init\(\s*\{/g;
+  let m;
+  while ((m = init.exec(content)) !== null) {
+    if (isLineExempt(content, m.index)) continue;
+    const block = content.slice(m.index, m.index + 1200);
+    const close = block.indexOf("})");
+    const options = close > 0 ? block.slice(0, close) : block;
+    if (/autoStart\s*:\s*false/.test(options)) continue;
+    violations.push({
+      file,
+      line: lineOf(content, m.index),
+      rule: "pixi-idle-ticker",
+      detail: `Pixi Application.init sin \`autoStart: false\`: el ticker repinta cada frame en reposo. Ver docs/performance-canon.md §3.11.`,
+    });
+  }
+  return violations;
+}
+
 async function main() {
   const files = [];
   for (const d of startDirs) {
@@ -209,6 +233,7 @@ async function main() {
       violations.push(...checkPixiConstructors(file, content));
       violations.push(...checkIdempotentReducerCases(file, content));
       violations.push(...checkScrollCapRegression(file, content));
+      violations.push(...checkPixiAutoStart(file, content));
     } catch {
       // skip
     }

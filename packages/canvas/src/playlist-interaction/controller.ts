@@ -511,8 +511,11 @@ export function createPlaylistInteractionController(
     clipLevel: onClipLevelDrag !== undefined,
     clipExtend: options.clipExtend,
   };
-  const hitAt = (point: PlaylistPoint): PlaylistHit =>
-    hitTestPlaylist(core.getPresentation(), point, metrics, hitOptions);
+  // The right button ignores the thin track chrome (divisor, row buttons):
+  // a press on a row line still opens the menu of what is under it.
+  const menuHitOptions = { ...hitOptions, trackChrome: false };
+  const hitAt = (point: PlaylistPoint, opts = hitOptions): PlaylistHit =>
+    hitTestPlaylist(core.getPresentation(), point, metrics, opts);
   // Viewport motion (smooth wheel, zoom, momentum, edge auto-scroll).
   const navigator = createViewportNavigator(core, {
     reducedMotion: () =>
@@ -637,7 +640,7 @@ export function createPlaylistInteractionController(
 
     const state = core.getState();
     const point = resolvePoint(host, event);
-    const rawHit = hitAt(point);
+    const rawHit = hitAt(point, event.button === 2 ? menuHitOptions : hitOptions);
     const clickCount = pressClickCount(event, point);
     // The level handle belongs to Select / Draw; every other tool sees the
     // clip itself.

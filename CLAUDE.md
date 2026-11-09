@@ -16,7 +16,7 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 - UI con tema **claro y oscuro** (tokens en `globals.css` ↔ paleta del canvas en `palette.ts`, se cambian juntos; ver [docs/project-canon.md](docs/project-canon.md) §2 "Lenguaje visual"). Lenguaje calmado y de alto contraste: nada de estética DAW.
 - La UI principal monta el playlist con el documento financiero demo ([PlaylistShell.tsx](apps/web/src/components/PlaylistShell.tsx) → `createDemoFinancialDocument(hoy)` → `createFinancialPlaylistState`) más [PlaylistInspector.tsx](apps/web/src/components/PlaylistInspector.tsx) y los paneles de [apps/web/src/finance/components/](apps/web/src/finance/components/).
 - Scaffolding de persistencia (`@slicex/contracts`, `@slicex/db`, ruta `/api/timelines/[timelineId]`, `editorStore.ts`, y el legado `calculateBalanceAt`/`TimelineDocument` de `@slicex/core`) sigue **dormido pero vivo**. **No proponer borrarlo sin confirmación explícita.**
-- Suite actual: **1013 tests unitarios en 71 archivos**, todos verdes (2026-11-08). Playwright tiene **1 spec** ([reload-stress.pw.ts](apps/web/tests/reload-stress.pw.ts)), no cero.
+- Suite actual: **1026 tests unitarios en 74 archivos**, todos verdes (2026-11-08). Playwright tiene **1 spec** ([reload-stress.pw.ts](apps/web/tests/reload-stress.pw.ts)), no cero.
 - `master` es la **única branch** del repo (local y remota) desde 2026-08-13.
 
 ## Stack
@@ -31,7 +31,7 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 | Persistencia | Prisma 7 + `@prisma/adapter-pg` sobre Cloudflare Hyperdrive (Postgres) |
 | Validación | Zod en `@slicex/contracts` |
 | Observabilidad | `@sentry/cloudflare` (Worker) + `@sentry/react` (browser) + JSON `console` → Workers Logpush |
-| Tests | Vitest (1013 unit) + Playwright (1 spec: `apps/web/tests/*.pw.ts`) |
+| Tests | Vitest (1026 unit) + Playwright (1 spec: `apps/web/tests/*.pw.ts`) |
 | Deploy | `wrangler deploy` o Workers Builds (push a `master` → build+deploy) |
 
 ## Mapa rápido
