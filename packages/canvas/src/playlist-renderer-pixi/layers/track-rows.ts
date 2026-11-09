@@ -1,6 +1,11 @@
-// Track header panel (rows on the left): name, color strip, M/S/L buttons,
-// reorder handle, divider line. Lives on the global chromeGraphics layer
-// (outside the timeline mask) so headers stay legible while clips slide.
+// Track header panel (rows on the left): colour dot, name, host subtitle +
+// meter, mute / solo / lock icon toggles, reorder grip, hairlines. Lives on
+// the global chromeGraphics layer (outside the timeline mask) so headers
+// stay legible while clips slide.
+//
+// Icons instead of "M S L" letters: mute = eye (crossed out while muted),
+// solo = focus ring, lock = padlock. Inactive toggles are quiet glyphs;
+// active ones get a tinted chip so the state reads at a glance.
 import type { Container, Graphics } from "pixi.js";
 import {
   getTracksTop,
@@ -27,21 +32,40 @@ export function createTrackMetaSource(
   return { get, cache: new Map() };
 }
 
-const SUBTITLE_Y = 23;
-const SUBTITLE_SIZE = 10;
-const SUBTITLE_CHAR_PX = 5.6;
+const NAME_X = 30;
+const NAME_Y = 9;
+const NAME_SIZE = 13;
+const NAME_CHAR_PX = 7.6;
+const DOT_X = 17;
+const DOT_Y = 17;
+const DOT_RADIUS = 4;
+const SUBTITLE_Y = 28;
+const SUBTITLE_SIZE = 11;
+const SUBTITLE_CHAR_PX = 6.2;
 // Row heights below which the subtitle / meter would collide with the
-// M/S/L button row (which sits at height - 22).
+// toggle row (which sits at height - 22).
 const SUBTITLE_MIN_ROW_HEIGHT = 58;
-const METER_Y = 39;
 const METER_HEIGHT = 3;
-const METER_MIN_ROW_HEIGHT = 66;
+const METER_MIN_ROW_HEIGHT = 58;
 
-function truncateSubtitle(text: string, maxChars: number): string {
+function truncateText(text: string, maxChars: number): string {
   if (maxChars <= 0) return "";
   if (text.length <= maxChars) return text;
   if (maxChars === 1) return "…";
   return `${text.slice(0, maxChars - 1)}…`;
+}
+
+// Truncated track names, keyed by source label + width budget. Bounded by
+// the number of distinct labels; a steady frame is a Map hit (no alloc).
+const nameCache = new Map<string, { maxChars: number; display: string }>();
+
+function displayName(label: string, maxChars: number): string {
+  if (label.length <= maxChars) return label;
+  const cached = nameCache.get(label);
+  if (cached && cached.maxChars === maxChars) return cached.display;
+  const display = truncateText(label, maxChars);
+  nameCache.set(label, { maxChars, display });
+  return display;
 }
 
 function resolveTrackMeta(
@@ -60,9 +84,9 @@ function resolveTrackMeta(
   }
   entry.meta = meta;
   entry.subtitle = meta.subtitle
-    ? truncateSubtitle(
+    ? truncateText(
         meta.subtitle,
-        Math.floor((headerWidth - 16 - 10) / SUBTITLE_CHAR_PX),
+        Math.floor((headerWidth - NAME_X - 12) / SUBTITLE_CHAR_PX),
       )
     : "";
   return entry;
@@ -79,10 +103,10 @@ function drawTrackMeta(
   const top = row.rowRect.y;
   const height = row.rowRect.height;
   if (subtitle.length > 0 && height >= SUBTITLE_MIN_ROW_HEIGHT) {
-    addText(textLayer, subtitle, 16, top + SUBTITLE_Y, {
+    addText(textLayer, subtitle, NAME_X, top + SUBTITLE_Y, {
       color: COLORS.textMuted,
       size: SUBTITLE_SIZE,
-      weight: muted ? "400" : "500",
+      weight: "500",
     });
   }
   const meter = meta.meter;
@@ -93,28 +117,32 @@ function drawTrackMeta(
   ) {
     return;
   }
+  // Thin centred meter on the toggle row, between the toggles and the grip.
   const value = meter < -1 ? -1 : meter > 1 ? 1 : meter;
-  const x0 = 16;
-  const width = row.headerRect.width - x0 - 14;
-  if (width <= 4) return;
+  const lock = row.buttons.lock;
+  const x0 = lock.x + lock.width + 12;
+  const x1 = row.reorderHandleRect.x - 10;
+  const width = x1 - x0;
+  if (width <= 8) return;
   const half = width / 2;
   const center = x0 + half;
-  const y = top + METER_Y;
+  const y = Math.round(lock.y + lock.height / 2 - METER_HEIGHT / 2);
   graphics
-    .rect(x0, y, width, METER_HEIGHT)
-    .fill({ color: COLORS.text, alpha: 0.08 });
+    .roundRect(x0, y, width, METER_HEIGHT, METER_HEIGHT / 2)
+    .fill({ color: COLORS.rowLine });
   if (value > 0) {
     graphics
-      .rect(center, y, half * value, METER_HEIGHT)
-      .fill({ color: COLORS.tonePositive, alpha: muted ? 0.5 : 1 });
+      .roundRect(center, y, Math.max(METER_HEIGHT, half * value), METER_HEIGHT, METER_HEIGHT / 2)
+      .fill({ color: COLORS.tonePositive, alpha: muted ? 0.45 : 1 });
   } else if (value < 0) {
+    const w = Math.max(METER_HEIGHT, -half * value);
     graphics
-      .rect(center + half * value, y, -half * value, METER_HEIGHT)
-      .fill({ color: COLORS.toneDanger, alpha: muted ? 0.5 : 1 });
+      .roundRect(center - w, y, w, METER_HEIGHT, METER_HEIGHT / 2)
+      .fill({ color: COLORS.toneDanger, alpha: muted ? 0.45 : 1 });
   }
   graphics
-    .rect(center - 0.5, y - 1, 1, METER_HEIGHT + 2)
-    .fill({ color: COLORS.textMuted, alpha: 0.6 });
+    .rect(center - 0.5, y - 2, 1, METER_HEIGHT + 4)
+    .fill({ color: COLORS.textSubtle, alpha: 0.8 });
 }
 
 interface ButtonRect {
@@ -124,35 +152,67 @@ interface ButtonRect {
   height: number;
 }
 
-function drawTrackHeaderButton(
+function drawToggleChip(
   graphics: Graphics,
-  textLayer: Container,
   rect: ButtonRect,
-  letter: string,
-  active: boolean,
-  activeColor: number,
+  color: number,
 ): void {
   graphics
-    .roundRect(rect.x, rect.y, rect.width, rect.height, 3)
-    .fill({
-      color: active ? activeColor : COLORS.panelStrong,
-      alpha: active ? 1 : 0.85,
-    })
-    .stroke({ color: COLORS.rowLine, width: 1, alpha: 0.7 });
-  addText(textLayer, letter, rect.x + rect.width / 2 - 3.5, rect.y + 1, {
-    color: active ? COLORS.text : COLORS.textMuted,
-    size: 11,
-    weight: "700",
-  });
+    .roundRect(rect.x - 2, rect.y - 2, rect.width + 4, rect.height + 4, 5)
+    .fill({ color, alpha: 0.14 });
 }
 
-function drawReorderHandle(graphics: Graphics, rect: ButtonRect): void {
-  for (let i = 0; i < 3; i += 1) {
-    const y = rect.y + 4 + i * 4;
+// Eye (visible) / crossed eye (muted).
+function drawMuteIcon(graphics: Graphics, rect: ButtonRect, muted: boolean): void {
+  const cx = rect.x + rect.width / 2;
+  const cy = rect.y + rect.height / 2;
+  const color = muted ? COLORS.toneDanger : COLORS.textSubtle;
+  if (muted) drawToggleChip(graphics, rect, COLORS.toneDanger);
+  graphics.ellipse(cx, cy, 6, 3.8).stroke({ color, width: 1.3 });
+  graphics.circle(cx, cy, 1.7).fill({ color });
+  if (muted) {
     graphics
-      .moveTo(rect.x + 3, y)
-      .lineTo(rect.x + rect.width - 3, y)
-      .stroke({ color: COLORS.textMuted, width: 1, alpha: 0.7 });
+      .moveTo(cx - 5.5, cy + 5.5)
+      .lineTo(cx + 5.5, cy - 5.5)
+      .stroke({ color, width: 1.4 });
+  }
+}
+
+// Focus ring (solo).
+function drawSoloIcon(graphics: Graphics, rect: ButtonRect, soloed: boolean): void {
+  const cx = rect.x + rect.width / 2;
+  const cy = rect.y + rect.height / 2;
+  const color = soloed ? COLORS.selected : COLORS.textSubtle;
+  if (soloed) drawToggleChip(graphics, rect, COLORS.selected);
+  graphics.circle(cx, cy, 5.2).stroke({ color, width: 1.3 });
+  graphics.circle(cx, cy, 1.9).fill({ color });
+}
+
+// Padlock (closed while locked, open shackle otherwise).
+function drawLockIcon(graphics: Graphics, rect: ButtonRect, locked: boolean): void {
+  const cx = rect.x + rect.width / 2;
+  const cy = rect.y + rect.height / 2;
+  const color = locked ? COLORS.text : COLORS.textSubtle;
+  if (locked) drawToggleChip(graphics, rect, COLORS.text);
+  graphics.roundRect(cx - 4.5, cy - 1, 9, 6.5, 1.5);
+  if (locked) graphics.fill({ color });
+  graphics.stroke({ color, width: 1.3 });
+  const shackleX = locked ? cx : cx + 2.5;
+  graphics
+    .moveTo(shackleX - 2.8, cy - 1)
+    .lineTo(shackleX - 2.8, cy - 3.2)
+    .arc(shackleX, cy - 3.2, 2.8, Math.PI, 0)
+    .lineTo(shackleX + 2.8, locked ? cy - 1 : cy - 2.6)
+    .stroke({ color, width: 1.3 });
+}
+
+// Six-dot drag grip.
+function drawReorderHandle(graphics: Graphics, rect: ButtonRect): void {
+  const cx = rect.x + rect.width / 2;
+  const cy = rect.y + rect.height / 2;
+  for (let i = -1; i <= 1; i += 1) {
+    graphics.circle(cx - 2.5, cy + i * 4, 1.1).fill({ color: COLORS.textSubtle });
+    graphics.circle(cx + 2.5, cy + i * 4, 1.1).fill({ color: COLORS.textSubtle });
   }
 }
 
@@ -165,13 +225,17 @@ export function drawTrackRows(
   const { metrics } = presentation;
   const tracksTop = getTracksTop(metrics);
   const viewportBottom = presentation.state.viewport.height;
+  const nameChars = Math.floor(
+    (metrics.trackHeaderWidth - NAME_X - 10) / NAME_CHAR_PX,
+  );
 
+  const hover = presentation.state.hover;
+  const hoveredTrackId = hover?.kind === "track" ? hover.trackId : null;
   for (const row of presentation.trackRows) {
     const color = parseHexColor(row.track.color, COLORS.textMuted);
     const muted = row.track.muted === true;
     const soloed = row.track.soloed === true;
     const locked = row.track.locked === true;
-    const headerAlpha = muted ? 0.55 : 1;
 
     graphics
       .rect(
@@ -180,22 +244,20 @@ export function drawTrackRows(
         row.headerRect.width,
         row.headerRect.height,
       )
-      .fill({
-        color: row.index % 2 === 0 ? COLORS.panelHeaderA : COLORS.panelHeaderB,
-      });
+      .fill({ color: COLORS.panel });
+    if (row.hasSelectedClips) {
+      graphics
+        .rect(row.headerRect.x, row.headerRect.y, row.headerRect.width, row.headerRect.height)
+        .fill({ color: COLORS.selected, alpha: 0.07 });
+      graphics
+        .rect(row.headerRect.x, row.headerRect.y + 6, 2, row.headerRect.height - 12)
+        .fill({ color: COLORS.selected });
+    }
     graphics
-      .rect(
-        row.stripRect.x,
-        row.stripRect.y,
-        row.stripRect.width,
-        row.stripRect.height,
-      )
-      .fill({ color, alpha: headerAlpha });
-    graphics
-      .moveTo(row.rowRect.x, row.rowRect.y + row.rowRect.height - 1)
+      .moveTo(0, row.rowRect.y + row.rowRect.height - 0.5)
       .lineTo(
         row.rowRect.x + row.rowRect.width,
-        row.rowRect.y + row.rowRect.height - 1,
+        row.rowRect.y + row.rowRect.height - 0.5,
       )
       .stroke({ color: COLORS.rowLine, width: 1 });
     graphics
@@ -204,45 +266,31 @@ export function drawTrackRows(
         metrics.trackHeaderWidth - 0.5,
         row.rowRect.y + row.rowRect.height,
       )
-      .stroke({ color: COLORS.rowLine, width: 1.5 });
+      .stroke({ color: COLORS.rowLine, width: 1 });
 
-    addText(textLayer, row.track.label, 16, row.rowRect.y + 6, {
-      color: muted ? COLORS.textMuted : COLORS.text,
-      size: 13,
-      weight: row.isVirtual ? "500" : "700",
-    });
+    graphics
+      .circle(DOT_X, row.rowRect.y + DOT_Y, DOT_RADIUS)
+      .fill({ color, alpha: muted ? 0.35 : 1 });
+    addText(
+      textLayer,
+      displayName(row.track.label, nameChars),
+      NAME_X,
+      row.rowRect.y + NAME_Y,
+      {
+        color: muted ? COLORS.textMuted : COLORS.text,
+        size: NAME_SIZE,
+        weight: row.isVirtual ? "500" : "600",
+      },
+    );
 
-    drawTrackHeaderButton(
-      graphics,
-      textLayer,
-      row.buttons.mute,
-      "M",
-      muted,
-      COLORS.playPosition,
-    );
-    drawTrackHeaderButton(
-      graphics,
-      textLayer,
-      row.buttons.solo,
-      "S",
-      soloed,
-      COLORS.selected,
-    );
-    drawTrackHeaderButton(
-      graphics,
-      textLayer,
-      row.buttons.lock,
-      "L",
-      locked,
-      COLORS.hover,
-    );
-    drawReorderHandle(graphics, row.reorderHandleRect);
-
-    if (row.hasSelectedClips) {
-      graphics
-        .rect(row.headerRect.x, row.headerRect.y, row.headerRect.width, 2)
-        .fill({ color: COLORS.selected, alpha: 0.6 });
-    }
+    // Controls appear where they act: on the hovered / selected row, or
+    // when their state is on (a muted row keeps its eye so you see why).
+    // The hit areas stay put, so hovering reveals them before the click.
+    const showControls = row.track.id === hoveredTrackId || row.hasSelectedClips;
+    if (showControls || muted) drawMuteIcon(graphics, row.buttons.mute, muted);
+    if (showControls || soloed) drawSoloIcon(graphics, row.buttons.solo, soloed);
+    if (showControls || locked) drawLockIcon(graphics, row.buttons.lock, locked);
+    if (showControls) drawReorderHandle(graphics, row.reorderHandleRect);
 
     // Host header extras: only real rows actually on screen.
     if (
@@ -266,18 +314,6 @@ export function drawTrackRows(
           muted,
         );
       }
-    }
-
-    // F10: microtext "—" inside empty real tracks. Virtual rows already
-    // read as "empty" by virtue of having no label weight; we only mark
-    // materialised tracks with no clips so the user can tell a virtual
-    // row apart from a real-but-empty one.
-    if (!row.hasClips && !row.isVirtual) {
-      addText(textLayer, "—", row.headerRect.x + row.headerRect.width - 24, row.rowRect.y + 6, {
-        color: COLORS.textMuted,
-        size: 10,
-        weight: "500",
-      });
     }
   }
 }

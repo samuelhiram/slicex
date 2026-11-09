@@ -162,6 +162,7 @@ describe("F3 — presentation projects overlay views", () => {
     expect(p.tooltipView).toEqual({
       kind: "time",
       text: "3.2.0",
+      time: null,
       x: 240,
       y: 90,
     });

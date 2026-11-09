@@ -64,31 +64,31 @@ describe("formatSignedMoney", () => {
 });
 
 describe("formatDateShort / formatDateLong", () => {
-  it("formats day + Spanish uppercase month", () => {
-    expect(formatDateShort("2026-11-15")).toBe("15 NOV");
-    expect(formatDateShort("2026-01-05")).toBe("5 ENE");
-    expect(formatDateShort("2026-08-31")).toBe("31 AGO");
+  it("formats day + Spanish lower-case month", () => {
+    expect(formatDateShort("2026-11-15")).toBe("15 nov");
+    expect(formatDateShort("2026-01-05")).toBe("5 ene");
+    expect(formatDateShort("2026-08-31")).toBe("31 ago");
   });
 
   it("long form appends the year", () => {
-    expect(formatDateLong("2027-03-15")).toBe("15 MAR 2027");
-    expect(formatDateLong("2026-12-01")).toBe("1 DIC 2026");
+    expect(formatDateLong("2027-03-15")).toBe("15 mar 2027");
+    expect(formatDateLong("2026-12-01")).toBe("1 dic 2026");
   });
 
   it("covers every month abbreviation", () => {
     const expected = [
-      "ENE",
-      "FEB",
-      "MAR",
-      "ABR",
-      "MAY",
-      "JUN",
-      "JUL",
-      "AGO",
-      "SEP",
-      "OCT",
-      "NOV",
-      "DIC",
+      "ene",
+      "feb",
+      "mar",
+      "abr",
+      "may",
+      "jun",
+      "jul",
+      "ago",
+      "sep",
+      "oct",
+      "nov",
+      "dic",
     ];
     expected.forEach((abbr, index) => {
       const month = String(index + 1).padStart(2, "0");
@@ -97,8 +97,8 @@ describe("formatDateShort / formatDateLong", () => {
   });
 
   it("does not shift the day through local time (Jan 1 / Dec 31)", () => {
-    expect(formatDateLong("2027-01-01")).toBe("1 ENE 2027");
-    expect(formatDateLong("2026-12-31")).toBe("31 DIC 2026");
+    expect(formatDateLong("2027-01-01")).toBe("1 ene 2027");
+    expect(formatDateLong("2026-12-31")).toBe("31 dic 2026");
   });
 
   it("returns unparseable input unchanged", () => {
@@ -127,12 +127,12 @@ const TODAY = "2026-11-07";
 
 describe("formatDateWeekday / formatDateInput", () => {
   it("prefixes the Spanish weekday to the long date", () => {
-    expect(formatDateWeekday("2026-11-15")).toBe("dom 15 NOV 2026");
-    expect(formatDateWeekday("2026-11-14")).toBe("sáb 14 NOV 2026");
-    expect(formatDateWeekday("2026-11-20")).toBe("vie 20 NOV 2026");
-    expect(formatDateWeekday("2027-01-01")).toBe("vie 1 ENE 2027");
-    expect(formatDateWeekday("2000-02-29")).toBe("mar 29 FEB 2000");
-    expect(formatDateWeekday("1970-01-01")).toBe("jue 1 ENE 1970");
+    expect(formatDateWeekday("2026-11-15")).toBe("dom 15 nov 2026");
+    expect(formatDateWeekday("2026-11-14")).toBe("sáb 14 nov 2026");
+    expect(formatDateWeekday("2026-11-20")).toBe("vie 20 nov 2026");
+    expect(formatDateWeekday("2027-01-01")).toBe("vie 1 ene 2027");
+    expect(formatDateWeekday("2000-02-29")).toBe("mar 29 feb 2000");
+    expect(formatDateWeekday("1970-01-01")).toBe("jue 1 ene 1970");
   });
 
   it("agrees with the UTC calendar for every day of 2026–2028", () => {
@@ -168,14 +168,14 @@ describe("parseDateInput", () => {
     "2026-11-15",
     "2026/11/15",
     "15 nov 2026",
-    "15 NOV 2026",
+    "15 nov 2026",
     "15 Nov. 2026",
     "15 de noviembre de 2026",
     "nov 15 2026",
     "  15/11/2026  ",
     // What formatDateWeekday prints (and anything with a leading weekday,
     // which is decoration and never checked against the date).
-    "dom 15 NOV 2026",
+    "dom 15 nov 2026",
     "sáb 15 nov 2026",
     "domingo, 15 de noviembre de 2026",
     "mar 15/11/2026",

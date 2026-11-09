@@ -92,11 +92,26 @@ export interface LoanItem extends FinancialItemBase {
 }
 
 /**
+ * How a revolving card is paid (see CreditCardItem):
+ * - "fixed": a planned amount every due date; interest on the carried debt.
+ * - "statement" ("pago para no generar intereses", being "totalero"): every
+ *   due date pays exactly the statement — the debt at the last cut — so the
+ *   card never accrues interest.
+ */
+export type CreditCardPaymentMode = "fixed" | "statement";
+
+/**
  * Revolving credit card.
  * - `balance`: debt at the document start date.
- * - Payments: every month on `dueDay` (clamped to month length) inside the
- *   recurrence window; planned amount = `paymentAmount ?? minimumPayment`,
- *   capped at the outstanding card debt. `recurrence.frequency` is ignored.
+ * - `cutDay` / `dueDay`: day of month of the cut and of the payment, clamped
+ *   to the month length (31 → 30/28, no drift).
+ * - `recurrence`: only its window matters (when the payments happen);
+ *   `recurrence.frequency` is ignored.
+ *
+ * `paymentMode` "fixed" (default, also when undefined):
+ * - Payments: every month on `dueDay` inside the recurrence window; planned
+ *   amount = `paymentAmount ?? minimumPayment`, capped at the outstanding card
+ *   debt.
  * - Interest (ESTIMATE, average daily balance): every month on `cutDay`, over
  *   the whole projection range, the card is charged
  *   Σ debt_i × (annualRate / 100 / 360) × days_i
@@ -105,6 +120,24 @@ export interface LoanItem extends FinancialItemBase {
  *   one day before the cut costs one day of interest; a payment one day
  *   before the cut removes one day. Posted (rounded to cents) to the card
  *   debt, no cash effect.
+ *
+ * `paymentMode` "statement" (pay the statement in full, never any interest):
+ * - The pending statement starts as the opening `balance`. At every cut
+ *   (every month on `cutDay`, over the whole projection range), AFTER that
+ *   day's other events — a purchase dated on the cut day belongs to that
+ *   statement; a payment due that same day pays the previous one — the
+ *   statement becomes the card's whole current debt (an unpaid previous
+ *   statement included).
+ * - Payments: every month on `dueDay` inside the recurrence window, the card
+ *   pays min(statement, debt) and the statement drops to 0. A purchase one
+ *   day before the cut is paid on the next due date; one day after the cut,
+ *   a month later (`statementDueDate`).
+ * - No interest is ever charged; `annualRate`, `minimumPayment` and
+ *   `paymentAmount` are kept but ignored by the projection and the payoff
+ *   estimate.
+ *
+ * Either way, card purchases add to the card debt and MSI plans on the card
+ * are their own accounts (paid on the card's `dueDay`).
  */
 export interface CreditCardItem extends FinancialItemBase {
   kind: "credit-card";
@@ -114,6 +147,8 @@ export interface CreditCardItem extends FinancialItemBase {
   dueDay: number;
   minimumPayment: number;
   paymentAmount?: number;
+  /** Default "fixed" (undefined). See the interface doc. */
+  paymentMode?: CreditCardPaymentMode;
 }
 
 /** A purchase charged to card `cardId`: adds `amount` to that card's debt, no cash effect. */
@@ -189,7 +224,10 @@ export interface FinancialEvent {
   itemId: string;
   type: FinancialEventType;
   date: ISODate;
-  /** Positive planned magnitude. Interest events carry 0 (computed by the projection). */
+  /**
+   * Positive planned magnitude. Interest events and the payments of a card in
+   * "statement" mode carry 0 (computed by the projection).
+   */
   amount: number;
   name: string;
   /** Debt account touched (card / loan / installment-plan id). */
@@ -226,6 +264,15 @@ export interface ProjectionAccount {
   /** Debt at the projection start (≥ 0). */
   openingDebt: number;
   annualRate: number;
+  /**
+   * Credit cards in "statement" payment mode only (absent otherwise): the
+   * card's cut day of month (1..31). The projection then closes a statement
+   * at every cut (cutDay clamped to the month length, after that day's
+   * events), pays the pending statement on every "credit-card-payment" event
+   * of the account (the event amount is ignored) and charges no interest
+   * (`annualRate` stays informative). See CreditCardItem.
+   */
+  statementCutDay?: number;
 }
 
 export interface FinancialProjection {

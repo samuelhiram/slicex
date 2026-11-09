@@ -103,13 +103,18 @@ function expandItem(
       pushDates(out, expandRecurrence(rec, range), item, "loan-payment", positiveMoney(item.paymentAmount), item.id);
       break;
     case "credit-card": {
+      // "statement" mode: the projection computes every payment (the pending
+      // statement, closed at each cut) and charges no interest, so the payments
+      // carry 0 and no interest event is emitted.
+      const statement = item.paymentMode === "statement";
       const payWindow = intersectWindow(rec.startDate, rec.endDate, range);
       if (payWindow) {
         scratch.length = 0;
         expandMonthlyOnDay(item.dueDay, payWindow, scratch);
-        const planned = positiveMoney(item.paymentAmount ?? item.minimumPayment);
+        const planned = statement ? 0 : positiveMoney(item.paymentAmount ?? item.minimumPayment);
         pushDates(out, scratch, item, "credit-card-payment", planned, item.id);
       }
+      if (statement) break;
       const interestWindow = intersectWindow(range.from, undefined, range);
       if (interestWindow) {
         scratch.length = 0;
@@ -274,6 +279,7 @@ interface ItemExpansion {
   f2: unknown;
   f3: unknown;
   f4: unknown;
+  f5: unknown;
   /** installment-plan: dueDay of `cards.get(cardId)`; NO_CARD when there is no such card. */
   cardDay: unknown;
   /** Frozen events (frozen list), sorted by date → type priority (stable), local ids. */
@@ -296,7 +302,8 @@ function kindFieldsMatch(e: ItemExpansion, item: FinancialItem): boolean {
         Object.is(e.f1, item.dueDay) &&
         Object.is(e.f2, item.cutDay) &&
         Object.is(e.f3, item.paymentAmount) &&
-        Object.is(e.f4, item.minimumPayment)
+        Object.is(e.f4, item.minimumPayment) &&
+        e.f5 === item.paymentMode
       );
     case "card-purchase":
       return Object.is(e.f1, item.amount) && e.f2 === item.cardId;
@@ -326,6 +333,7 @@ function setKindFields(e: ItemExpansion, item: FinancialItem): void {
       e.f2 = item.cutDay;
       e.f3 = item.paymentAmount;
       e.f4 = item.minimumPayment;
+      e.f5 = item.paymentMode;
       break;
     case "card-purchase":
       e.f1 = item.amount;
@@ -419,6 +427,7 @@ function buildEntry(
     f2: undefined,
     f3: undefined,
     f4: undefined,
+    f5: undefined,
     cardDay,
     events: Object.freeze(events),
     keys,
@@ -510,6 +519,12 @@ function reassignSharedIds(events: FinancialEvent[]): void {
  * changing it. An item is re-expanded only when one of the inputs it reads
  * changed (its own fields, `range`, the document start and, for an MSI plan,
  * its card's dueDay); unchanged items reuse their events.
+ *
+ * Credit cards emit a "credit-card-payment" on every due date inside their
+ * window and, in "fixed" mode, a 0-amount "credit-card-interest" on every cut
+ * of the range. In "statement" mode the payments carry 0 (the projection pays
+ * the pending statement) and no interest event is emitted (see
+ * CreditCardItem).
  *
  * Card purchases are ALWAYS emitted with `accountId = cardId` (or the
  * purchase's own id when `cardId` is empty). When that card is missing or

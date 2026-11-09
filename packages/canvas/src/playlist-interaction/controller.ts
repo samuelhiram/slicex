@@ -5,7 +5,9 @@ import {
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
   getTrackHeightByIndex,
+  getHorizontalContentExtent,
   getTrackIdByIndex,
+  getTracksTop,
   getVerticalScrollableRange,
   getVerticalScrollbarRect,
   getVerticalScrollbarThumbRect,
@@ -23,12 +25,52 @@ import type {
   PlaylistTrackMenuAction,
 } from "../playlist-core";
 import type { ActiveGesture } from "./gesture-types";
+import {
+  createViewportNavigator,
+  createWheelClassifier,
+  wheelDeltaScale,
+  type ViewportNavigator,
+} from "./navigator";
 import { hitTestPlaylist, type PlaylistHit } from "./hit-test";
 import { getTool, zoomToolApplyOut } from "./tools";
 import { createTouchTracker } from "./touch";
 
 export interface PlaylistInteractionController {
   destroy: () => void;
+  // Smooth viewport motion (scroll / zoom / reveal / fit) for host UI such
+  // as "Hoy" buttons or zoom presets; shares the wheel's animation.
+  readonly navigator: ViewportNavigator;
+}
+
+export interface PlaylistClipLevelEvent {
+  clipId: string;
+  phase: "start" | "move" | "end";
+  // Pointer travel since the press, in px; positive = upwards.
+  deltaY: number;
+}
+
+export interface PlaylistInteractionOptions {
+  // Gives every non-automation clip a "level" the host owns (e.g. an
+  // amount). With this set, the top edge of a clip (CLIP_LEVEL_HANDLE_PX)
+  // is a handle for the Select / Draw tools: dragging it vertically calls
+  // this with the travel. The whole drag is ONE gesture (one undo entry
+  // for whatever the host dispatches). Return the text of the tooltip to
+  // show next to the cursor, or null for none.
+  onClipLevelDrag?: (event: PlaylistClipLevelEvent) => string | null;
+  // Gives the single selected clip an EXTEND GRABBER (Select / Draw): a
+  // vertical bar at the centre of the visible timeline, inside the clip,
+  // that moves the clip's right end (drag right = longer, left = shorter)
+  // even when that end is off-screen (see getClipExtendHandle). The
+  // predicate is the host's veto per clip. One gesture = one undo entry.
+  clipExtend?: (clipId: string) => boolean;
+  // The least the grabber moves the end per px of drag, in beats. Zoomed out
+  // the end follows the pointer 1:1; zoomed in (fewer beats per px) the
+  // grabber never gets slower than this, so a far end stays within reach.
+  // Default 0: always 1:1.
+  clipExtendMinBeatsPerPx?: number;
+  // The pointer moved over the overview lane: the beat under it (floored),
+  // or null when it left the lane. Called only when that value changes.
+  onOverviewHover?: (beat: number | null) => void;
 }
 
 type PlaylistInteractionHost = HTMLElement & {
@@ -70,7 +112,17 @@ function setCursor(
     return;
   }
 
-  if (active?.kind === "clip-resize") {
+  if (active?.kind === "clip-resize" || active?.kind === "clip-extend") {
+    host.style.cursor = "ew-resize";
+    return;
+  }
+
+  if (active?.kind === "clip-level") {
+    host.style.cursor = "ns-resize";
+    return;
+  }
+
+  if (active?.kind === "scrollbar-zoom") {
     host.style.cursor = "ew-resize";
     return;
   }
@@ -128,7 +180,7 @@ function setCursor(
 
   // Universal hits override tool cursors.
   if (hit.kind === "scrollbar-horizontal") {
-    host.style.cursor = "ew-resize";
+    host.style.cursor = hit.edge ? "ew-resize" : hit.onThumb ? "grab" : "pointer";
     return;
   }
 
@@ -168,6 +220,18 @@ function setCursor(
 
   if (hit.kind === "track-reorder-handle") {
     host.style.cursor = "grab";
+    return;
+  }
+
+  // The extend grabber (only offered to Select / Draw).
+  if (hit.kind === "clip-extend") {
+    host.style.cursor = "ew-resize";
+    return;
+  }
+
+  // The level handle (top edge of a clip) for Select / Draw.
+  if (hit.kind === "clip-level" && (toolId === "select" || toolId === "draw")) {
+    host.style.cursor = "ns-resize";
     return;
   }
 
@@ -358,10 +422,13 @@ function emitDragOverlays(
     core.setDragPreview(preview);
   }
   const tooltipBeats = tooltipTime ?? snapTimeValue;
+  // A right edge is an exclusive end: name the last unit it still covers.
+  const rightEdge = preview?.kind === "clip-resize" && preview.edge === "right";
   core.setTooltip({
     kind: "time",
-    text: core.formatTime(tooltipBeats),
+    text: rightEdge ? core.formatEndTime(tooltipBeats) : core.formatTime(tooltipBeats),
     anchor: point,
+    time: rightEdge ? core.endTooltipBeat(tooltipBeats) : tooltipBeats,
   });
 }
 
@@ -372,7 +439,7 @@ function clearDragOverlays(core: PlaylistCore): void {
 }
 
 function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
-  if (hit.kind === "clip" || hit.kind === "automation-body") {
+  if (hit.kind === "clip" || hit.kind === "automation-body" || hit.kind === "clip-level") {
     core.setHover({ kind: "clip", clipId: hit.clip.id });
     return;
   }
@@ -384,6 +451,11 @@ function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
 
   if (hit.kind === "resize-right") {
     core.setHover({ kind: "resize-right", clipId: hit.clip.id });
+    return;
+  }
+
+  if (hit.kind === "clip-extend") {
+    core.setHover({ kind: "clip-extend", clipId: hit.clip.id });
     return;
   }
 
@@ -428,9 +500,77 @@ const DOUBLE_CLICK_SLOP_PX = 5;
 export function createPlaylistInteractionController(
   host: PlaylistInteractionHost,
   core: PlaylistCore,
+  options: PlaylistInteractionOptions = {},
 ): PlaylistInteractionController {
   const metrics = core.metrics;
   let activeGesture: ActiveGesture | null = null;
+  const onClipLevelDrag = options.onClipLevelDrag;
+  const onOverviewHover = options.onOverviewHover;
+  const extendMinBeatsPerPx = Math.max(0, options.clipExtendMinBeatsPerPx ?? 0);
+  const hitOptions = {
+    clipLevel: onClipLevelDrag !== undefined,
+    clipExtend: options.clipExtend,
+  };
+  const hitAt = (point: PlaylistPoint): PlaylistHit =>
+    hitTestPlaylist(core.getPresentation(), point, metrics, hitOptions);
+  // Viewport motion (smooth wheel, zoom, momentum, edge auto-scroll).
+  const navigator = createViewportNavigator(core, {
+    reducedMotion: () =>
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  });
+  const classifyWheel = createWheelClassifier();
+  // Hold Space to pan with the left button (tap Space still plays).
+  let spaceHeld = false;
+  let spacePanned = false;
+  // Pan velocity: the last few pointer samples, preallocated (no per-move
+  // allocation), read on release for the momentum fling.
+  const PAN_SAMPLES = 6;
+  const panT = new Float64Array(PAN_SAMPLES);
+  const panX = new Float64Array(PAN_SAMPLES);
+  const panY = new Float64Array(PAN_SAMPLES);
+  let panCount = 0;
+  let panHead = 0;
+  const recordPan = (point: PlaylistPoint, time: number): void => {
+    panT[panHead] = time;
+    panX[panHead] = point.x;
+    panY[panHead] = point.y;
+    panHead = (panHead + 1) % PAN_SAMPLES;
+    if (panCount < PAN_SAMPLES) panCount += 1;
+  };
+  const panVelocity = (now: number): { vx: number; vy: number } => {
+    if (panCount < 2) return { vx: 0, vy: 0 };
+    const newest = (panHead - 1 + PAN_SAMPLES) % PAN_SAMPLES;
+    // Oldest sample inside the last 100 ms.
+    let oldest = newest;
+    for (let i = 1; i < panCount; i += 1) {
+      const index = (newest - i + PAN_SAMPLES) % PAN_SAMPLES;
+      if (now - panT[index]! > 100) break;
+      oldest = index;
+    }
+    const dt = (panT[newest]! - panT[oldest]!) / 1000;
+    // A pause before release means no momentum.
+    if (dt <= 0 || now - panT[newest]! > 80) return { vx: 0, vy: 0 };
+    return {
+      vx: (panX[newest]! - panX[oldest]!) / dt,
+      vy: (panY[newest]! - panY[oldest]!) / dt,
+    };
+  };
+  // Last pointermove of the active gesture (edge auto-scroll re-applies it).
+  let lastGestureMove: PointerEvent | null = null;
+  const timelineWidthOf = (state: ReturnType<PlaylistCore["getState"]>): number =>
+    Math.max(1, state.viewport.width - metrics.trackHeaderWidth - metrics.scrollbarSize);
+  const verticalRoom = (state: ReturnType<PlaylistCore["getState"]>): number =>
+    getVerticalScrollableRange(state, metrics, core.getLayoutOptions()) - state.viewport.scrollY;
+
+  // Last beat reported to onOverviewHover (null = outside the lane).
+  let overviewBeat: number | null = null;
+  const reportOverviewHover = (beat: number | null): void => {
+    if (beat === overviewBeat) return;
+    overviewBeat = beat;
+    onOverviewHover?.(beat);
+  };
 
   host.style.touchAction = "none";
   host.style.userSelect = "none";
@@ -492,11 +632,21 @@ export function createPlaylistInteractionController(
 
   const handlePointerDown = (event: PointerEvent): void => {
     host.focus();
+    // A new press always takes over: no glide / momentum fights the hand.
+    navigator.stop();
 
     const state = core.getState();
     const point = resolvePoint(host, event);
-    const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
+    const rawHit = hitAt(point);
     const clickCount = pressClickCount(event, point);
+    // The level handle belongs to Select / Draw; every other tool sees the
+    // clip itself.
+    const levelTool = core.getState().tool === "select" || core.getState().tool === "draw";
+    const hit: PlaylistHit =
+      (rawHit.kind === "clip-level" && (!levelTool || event.button !== 0)) ||
+      (rawHit.kind === "clip-extend" && event.button !== 0)
+        ? { kind: "clip", clip: rawHit.clip, clipId: rawHit.clipId }
+        : rawHit;
 
     // Any new pointerdown cancels in-flight inertia before further
     // dispatch; the user clearly wants a fresh gesture.
@@ -516,7 +666,11 @@ export function createPlaylistInteractionController(
       }
     }
 
-    if (event.button === 1) {
+    // Middle button, or Space held + left button: the hand (pan).
+    if (event.button === 1 || (spaceHeld && event.button === 0)) {
+      if (spaceHeld) spacePanned = true;
+      panCount = 0;
+      recordPan(point, event.timeStamp);
       activeGesture = {
         kind: "pan",
         pointerId: event.pointerId,
@@ -661,6 +815,41 @@ export function createPlaylistInteractionController(
       const track = getHorizontalScrollbarRect(state, metrics);
       let thumb = getHorizontalScrollbarThumbRect(state, metrics);
       const scrollableRange = getHorizontalScrollableRange(state, metrics);
+      const px = state.viewport.pxPerBeat;
+      // The track maps the whole addressable extent (frozen for this press).
+      const beatsPerPx =
+        getHorizontalContentExtent(state, metrics) / px / Math.max(1, track.width);
+      const width = timelineWidthOf(state);
+      // Double-click on the thumb: see everything.
+      if (hit.onThumb && clickCount === 2) {
+        const end = Math.max(core.getContentEndTime(), width / px);
+        navigator.showRange(0, end * 1.02);
+        event.preventDefault();
+        return;
+      }
+      // Thumb ends: zoom by stretching the visible window.
+      if (hit.edge) {
+        const startBeat = state.viewport.scrollX / px;
+        const endBeat = (state.viewport.scrollX + width) / px;
+        activeGesture = {
+          kind: "scrollbar-zoom",
+          pointerId: event.pointerId,
+          edge: hit.edge,
+          fixedBeat: hit.edge === "start" ? endBeat : startBeat,
+          trackX: track.x,
+          beatsPerPx,
+        };
+        host.setPointerCapture?.(event.pointerId);
+        setCursor(host, hit, activeGesture, state.tool);
+        event.preventDefault();
+        return;
+      }
+      // Track outside the thumb: glide there (centred), no jump.
+      if (!hit.onThumb) {
+        navigator.reveal((point.x - track.x) * beatsPerPx, { align: "center" });
+        event.preventDefault();
+        return;
+      }
       // Click on the track outside the thumb: page-jump so the thumb lands
       // under the cursor, then start a drag from that new origin. Matches
       // the standard browser scrollbar behaviour.
@@ -799,6 +988,54 @@ export function createPlaylistInteractionController(
       }
     }
 
+    if (hit.kind === "clip-level" && onClipLevelDrag && event.button === 0) {
+      activeGesture = {
+        kind: "clip-level",
+        pointerId: event.pointerId,
+        clipId: hit.clipId,
+        startY: point.y,
+      };
+      core.setClipSelection([hit.clipId]);
+      core.beginGesture();
+      const text = onClipLevelDrag({ clipId: hit.clipId, phase: "start", deltaY: 0 });
+      if (text) core.setTooltip({ kind: "time", text, anchor: point });
+      host.setPointerCapture?.(event.pointerId);
+      setCursor(host, hit, activeGesture, state.tool);
+      event.preventDefault();
+      return;
+    }
+
+    if (hit.kind === "clip-extend" && event.button === 0) {
+      activeGesture = {
+        kind: "clip-extend",
+        pointerId: event.pointerId,
+        clipId: hit.clipId,
+        startPointerTime: screenXToTime(state, point.x, metrics),
+        originalEnd: hit.clip.start + hit.clip.duration,
+        travelled: 0,
+        grabOffsetX: hit.x - point.x,
+      };
+      core.beginGesture();
+      core.setDragPreview({
+        kind: "clip-resize",
+        clipId: hit.clipId,
+        edge: "right",
+        previewStart: hit.clip.start,
+        previewDuration: hit.clip.duration,
+        handleX: hit.x,
+      });
+      core.setTooltip({
+        kind: "time",
+        text: core.formatEndTime(hit.clip.start + hit.clip.duration),
+        anchor: point,
+        time: core.endTooltipBeat(hit.clip.start + hit.clip.duration),
+      });
+      host.setPointerCapture?.(event.pointerId);
+      setCursor(host, hit, activeGesture, state.tool);
+      event.preventDefault();
+      return;
+    }
+
     if (hit.kind === "play-position-marker" || hit.kind === "ruler") {
       core.setPlayPosition(
         core.snapTime(screenXToTime(state, point.x, metrics), event.altKey, state),
@@ -895,9 +1132,62 @@ export function createPlaylistInteractionController(
     );
   }
 
+  // Edge auto-scroll: while a drag sits within EDGE_ZONE px of the
+  // timeline's edges, the view glides that way (faster closer to the edge)
+  // and the drag is re-applied at the same pointer every frame, so a clip
+  // can be carried months away without letting go.
+  const EDGE_ZONE = 44;
+  const EDGE_MAX_SPEED = 1400; // px/s
+  const edgeSpeed = (distanceIntoZone: number): number => {
+    const t = Math.min(1, Math.max(0, distanceIntoZone / EDGE_ZONE));
+    return EDGE_MAX_SPEED * t * t;
+  };
+  const updateEdgeScroll = (gesture: ActiveGesture, point: PlaylistPoint): void => {
+    const horizontal =
+      gesture.kind === "clip-drag" ||
+      gesture.kind === "clip-resize" ||
+      gesture.kind === "clip-extend" ||
+      gesture.kind === "clip-create-drag" ||
+      gesture.kind === "marquee" ||
+      gesture.kind === "paint-drag" ||
+      gesture.kind === "slip-drag" ||
+      gesture.kind === "marker-drag" ||
+      gesture.kind === "automation-point-drag" ||
+      gesture.kind === "play-position-drag";
+    const vertical =
+      gesture.kind === "clip-drag" || gesture.kind === "marquee" || gesture.kind === "paint-drag";
+    if (!horizontal) return;
+    const state = core.getState();
+    const left = metrics.trackHeaderWidth;
+    const right = state.viewport.width - metrics.scrollbarSize;
+    let vx = 0;
+    if (point.x > right - EDGE_ZONE) vx = edgeSpeed(point.x - (right - EDGE_ZONE));
+    else if (point.x < left + EDGE_ZONE && state.viewport.scrollX > 0) {
+      vx = -edgeSpeed(left + EDGE_ZONE - point.x);
+    }
+    let vy = 0;
+    if (vertical) {
+      const top = getTracksTop(metrics);
+      const bottom = state.viewport.height - metrics.scrollbarSize;
+      if (point.y > bottom - EDGE_ZONE && verticalRoom(state) > 0.5) {
+        vy = edgeSpeed(point.y - (bottom - EDGE_ZONE)) * 0.6;
+      } else if (point.y < top + EDGE_ZONE && point.y > top - 8 && state.viewport.scrollY > 0) {
+        vy = -edgeSpeed(top + EDGE_ZONE - point.y) * 0.6;
+      }
+    }
+    navigator.setEdgeScroll(vx, vy, reapplyGestureMove);
+  };
+  const reapplyGestureMove = (): void => {
+    if (activeGesture && lastGestureMove) handlePointerMove(lastGestureMove);
+  };
+
   const handlePointerMove = (event: PointerEvent): void => {
     const state = core.getState();
     const point = resolvePoint(host, event);
+    if (activeGesture && activeGesture.pointerId === event.pointerId) {
+      lastGestureMove = event;
+      updateEdgeScroll(activeGesture, point);
+    }
 
     if (
       pressHeld &&
@@ -916,8 +1206,17 @@ export function createPlaylistInteractionController(
     }
 
     if (!activeGesture) {
-      const hit = hitTestPlaylist(core.getPresentation(), point, metrics);
+      const hit = hitAt(point);
       setHoverFromHit(core, hit);
+      if (onOverviewHover) {
+        const inLane =
+          hit.kind === "ruler" &&
+          point.y > metrics.rulerHeight &&
+          point.y <= getTracksTop(metrics);
+        reportOverviewHover(
+          inLane ? Math.max(0, Math.floor(screenXToTime(state, point.x, metrics))) : null,
+        );
+      }
       // F3: hover on the ruler emits a B.B.T tooltip; everywhere else the
       // tooltip is cleared. setTooltip short-circuits when the value
       // doesn't change, so calling clearTooltip every pointermove is free
@@ -931,6 +1230,7 @@ export function createPlaylistInteractionController(
           kind: "time",
           text: core.formatTime(tooltipBeats),
           anchor: point,
+          time: tooltipBeats,
         });
       } else {
         core.clearTooltip();
@@ -945,11 +1245,44 @@ export function createPlaylistInteractionController(
 
     const gesture = activeGesture;
 
+    if (gesture.kind === "clip-level") {
+      const text = onClipLevelDrag?.({
+        clipId: gesture.clipId,
+        phase: "move",
+        deltaY: gesture.startY - point.y,
+      });
+      if (text) core.setTooltip({ kind: "time", text, anchor: point });
+      else core.clearTooltip();
+      event.preventDefault();
+      return;
+    }
+
     if (gesture.kind === "pan") {
+      recordPan(point, event.timeStamp);
       core.updateViewport({
         scrollX: gesture.startScrollX - (point.x - gesture.startPoint.x),
         scrollY: gesture.startScrollY - (point.y - gesture.startPoint.y),
       });
+      event.preventDefault();
+      return;
+    }
+
+    if (gesture.kind === "scrollbar-zoom") {
+      const width = timelineWidthOf(state);
+      const minSpan = width / metrics.maxPxPerBeat;
+      const maxSpan = width / metrics.minPxPerBeat;
+      const beat = Math.max(0, (point.x - gesture.trackX) * gesture.beatsPerPx);
+      let start: number;
+      let end: number;
+      if (gesture.edge === "end") {
+        start = gesture.fixedBeat;
+        end = Math.min(start + maxSpan, Math.max(start + minSpan, beat));
+      } else {
+        end = gesture.fixedBeat;
+        start = Math.max(0, Math.max(end - maxSpan, Math.min(end - minSpan, beat)));
+      }
+      const pxPerBeat = width / Math.max(minSpan, end - start);
+      core.updateViewport({ pxPerBeat, scrollX: start * pxPerBeat });
       event.preventDefault();
       return;
     }
@@ -1031,6 +1364,45 @@ export function createPlaylistInteractionController(
       return;
     }
 
+    if (gesture.kind === "clip-extend") {
+      const clip = state.clips.find((c) => c.id === gesture.clipId);
+      if (!clip) {
+        event.preventDefault();
+        return;
+      }
+      // Relative: the end moves by the time the pointer travelled (scroll
+      // included, so edge auto-scroll keeps carrying it), sped up when
+      // zoomed in (clipExtendMinBeatsPerPx). Accumulated move by move so a
+      // zoom change mid-drag never re-scales what was already travelled.
+      const pointerTime = screenXToTime(state, point.x, metrics);
+      const gain = Math.max(1, extendMinBeatsPerPx * state.viewport.pxPerBeat);
+      gesture.travelled += (pointerTime - gesture.startPointerTime) * gain;
+      gesture.startPointerTime = pointerTime;
+      const end = Math.max(
+        clip.start + metrics.minClipDuration,
+        core.snapTime(gesture.originalEnd + gesture.travelled, event.altKey, state),
+      );
+      core.resizeClip(gesture.clipId, "right", end);
+      const after = core.getState().clips.find((c) => c.id === gesture.clipId) ?? clip;
+      emitDragOverlays(
+        core,
+        state,
+        point,
+        event.altKey,
+        {
+          kind: "clip-resize",
+          clipId: gesture.clipId,
+          edge: "right",
+          previewStart: after.start,
+          previewDuration: after.duration,
+          handleX: point.x + gesture.grabOffsetX,
+        },
+        after.start + after.duration,
+      );
+      event.preventDefault();
+      return;
+    }
+
     if (gesture.kind === "clip-create-drag") {
       // Draw-tool drag from empty space. We only commit a clip once the
       // cursor has crossed minClipDuration past the snapped start so a
@@ -1108,6 +1480,7 @@ export function createPlaylistInteractionController(
         kind: "time",
         text: core.formatTime(snapped),
         anchor: point,
+        time: snapped,
       });
       event.preventDefault();
       return;
@@ -1318,8 +1691,26 @@ export function createPlaylistInteractionController(
       return;
     }
 
+    navigator.setEdgeScroll(0, 0);
+    lastGestureMove = null;
+    if (activeGesture.kind === "pan") {
+      // Throw the view: momentum from the release velocity.
+      const { vx, vy } = panVelocity(event.timeStamp);
+      navigator.fling(vx, verticalRoom(core.getState()) > 0.5 ? vy : 0);
+    }
+
     if (activeGesture.kind === "marquee") {
       core.setMarquee(null);
+    }
+
+    if (activeGesture.kind === "clip-level") {
+      const point = resolvePoint(host, event);
+      onClipLevelDrag?.({
+        clipId: activeGesture.clipId,
+        phase: "end",
+        deltaY: activeGesture.startY - point.y,
+      });
+      core.endGesture();
     }
 
     if (activeGesture.kind === "slice-drag") {
@@ -1342,6 +1733,7 @@ export function createPlaylistInteractionController(
     if (
       activeGesture.kind === "clip-drag" ||
       activeGesture.kind === "clip-resize" ||
+      activeGesture.kind === "clip-extend" ||
       activeGesture.kind === "clip-create-drag" ||
       activeGesture.kind === "automation-point-drag" ||
       activeGesture.kind === "paint-drag" ||
@@ -1362,49 +1754,81 @@ export function createPlaylistInteractionController(
 
     activeGesture = null;
     host.releasePointerCapture?.(event.pointerId);
-    setCursor(
-      host,
-      hitTestPlaylist(
-        core.getPresentation(),
-        resolvePoint(host, event),
-        metrics,
-      ),
-      null,
-      core.getState().tool,
+    setCursor(host, hitAt(resolvePoint(host, event)), null, core.getState().tool);
+  };
+
+  // Pointer wheel / trackpad.
+  //   - Pinch (trackpad) or Ctrl/Cmd/Alt + wheel: zoom at the pointer —
+  //     proportional and immediate for a trackpad, smooth steps for a
+  //     notched wheel.
+  //   - Trackpad two-finger swipe: free 2-D pan, 1:1 with the fingers;
+  //     with no tracks to scroll, vertical swipes move time too.
+  //   - Mouse wheel: TIME (the main axis of an infinite timeline), smooth
+  //     and accelerating (notches accumulate on the glide target). Shift +
+  //     wheel, or the wheel over the track headers, scrolls the tracks.
+  //     A tilt wheel (deltaX) moves time.
+  const zoomImmediate = (factor: number, screenX: number): void => {
+    const state = core.getState();
+    const anchorTime = screenXToTime(state, screenX, metrics);
+    const pxPerBeat = clamp(
+      state.viewport.pxPerBeat * factor,
+      metrics.minPxPerBeat,
+      metrics.maxPxPerBeat,
     );
+    core.updateViewport({
+      pxPerBeat,
+      scrollX: Math.max(0, anchorTime * pxPerBeat - (screenX - metrics.trackHeaderWidth)),
+    });
   };
 
   const handleWheel = (event: WheelEvent): void => {
+    event.preventDefault();
     const state = core.getState();
     const point = resolvePoint(host, event);
+    const device = classifyWheel(event);
+    const width = timelineWidthOf(state);
+    const scale = wheelDeltaScale(event.deltaMode, width);
+    const dx = event.deltaX * scale;
+    const dy = event.deltaY * scale;
+    const anchorX = Math.max(point.x, metrics.trackHeaderWidth);
 
-    if (event.ctrlKey || event.metaKey) {
-      const timelineX = point.x - metrics.trackHeaderWidth;
-
-      if (timelineX >= 0) {
-        const anchorTime = screenXToTime(state, point.x, metrics);
-        const zoomFactor = Math.exp(-event.deltaY * 0.0015);
-        const pxPerBeat = clamp(
-          state.viewport.pxPerBeat * zoomFactor,
-          metrics.minPxPerBeat,
-          metrics.maxPxPerBeat,
-        );
-        const scrollX = anchorTime * pxPerBeat - timelineX;
-
-        core.updateViewport({ pxPerBeat, scrollX });
-        event.preventDefault();
-        return;
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+      const delta = dy !== 0 ? dy : dx;
+      if (device === "trackpad") {
+        navigator.stop();
+        zoomImmediate(Math.exp(-delta * 0.01), anchorX);
+      } else {
+        navigator.zoomBy(Math.pow(1.25, -delta / 100), anchorX);
       }
+      return;
     }
 
-    core.updateViewport({
-      scrollX:
-        state.viewport.scrollX +
-        event.deltaX +
-        (event.shiftKey ? event.deltaY : 0),
-      scrollY: state.viewport.scrollY + (event.shiftKey ? 0 : event.deltaY),
-    });
-    event.preventDefault();
+    const room = verticalRoom(state) > 0.5 || state.viewport.scrollY > 0.5;
+    const overHeaders = point.x < metrics.trackHeaderWidth && point.y > getTracksTop(metrics);
+
+    if (device === "trackpad") {
+      navigator.stop();
+      let sx = dx;
+      let sy = dy;
+      if (!room && !overHeaders) {
+        sx += sy;
+        sy = 0;
+      }
+      core.updateViewport({
+        scrollX: Math.max(0, state.viewport.scrollX + sx),
+        scrollY: Math.max(0, state.viewport.scrollY + sy),
+      });
+      return;
+    }
+
+    const notch = dy !== 0 ? dy : dx;
+    if ((event.shiftKey || overHeaders) && room && dx === 0) {
+      navigator.scrollBy(0, notch);
+      return;
+    }
+    // One notch (100 units) ≈ 15% of the timeline width, at least 90 px.
+    const step = Math.max(90, width * 0.15) / 100;
+    navigator.scrollBy(notch * step, 0);
   };
 
   const handleKeyDown = (event: KeyboardEvent): void => {
@@ -1498,10 +1922,53 @@ export function createPlaylistInteractionController(
       return;
     }
 
+    // Space: hold to pan with the left button (the hand); a plain tap
+    // plays / pauses on release.
     if (event.code === "Space") {
-      core.setPlayPositionRunning(!core.getState().playPosition.isRunning);
+      if (!event.repeat && !spaceHeld) {
+        spaceHeld = true;
+        spacePanned = false;
+        if (!activeGesture) host.style.cursor = "grab";
+      }
       event.preventDefault();
       return;
+    }
+
+    // Navigation keys (all animated; reduced motion jumps).
+    if (!cmd && !event.altKey) {
+      const state = core.getState();
+      const width = timelineWidthOf(state);
+      const playX = state.playPosition.time * state.viewport.pxPerBeat - state.viewport.scrollX;
+      const zoomAnchor =
+        metrics.trackHeaderWidth + (playX >= 0 && playX <= width ? playX : width / 2);
+      if (event.key === "PageDown" || event.key === "PageUp") {
+        const dir = event.key === "PageDown" ? 1 : -1;
+        if (event.shiftKey) navigator.scrollBy(0, dir * (state.viewport.height - getTracksTop(metrics)) * 0.85);
+        else navigator.scrollBy(dir * width * 0.85, 0);
+        event.preventDefault();
+        return;
+      }
+      if (!event.shiftKey && (event.key === "+" || event.key === "=")) {
+        navigator.zoomBy(1.6, zoomAnchor);
+        event.preventDefault();
+        return;
+      }
+      if (!event.shiftKey && (event.key === "-" || event.key === "_")) {
+        navigator.zoomBy(1 / 1.6, zoomAnchor);
+        event.preventDefault();
+        return;
+      }
+      if (event.key === "+" && event.shiftKey) {
+        navigator.zoomBy(1.6, zoomAnchor);
+        event.preventDefault();
+        return;
+      }
+      if (!event.shiftKey && event.key === "0") {
+        const end = Math.max(core.getContentEndTime(), width / state.viewport.pxPerBeat);
+        navigator.showRange(0, end * 1.02);
+        event.preventDefault();
+        return;
+      }
     }
 
     // Insert: slice every visible clip at the playhead.
@@ -1563,6 +2030,8 @@ export function createPlaylistInteractionController(
           core.nudgeSelection(dir * step, 0);
         } else {
           core.nudgePlayPositionBy(dir * step);
+          // Keep the playhead in sight as it walks.
+          navigator.reveal(core.getState().playPosition.time, { align: "nearest", margin: 96 });
         }
       } else {
         // Vertical arrows only make sense with a selection.
@@ -1577,11 +2046,13 @@ export function createPlaylistInteractionController(
     // FL Studio transport hotkeys.
     if (event.key === "Home" && !cmd && !event.altKey && !event.shiftKey) {
       core.setPlayPosition(0);
+      navigator.scrollTo({ scrollX: 0 });
       event.preventDefault();
       return;
     }
     if (event.key === "End" && !cmd && !event.altKey && !event.shiftKey) {
       core.jumpToEnd();
+      navigator.reveal(core.getState().playPosition.time, { align: "nearest", margin: 96 });
       event.preventDefault();
       return;
     }
@@ -1639,6 +2110,26 @@ export function createPlaylistInteractionController(
     event.preventDefault();
   };
 
+  const handleKeyUp = (event: KeyboardEvent): void => {
+    if (event.code !== "Space" || !spaceHeld) return;
+    spaceHeld = false;
+    if (!spacePanned) {
+      core.setPlayPositionRunning(!core.getState().playPosition.isRunning);
+    }
+    spacePanned = false;
+    if (!activeGesture) host.style.cursor = "";
+    event.preventDefault();
+  };
+
+  const handleBlur = (): void => {
+    spaceHeld = false;
+    spacePanned = false;
+  };
+
+  const handlePointerLeave = (): void => {
+    if (!activeGesture) reportOverviewHover(null);
+  };
+
   const handlePointerCancel = (event: PointerEvent): void => {
     touchTracker.handlePointerCancel(event);
     endGesture(event);
@@ -1648,21 +2139,29 @@ export function createPlaylistInteractionController(
   host.addEventListener("pointermove", handlePointerMove);
   host.addEventListener("pointerup", endGesture);
   host.addEventListener("pointercancel", handlePointerCancel);
+  host.addEventListener("pointerleave", handlePointerLeave);
   host.addEventListener("wheel", handleWheel, { passive: false });
   host.addEventListener("keydown", handleKeyDown);
+  host.addEventListener("keyup", handleKeyUp);
+  host.addEventListener("blur", handleBlur);
   host.addEventListener("contextmenu", preventContextMenu);
 
   return {
+    navigator,
     destroy() {
       activeGesture = null;
+      navigator.destroy();
       host.style.cursor = "";
       touchTracker.destroy();
       host.removeEventListener("pointerdown", handlePointerDown);
       host.removeEventListener("pointermove", handlePointerMove);
       host.removeEventListener("pointerup", endGesture);
       host.removeEventListener("pointercancel", handlePointerCancel);
+      host.removeEventListener("pointerleave", handlePointerLeave);
       host.removeEventListener("wheel", handleWheel);
       host.removeEventListener("keydown", handleKeyDown);
+      host.removeEventListener("keyup", handleKeyUp);
+      host.removeEventListener("blur", handleBlur);
       host.removeEventListener("contextmenu", preventContextMenu);
     },
   };

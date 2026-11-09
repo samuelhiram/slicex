@@ -14,7 +14,8 @@ export function drawDropGhost(
   for (const rect of view.rects) {
     if (rect.width <= 0 || rect.height <= 0) continue;
     graphics
-      .roundRect(rect.x, rect.y, rect.width, rect.height, 4)
-      .stroke({ color: COLORS.selected, width: 1.5, alpha: 0.42 });
+      .roundRect(rect.x, rect.y, rect.width, rect.height, 6)
+      .fill({ color: COLORS.selected, alpha: 0.06 })
+      .stroke({ color: COLORS.selected, width: 1.5, alpha: 0.5 });
   }
 }

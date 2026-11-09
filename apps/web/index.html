@@ -1,10 +1,28 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" />
     <title>SliceX</title>
+    <!-- Theme before first paint (mirrors src/theme.ts): no flash of the
+         wrong theme while the module bundle loads. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("slicex.theme");
+          if (t !== "light" && t !== "dark") {
+            t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          var root = document.documentElement;
+          root.setAttribute("data-theme", t);
+          root.style.colorScheme = t;
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", t === "dark" ? "#0e0e10" : "#ffffff");
+        } catch (e) {}
+      })();
+    </script>
     <meta name="description" content="Timeline editor workspace for SliceX." />
   </head>
   <body>

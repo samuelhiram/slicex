@@ -12,19 +12,20 @@ import {
   type ISODate,
 } from "@slicex/core";
 
+// es-MX abbreviations, lower case as written in running text ("15 nov").
 const MONTHS_ES: ReadonlyArray<string> = [
-  "ENE",
-  "FEB",
-  "MAR",
-  "ABR",
-  "MAY",
-  "JUN",
-  "JUL",
-  "AGO",
-  "SEP",
-  "OCT",
-  "NOV",
-  "DIC",
+  "ene",
+  "feb",
+  "mar",
+  "abr",
+  "may",
+  "jun",
+  "jul",
+  "ago",
+  "sep",
+  "oct",
+  "nov",
+  "dic",
 ];
 
 const INTEGER_FORMAT = new Intl.NumberFormat("es-MX", {
@@ -101,14 +102,14 @@ function parseISODate(iso: string): ParsedISODate | null {
   return { year, month, day };
 }
 
-/** "2026-11-15" → "15 NOV". Unparseable input is returned unchanged. */
+/** "2026-11-15" → "15 nov". Unparseable input is returned unchanged. */
 export function formatDateShort(iso: string): string {
   const parsed = parseISODate(iso);
   if (!parsed) return iso;
   return `${parsed.day} ${MONTHS_ES[parsed.month - 1]}`;
 }
 
-/** "2027-03-15" → "15 MAR 2027". Unparseable input is returned unchanged. */
+/** "2027-03-15" → "15 mar 2027". Unparseable input is returned unchanged. */
 export function formatDateLong(iso: string): string {
   const parsed = parseISODate(iso);
   if (!parsed) return iso;
@@ -188,7 +189,7 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-/** "2026-11-15" → "dom 15 NOV 2026". Unparseable input is returned unchanged. */
+/** "2026-11-15" → "dom 15 nov 2026". Unparseable input is returned unchanged. */
 export function formatDateWeekday(iso: string): string {
   if (!isISODate(iso)) return iso;
   return `${WEEKDAYS_ES[weekdayIndex(iso)]} ${formatDateLong(iso)}`;
@@ -277,7 +278,7 @@ function resolveYear(
  * calendar date. Day always comes before month (never US mm/dd). Accepts:
  *   "15/11/2026", "15-11-2026", "15.11.26", "2026-11-15", "2026/11/15",
  *   "15 nov", "15 nov 2026", "15 de noviembre de 2026", "nov 15 2026",
- *   "15/11" and an optional leading weekday ("sáb 15 NOV 2026", which is
+ *   "15/11" and an optional leading weekday ("sáb 15 nov 2026", which is
  *   what `formatDateWeekday` prints). Accents and case are ignored.
  * A date typed without a year takes it from `reference` (see
  * DateYearPreference). Pure: never reads the clock.
@@ -299,7 +300,7 @@ export function parseDateInput(
   const words = tokens.filter((token) => !isNumberToken(token));
   const numberCount = tokens.length - words.length;
 
-  // A leading weekday is decoration ("sáb 15 NOV 2026"): dropped, never
+  // A leading weekday is decoration ("sáb 15 nov 2026"): dropped, never
   // checked against the date. "mar" is both martes and marzo: it is the
   // month unless another word or a full numeric date follows it.
   let monthWord: string | null = null;

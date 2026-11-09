@@ -7,6 +7,7 @@ import * as React from "react";
 import {
   debtByAccountAt,
   rankDebtsByAvalanche,
+  statementCardCommitments,
   suggestAvalanchePayments,
 } from "@slicex/core";
 import type { FinancialBridgeApi } from "../bridge-api";
@@ -37,6 +38,8 @@ export function DebtStrategyPanel({
       debts,
       availableCash: snapshot.cash,
       minimumCashReserve: doc.minimumCashReserve,
+      // "Totalero" cards are paid in full: their cash is spoken for.
+      committedPayments: statementCardCommitments(doc, balances),
     });
     const extraById = new Map<string, number>();
     for (const allocation of plan.allocations) {

@@ -1,14 +1,20 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import "@fontsource/ibm-plex-sans/400.css";
-import "@fontsource/ibm-plex-sans/500.css";
-import "@fontsource/ibm-plex-sans/600.css";
-import "@fontsource/ibm-plex-sans/700.css";
 import "./styles/globals.css";
 import { App } from "./App";
 import { initSentry } from "./lib/sentry";
+import { clearPlan } from "./finance/persistence";
+import { applyDocumentTheme, initialTheme } from "./theme";
 
 initSentry();
+// "?reset": start over with the example year (testing). Runs before the
+// app loads the saved plan, so no autosave can race it.
+if (new URLSearchParams(window.location.search).has("reset")) {
+  clearPlan();
+  window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+}
+// Before the first paint: no flash of the wrong theme.
+applyDocumentTheme(initialTheme());
 
 const container = document.getElementById("root");
 

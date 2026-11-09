@@ -42,6 +42,7 @@ function tooltipsEqual(
   return (
     a.kind === b.kind &&
     a.text === b.text &&
+    a.time === b.time &&
     a.anchor.x === b.anchor.x &&
     a.anchor.y === b.anchor.y
   );
@@ -84,7 +85,8 @@ function dragPreviewsEqual(
         a.clipId === other.clipId &&
         a.edge === other.edge &&
         a.previewStart === other.previewStart &&
-        a.previewDuration === other.previewDuration
+        a.previewDuration === other.previewDuration &&
+        a.handleX === other.handleX
       );
     }
     case "marker": {
@@ -108,6 +110,7 @@ function hoversEqual(a: PlaylistHover, b: PlaylistHover): boolean {
     case "clip":
     case "resize-left":
     case "resize-right":
+    case "clip-extend":
       return a.clipId === (b as { clipId: string }).clipId;
     case "automation-point":
       return (

@@ -83,8 +83,8 @@ export function PlaylistInspector({ core }: { core: PlaylistCore | null }) {
       type="button"
       className="playlist-inspector__toggle"
       onClick={() => setCollapsed((c) => !c)}
-      aria-label={collapsed ? "Open inspector" : "Close inspector"}
-      title={collapsed ? "Open inspector" : "Close inspector"}
+      aria-label={collapsed ? "Abrir inspector" : "Cerrar inspector"}
+      title={collapsed ? "Abrir inspector" : "Cerrar inspector"}
     >
       {collapsed ? "◀" : "▶"}
     </button>

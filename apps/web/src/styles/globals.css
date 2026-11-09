@@ -1,3 +1,40 @@
+/* ==========================================================================
+   SliceX — global styles
+   Calm, high-contrast, minimal. Neutral surfaces, hairlines, one accent
+   (selection / focus) and one "now" colour (playhead / today). Every text
+   colour meets WCAG AA on its surface.
+
+   Theme tokens live on :root[data-theme="light" | "dark"] (set by
+   src/theme.ts before the first paint). The canvas palette mirrors them in
+   packages/canvas/src/playlist-renderer-pixi/palette.ts — change both
+   together.
+   ========================================================================== */
+
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("../assets/fonts/inter/inter-latin-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("../assets/fonts/inter/inter-latin-ext-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
+    U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
 html,
 body,
 #root {
@@ -5,16 +42,108 @@ body,
   height: 100%;
 }
 
-:root {
-  color-scheme: dark;
-  --font-sans: "IBM Plex Sans", "Segoe UI Variable", "Segoe UI", Arial,
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --font-sans: "Inter Variable", "Inter", "Segoe UI Variable Text", "Segoe UI",
+    -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial,
     sans-serif;
-  --page-bg: #181818;
-  --text: #f1f1e8;
-  --muted: #b8b3a5;
-  --panel: #222222;
-  --line: #303030;
-  --accent: #f4d35e;
+
+  /* Soft UI: a quiet grey page, white cards floating on it. */
+  --page-bg: #eef0f4;
+  --surface: #ffffff;
+  --surface-2: #f4f5f8;
+  --surface-3: #e9ebf0;
+  --raised: #ffffff;
+  --segment-active: #ffffff;
+  --panel: var(--surface);
+  --line: #eaecf0;
+  --line-strong: #d9dce3;
+
+  --text: #16181d;
+  --muted: #5d6270;
+  /* Icons and decoration only — never text (it is below AA). */
+  --subtle: #8b8b95;
+
+  --accent: #3e6ae1;
+  --accent-hover: #3157c2;
+  --accent-soft: rgba(62, 106, 225, 0.14);
+  --ink: #111113;
+  --ink-hover: #2c2c31;
+  --on-ink: #ffffff;
+  --now: #d1292f;
+
+  --hover: rgba(17, 17, 19, 0.05);
+  --press: rgba(17, 17, 19, 0.09);
+
+  --fin-positive: #15803d;
+  --fin-negative: #dc2626;
+  --fin-warning: #b45309;
+  --fin-negative-soft: rgba(220, 38, 38, 0.09);
+  --fin-warning-soft: rgba(180, 83, 9, 0.1);
+  /* Text on the *-soft tints (≥ 5.5:1). */
+  --fin-negative-text: #b91c1c;
+  --fin-warning-text: #92400e;
+
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 0 0 1px rgba(16, 24, 40, 0.03);
+  /* Cards: soft and diffuse, never a hard outline. */
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.06);
+  --shadow-pop: 0 24px 56px rgba(16, 24, 40, 0.16), 0 4px 12px rgba(16, 24, 40, 0.06);
+  --overlay: rgba(17, 17, 19, 0.28);
+
+  --radius-s: 8px;
+  --radius-m: 12px;
+  --radius-l: 18px;
+  --radius-card: 18px;
+  --radius-full: 999px;
+  /* Gap between floating cards (and to the window edge). */
+  --gap-card: 8px;
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%235c5c66' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --page-bg: #09090b;
+  --surface: #131316;
+  --surface-2: #1c1c20;
+  --surface-3: #26262c;
+  --raised: #1c1c20;
+  --segment-active: #2c2c33;
+  --line: #26262c;
+  --line-strong: #383840;
+
+  --text: #f4f4f6;
+  --muted: #a3a3ad;
+  --subtle: #6e6e78;
+
+  --accent: #7091ff;
+  --accent-hover: #8ba6ff;
+  --accent-soft: rgba(112, 145, 255, 0.18);
+  --ink: #f4f4f6;
+  --ink-hover: #ffffff;
+  --on-ink: #0e0e10;
+  --now: #ff5c61;
+
+  --hover: rgba(255, 255, 255, 0.06);
+  --press: rgba(255, 255, 255, 0.1);
+
+  --fin-positive: #3ccf7f;
+  --fin-negative: #ff5c61;
+  --fin-warning: #f5a524;
+  --fin-negative-soft: rgba(255, 92, 97, 0.13);
+  --fin-warning-soft: rgba(245, 165, 36, 0.13);
+  --fin-negative-text: var(--fin-negative);
+  --fin-warning-text: var(--fin-warning);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --overlay: rgba(0, 0, 0, 0.55);
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%23a3a3ad' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 * {
@@ -29,7 +158,10 @@ body {
   background: var(--page-bg);
   color: var(--text);
   font-family: var(--font-sans);
+  font-size: 14px;
+  font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overscroll-behavior: none;
 }
 
@@ -38,12 +170,110 @@ input,
 select,
 textarea {
   font: inherit;
+  color: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
 }
 
 :focus-visible {
   outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Controls flush with a scrolling / clipping container: an outset ring
+   would be cut, so they get an inset one. */
+.fin-summary__metric:focus-visible,
+.fin-summary__input:focus-visible,
+.fin-section__toggle:focus-visible,
+.fin-popover__item:focus-visible,
+.fin-new__item:focus-visible,
+.playlist-shell__menu-item:focus-visible,
+.playlist-shell__tool:focus-visible {
   outline-offset: -2px;
 }
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* --- Shared primitives ---------------------------------------------------- */
+
+.fin-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.fin-button:hover {
+  background: var(--hover);
+}
+
+.fin-button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.fin-button--primary {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.fin-button--primary:hover {
+  border-color: var(--ink-hover);
+  background: var(--ink-hover);
+}
+
+.fin-icon-button {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.fin-icon-button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.fin-icon-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* --- Page + shell --------------------------------------------------------- */
 
 .playlist-page {
   width: 100vw;
@@ -60,7 +290,7 @@ textarea {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--page-bg);
+  background: var(--surface);
 }
 
 .playlist-shell__surface {
@@ -73,20 +303,43 @@ textarea {
   user-select: none;
 }
 
-/* Tool row: its own strip between the summary bar and the canvas, so
-   nothing floats over the ruler dates or the money lane. */
+.playlist-shell__surface:focus-visible {
+  outline: none;
+}
+
+/* Financial shell layout: header in flow on top, tool row, then the
+   playlist stage (canvas + absolute overlays) fills the rest. Overlays
+   (inspector, side panel, context menu) position against the stage so
+   their coordinates match the canvas host. */
+.playlist-shell--finance {
+  display: flex;
+  flex-direction: column;
+}
+
+.playlist-shell__stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* --- Tool row --------------------------------------------------------------
+   Its own strip between the header and the canvas, so nothing floats over
+   the ruler dates or the money lane. */
 .playlist-shell__bar {
   position: relative;
   z-index: 6;
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 32px;
+  gap: 12px;
+  height: 56px;
   min-width: 0;
-  padding: 0 8px 0 4px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--line);
-  background: #1c1c1c;
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -94,44 +347,53 @@ textarea {
   display: flex;
   flex: 0 1 auto;
   align-items: center;
-  gap: 2px;
+  gap: 16px;
   min-width: 0;
+}
+
+/* Segmented control (like a native tab switcher). */
+.playlist-shell__segmented {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
 }
 
 .playlist-shell__tool {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: 4px;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  font-size: 13px;
+  font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
 }
 
 .playlist-shell__tool:hover {
-  background: rgba(255, 255, 255, 0.06);
   color: var(--text);
 }
 
 .playlist-shell__tool[data-active="true"] {
-  background: var(--panel);
-  border-color: var(--line);
+  background: var(--segment-active);
   color: var(--text);
+  box-shadow: var(--shadow-1);
 }
 
 .playlist-shell__tool-icon {
   flex: none;
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.3;
@@ -139,118 +401,99 @@ textarea {
   stroke-linejoin: round;
 }
 
-.playlist-shell__tool[data-active="true"] .playlist-shell__tool-icon {
-  color: var(--accent);
-}
-
 .playlist-shell__tool-label {
   line-height: 1;
 }
 
+/* Hotkeys stay in the DOM (and in each button's title) but are not shown:
+   the row reads as plain words, not a keyboard map. */
 .playlist-shell__tool-hotkey {
-  min-width: 14px;
-  padding: 1px 3px;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1;
-  text-align: center;
-  letter-spacing: 0.04em;
-}
-
-.playlist-shell__counter {
-  display: inline-flex;
-  flex: none;
-  align-items: baseline;
-  gap: 4px;
-  padding: 3px 8px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--panel);
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  user-select: none;
-  transition: border-color 80ms ease, color 80ms ease;
-}
-
-.playlist-shell__counter[data-has-selection="true"] {
-  border-color: var(--accent, #f4d35e);
-}
-
-.playlist-shell__counter-value {
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.playlist-shell__counter-label {
-  color: var(--muted);
-  font-size: 10px;
-  letter-spacing: 0.02em;
-}
-
-.playlist-shell__counter-selected {
-  color: var(--accent, #f4d35e);
-  font-size: 10px;
-  letter-spacing: 0.02em;
+  display: none;
 }
 
 .playlist-shell__snap {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  border-left: 1px solid var(--line);
+  gap: 8px;
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
 .playlist-shell__snap-select {
-  padding: 2px 6px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--panel);
+  height: 32px;
+  padding: 0 30px 0 12px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: var(--surface-2) var(--select-chevron) no-repeat right 10px center;
   color: var(--text);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: none;
+  font-size: 13px;
+  font-weight: 500;
+  appearance: none;
   cursor: pointer;
 }
 
-/* Narrow windows: icons + hotkeys only (the title keeps the name). */
-@media (max-width: 1240px) {
+.playlist-shell__snap-select:hover {
+  background-color: var(--surface-3);
+}
+
+.playlist-shell__counter {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.playlist-shell__counter-value {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.playlist-shell__counter-selected {
+  margin-left: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Narrow windows: icons only (each button keeps its title). */
+@media (max-width: 1280px) {
   .playlist-shell__tool-label {
     display: none;
   }
+
+  .playlist-shell__tool {
+    padding: 0 9px;
+  }
 }
 
-@media (max-width: 900px) {
-  .playlist-shell__tool-hotkey,
-  .playlist-shell__snap-label {
+@media (max-width: 960px) {
+  .playlist-shell__snap-label,
+  .playlist-shell__counter {
     display: none;
   }
 }
 
+/* --- Context menu --------------------------------------------------------- */
 .playlist-shell__menu {
   position: absolute;
   z-index: 10;
-  min-width: 220px;
-  padding: 4px;
+  min-width: 232px;
+  padding: 6px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: rgba(20, 20, 20, 0.96);
-  backdrop-filter: blur(6px);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  border-radius: 12px;
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -261,38 +504,36 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 6px 10px;
+  height: 32px;
+  padding: 0 10px;
   border: none;
-  border-radius: 4px;
+  border-radius: 7px;
   background: transparent;
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
-  letter-spacing: 0.01em;
   text-align: left;
   cursor: pointer;
-  transition: background 60ms ease;
 }
 
 .playlist-shell__menu-item:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover);
 }
 
 .playlist-shell__menu-item:disabled {
   color: var(--muted);
+  opacity: 0.6;
   cursor: default;
 }
 
 .playlist-shell__menu-hotkey {
   color: var(--muted);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: 12px;
 }
 
 .playlist-shell__menu-divider {
   height: 1px;
-  margin: 2px 4px;
+  margin: 4px 6px;
   background: var(--line);
 }
 
@@ -303,12 +544,14 @@ textarea {
   display: flex;
   gap: 8px;
   align-items: center;
-  min-height: 34px;
-  padding: 8px 10px;
+  min-height: 40px;
+  padding: 8px 14px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
+  border-radius: 12px;
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
   color: var(--text);
+  font-size: 13px;
   pointer-events: none;
 }
 
@@ -316,91 +559,92 @@ textarea {
   color: var(--muted);
 }
 
-/* F11 — Inspector panel rail. Collapsed = thin tab on the right; opened =
-   ~280px column with the clip's editable fields. */
+/* --- Inspector (right rail) ----------------------------------------------- */
 .playlist-inspector {
   position: absolute;
   top: 60px;
-  bottom: 24px;
+  bottom: 16px;
   right: 0;
-  width: 280px;
+  z-index: 6;
+  width: 300px;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--line);
-  background: rgba(20, 20, 20, 0.92);
-  backdrop-filter: blur(6px);
-  z-index: 6;
-  font-size: 12px;
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
+  font-size: 13px;
 }
 
 .playlist-inspector--collapsed {
-  width: 26px;
+  bottom: auto;
+  width: 0;
+  border-left: 0;
+  box-shadow: none;
 }
 
 .playlist-inspector__toggle {
   position: absolute;
-  top: 8px;
-  left: -1px;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--line);
-  border-right: 0;
-  background: var(--panel);
-  color: var(--text);
-  cursor: pointer;
-  border-radius: 4px 0 0 4px;
+  top: 10px;
+  right: 22px;
   display: grid;
   place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  background: var(--raised);
+  box-shadow: var(--shadow-1);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
 }
 
 .playlist-inspector__toggle:hover {
-  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  background: var(--surface-2);
 }
 
 .playlist-inspector__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  height: 52px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .playlist-inspector__header .playlist-inspector__toggle {
   position: static;
-  border: 0;
-  background: transparent;
-  width: auto;
-  height: auto;
-  padding: 4px 8px;
-  border-radius: 4px;
+  box-shadow: none;
 }
 
 .playlist-inspector__body {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 10px 12px;
+  padding: 16px;
 }
 
 .playlist-inspector__empty {
-  color: var(--muted);
   margin: 0;
+  color: var(--muted);
 }
 
 .playlist-inspector__form {
   display: grid;
-  gap: 10px;
+  gap: 14px;
 }
 
 .playlist-inspector__field {
   display: grid;
-  gap: 4px;
+  gap: 6px;
 }
 
 .playlist-inspector__field span {
   color: var(--muted);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .playlist-inspector__field--inline {
@@ -410,32 +654,31 @@ textarea {
 
 .playlist-inspector__field--inline span {
   color: var(--text);
-  text-transform: none;
-  letter-spacing: 0;
 }
 
 .playlist-inspector__field input[type="text"],
 .playlist-inspector__field input[type="number"] {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 4px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
   color: var(--text);
-  padding: 6px 8px;
-  font: inherit;
 }
 
 .playlist-inspector__field input[type="text"]:focus,
 .playlist-inspector__field input[type="number"]:focus {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
+  border-color: var(--accent);
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 0;
 }
 
 .playlist-inspector__field input[type="color"] {
   width: 100%;
-  height: 28px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  border-radius: 4px;
+  height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
   cursor: pointer;
 }
 
@@ -447,103 +690,114 @@ textarea {
 
 .playlist-inspector__group-row code {
   flex: 1 1 auto;
-  background: var(--panel);
-  padding: 4px 8px;
-  border-radius: 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
   color: var(--text);
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 12px;
 }
 
 .playlist-inspector__group-row button,
 .playlist-inspector__multi-actions button {
-  background: var(--panel);
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
   color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 5px 10px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
 
 .playlist-inspector__group-row button:hover,
 .playlist-inspector__multi-actions button:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover);
 }
 
 .playlist-inspector__multi p {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   color: var(--muted);
 }
 
 .playlist-inspector__multi-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
-/* F4 stub modal — opened by double-clicking a clip. SliceX palette only;
-   replaced by the financial-engine clip editor later. */
+/* --- Modal (generic + the financial editor) ------------------------------ */
 .playlist-shell__modal-overlay {
   position: absolute;
   inset: 0;
+  z-index: 20;
   display: grid;
   place-items: center;
-  background: rgba(0, 0, 0, 0.45);
-  z-index: 20;
+  padding: 24px;
+  background: var(--overlay);
+  backdrop-filter: blur(2px);
 }
 
 .playlist-shell__modal {
   min-width: 320px;
-  max-width: min(520px, 90vw);
+  max-width: min(560px, 92vw);
+  max-height: calc(100% - 32px);
+  overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
+  border-radius: var(--radius-l);
+  background: var(--raised);
   color: var(--text);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-  overflow: hidden;
+  box-shadow: var(--shadow-pop);
 }
 
 .playlist-shell__modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.02);
+  gap: 12px;
+  padding: 18px 16px 6px 22px;
 }
 
 .playlist-shell__modal-close {
-  background: transparent;
-  color: var(--text);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
   font-size: 20px;
   line-height: 1;
-  padding: 4px 8px;
   cursor: pointer;
-  border-radius: 4px;
 }
 
 .playlist-shell__modal-close:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover);
+  color: var(--text);
 }
 
 .playlist-shell__modal-body {
-  padding: 14px;
-  font-size: 13px;
-  line-height: 1.5;
+  padding: 12px 22px 22px;
   color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .playlist-shell__modal-body strong {
   color: var(--text);
 }
 
+/* --- Error screen --------------------------------------------------------- */
 .app-error {
   min-height: 100dvh;
   display: grid;
   align-content: start;
   justify-items: start;
-  gap: 4px;
-  padding: 16px;
+  gap: 6px;
+  padding: 24px;
   background: var(--page-bg);
   color: var(--text);
 }
@@ -555,34 +809,30 @@ textarea {
 
 .app-error__title {
   margin: 0;
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1.25;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .app-error__body {
   margin: 0;
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .app-error__action {
   margin: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
   color: var(--text);
 }
 
-/* === Financial UI === */
-/* Panels for the financial MVP (apps/web/src/finance/components). Same
-   language as the playlist shell: full-bleed, 1px dividers, no cards. */
-:root {
-  --fin-positive: #3fb37f;
-  --fin-negative: #e0645c;
-  --fin-warning: #e39b3d;
-}
+/* ==========================================================================
+   Financial UI (apps/web/src/finance/components)
+   ========================================================================== */
 
 /* Optional column wrapper: summary bar on top, playlist shell below. */
 .fin-stack {
@@ -601,25 +851,67 @@ textarea {
   min-height: 0;
 }
 
-/* --- Summary bar ------------------------------------------------------ */
+/* --- Header (summary bar) ------------------------------------------------- */
+/* Brand and actions stay put; only the metrics scroll on narrow windows
+   (with a soft fade at the edge), so "Nuevo" is always reachable. */
 .fin-summary {
   position: relative;
   z-index: 7;
   flex: none;
   display: flex;
-  align-items: stretch;
-  height: 40px;
+  align-items: center;
+  gap: 16px;
+  height: 68px;
+  padding: 0 16px 0 20px;
   border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  background: var(--surface);
   color: var(--text);
-  font-size: 12px;
   white-space: nowrap;
+  overflow: hidden;
+}
+
+.fin-summary__brand {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 9px;
+  padding-right: 20px;
+  border-right: 1px solid var(--line);
+  height: 32px;
+}
+
+/* A rounded square cut by a diagonal: the "slice". */
+.fin-summary__logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, transparent 0 46%, var(--surface) 46% 54%, transparent 54% 100%),
+    var(--ink);
+}
+
+.fin-summary__wordmark {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.fin-summary__metrics {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  /* The fade covers this padding when everything fits (invisible), and
+     the clipped metric when it does not. */
+  padding-right: 28px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
 }
 
-.fin-summary::-webkit-scrollbar {
+.fin-summary__metrics::-webkit-scrollbar {
   display: none;
 }
 
@@ -628,12 +920,12 @@ textarea {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
+  height: 52px;
   padding: 0 12px;
   border: 0;
-  border-right: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: var(--radius-m);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -642,30 +934,30 @@ textarea {
 
 .fin-summary__metric--action {
   cursor: pointer;
-  transition: background 80ms ease;
+  transition: background 120ms ease;
 }
 
 .fin-summary__metric--action:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover);
 }
 
 .fin-summary__label {
   color: var(--muted);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  font-weight: 500;
   line-height: 1.2;
-  text-transform: uppercase;
 }
 
-.fin-summary__label-date {
-  letter-spacing: 0.04em;
+.fin-summary__date {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 .fin-summary__value {
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.2;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
 }
 
@@ -675,13 +967,10 @@ textarea {
 }
 
 .fin-summary__name {
-  font-weight: 500;
-}
-
-.fin-summary__date {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 500;
+  letter-spacing: 0;
 }
 
 .fin-summary__metric[data-state="low"] .fin-summary__value {
@@ -693,22 +982,23 @@ textarea {
 }
 
 .fin-summary__input {
-  width: 104px;
+  width: 112px;
   padding: 0;
   border: 0;
-  border-bottom: 1px dashed var(--line);
+  border-bottom: 1px dashed transparent;
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.2;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
   cursor: text;
 }
 
 .fin-summary__input:hover {
-  border-bottom-color: var(--muted);
+  border-bottom-color: var(--line-strong);
 }
 
 .fin-summary__input:focus,
@@ -717,85 +1007,121 @@ textarea {
   border-bottom: 1px solid var(--accent);
 }
 
+.fin-summary__warnings {
+  display: flex;
+  flex: none;
+}
+
 .fin-summary__chip {
-  align-self: flex-start;
-  padding: 0 6px;
-  border: 1px solid currentColor;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--fin-warning);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 16px;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--fin-warning-soft);
+  color: var(--fin-warning-text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
+}
+
+.fin-summary__chip[data-state="ok"] {
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  cursor: default;
+}
+
+.fin-summary__chip svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .fin-summary__chip[data-state="negative"] {
-  color: var(--fin-negative);
+  background: var(--fin-negative-soft);
+  color: var(--fin-negative-text);
 }
 
-.fin-summary__chip:hover,
+button.fin-summary__chip:hover,
 .fin-summary__chip[aria-expanded="true"] {
-  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px currentColor;
 }
 
 .fin-summary__spacer {
-  flex: 1 1 auto;
-  min-width: 8px;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
-.fin-summary__add {
-  flex: none;
+.fin-summary__actions {
   display: flex;
+  flex: none;
   align-items: center;
-  gap: 2px;
-  padding: 0 8px;
-  border-left: 1px solid var(--line);
+  gap: 6px;
 }
 
-.fin-summary__add-button {
-  padding: 4px 8px;
-  border: 0;
-  border-left: 2px solid var(--fin-kind-color, var(--muted));
-  border-radius: 0 3px 3px 0;
-  background: transparent;
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: background 80ms ease;
+@media (max-width: 1440px) {
+  .fin-summary__metric {
+    padding: 0 9px;
+  }
+
+  .fin-summary__value,
+  .fin-summary__input {
+    font-size: 16px;
+  }
+
+  .fin-summary__name {
+    display: none;
+  }
 }
 
-.fin-summary__add-button:hover {
-  background: rgba(255, 255, 255, 0.06);
+@media (max-width: 1180px) {
+  .fin-summary__brand {
+    padding-right: 12px;
+  }
+
+  .fin-summary__wordmark {
+    display: none;
+  }
 }
 
-/* Fixed so the bar's horizontal overflow never clips it. */
+/* --- Popovers (fixed: the header scrolls horizontally) -------------------- */
 .fin-popover {
   position: fixed;
   z-index: 30;
-  min-width: 260px;
-  max-width: 360px;
-  max-height: 320px;
+  min-width: 280px;
+  max-width: 380px;
+  max-height: 360px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 4px;
+  padding: 6px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: rgba(20, 20, 20, 0.97);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  border-radius: 12px;
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
 }
 
 .fin-popover__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
   padding: 6px 10px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 8px;
   background: transparent;
-  color: var(--fin-warning);
-  font-size: 12px;
+  color: var(--text);
+  font-size: 13px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   text-align: left;
@@ -803,30 +1129,103 @@ textarea {
   cursor: pointer;
 }
 
-.fin-popover__item[data-state="negative"] {
-  color: var(--fin-negative);
-}
-
 .fin-popover__item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover);
 }
 
-/* --- Playhead readout (in the tool row, right-aligned) ---------------- */
+.fin-popover__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fin-warning);
+}
+
+.fin-popover__item[data-state="negative"] .fin-popover__dot {
+  background: var(--fin-negative);
+}
+
+.fin-popover__date {
+  min-width: 52px;
+  font-weight: 600;
+}
+
+.fin-popover__text {
+  color: var(--muted);
+}
+
+.fin-popover__item[data-state="low"] strong {
+  color: var(--fin-warning-text);
+}
+
+.fin-popover__item[data-state="negative"] strong {
+  color: var(--fin-negative-text);
+}
+
+/* "Nuevo" menu */
+.fin-new {
+  flex: none;
+}
+
+.fin-new__menu {
+  min-width: 300px;
+}
+
+.fin-new__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fin-new__item:hover {
+  background: var(--hover);
+}
+
+.fin-new__dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.fin-new__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.fin-new__label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fin-new__hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* --- Playhead readout (in the tool row, right-aligned) -------------------- */
 /* In flow inside .playlist-shell__bar: never over the canvas, so it can't
    cover the money lane, the ruler or the tools. Never intercepts input. */
 .fin-readout {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 24px;
+  gap: 14px;
+  height: 36px;
   margin-left: auto;
-  padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--panel);
+  padding: 0 14px;
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
   color: var(--text);
-  font-size: 11px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   pointer-events: none;
@@ -834,62 +1233,51 @@ textarea {
 }
 
 .fin-readout__date {
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-weight: 600;
 }
 
 .fin-readout__cell {
   display: inline-flex;
   align-items: baseline;
-  gap: 4px;
-  padding-left: 8px;
-  border-left: 1px solid var(--line);
+  gap: 6px;
+  padding-left: 14px;
+  border-left: 1px solid var(--line-strong);
 }
 
 .fin-readout__label {
   color: var(--muted);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .fin-readout__cash,
 .fin-readout__debt {
-  font-weight: 700;
-}
-
-.fin-readout[data-state="low"] {
-  border-color: var(--fin-warning);
+  font-weight: 600;
 }
 
 .fin-readout[data-state="low"] .fin-readout__cash {
   color: var(--fin-warning);
 }
 
-.fin-readout[data-state="negative"] {
-  border-color: var(--fin-negative);
-}
-
 .fin-readout[data-state="negative"] .fin-readout__cash {
   color: var(--fin-negative);
 }
 
-/* --- Left analysis rail (mirror of .playlist-inspector) -------------- */
+/* --- Left analysis rail (mirror of .playlist-inspector) ------------------ */
 .fin-side {
   position: absolute;
   top: 60px;
-  bottom: 24px;
+  bottom: 16px;
   left: 0;
   z-index: 6;
-  width: 280px;
+  width: 372px;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--line);
-  background: rgba(20, 20, 20, 0.94);
-  backdrop-filter: blur(6px);
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .fin-side--collapsed {
@@ -897,62 +1285,70 @@ textarea {
   width: auto;
   border-right: 0;
   background: transparent;
-  backdrop-filter: none;
+  box-shadow: none;
 }
 
 .fin-side__tab {
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  width: 22px;
-  padding: 8px 0;
+  height: 28px;
+  padding: 0 12px 0 10px;
   border: 1px solid var(--line);
-  border-left: 0;
-  border-radius: 0 4px 4px 0;
-  background: var(--panel);
+  border-radius: var(--radius-full);
+  background: var(--surface);
   color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background 120ms ease;
 }
 
 .fin-side__tab:hover {
-  background: #2a2a2a;
+  background: var(--surface-2);
 }
 
 .fin-side__tab-arrow {
-  font-size: 9px;
+  color: var(--muted);
+  font-size: 8px;
   line-height: 1;
 }
 
 .fin-side__tab-label {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  line-height: 1;
 }
 
 .fin-side__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  height: 52px;
+  padding: 0 10px 0 18px;
   border-bottom: 1px solid var(--line);
+  font-size: 15px;
+}
+
+.fin-side__header strong {
+  font-weight: 600;
 }
 
 .fin-side__close {
-  padding: 4px 8px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-full);
   background: transparent;
-  color: var(--text);
+  color: var(--muted);
+  font-size: 10px;
   cursor: pointer;
 }
 
 .fin-side__close:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover);
+  color: var(--text);
 }
 
 .fin-side__body {
@@ -961,7 +1357,38 @@ textarea {
   overflow-y: auto;
 }
 
-/* --- Collapsible sections + dense tables ----------------------------- */
+/* Overlays open BELOW the ruler + money lane (the shell sets both heights
+   from the playlist metrics), so the rails never cover the curve. */
+.playlist-shell--finance .fin-side,
+.playlist-shell--finance .playlist-inspector {
+  top: calc(var(--pl-ruler-h, 38px) + var(--pl-lane-h, 0px));
+}
+
+/* Collapsed "Análisis" toggle lives in the money lane's header cell (an
+   inert area under the "Caja" title) instead of over the first track
+   header, where it would cover the track name. */
+.playlist-shell--finance .fin-side--collapsed {
+  top: calc(var(--pl-ruler-h, 38px) + var(--pl-lane-h, 0px) - 40px);
+  left: 14px;
+}
+
+/* The collapsed inspector is a small round button floating at the bottom
+   right of the stage (like map controls), clear of the money lane and of
+   the first track's clips. */
+.playlist-shell--finance .playlist-inspector--collapsed {
+  top: auto;
+  bottom: 28px;
+}
+
+.playlist-inspector--collapsed .playlist-inspector__toggle {
+  top: auto;
+  bottom: 0;
+  right: 24px;
+  width: 32px;
+  height: 32px;
+}
+
+/* --- Collapsible sections + tables --------------------------------------- */
 .fin-section {
   border-bottom: 1px solid var(--line);
 }
@@ -970,75 +1397,80 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-right: 12px;
+  padding-right: 16px;
 }
 
 .fin-section__toggle {
   flex: 1 1 auto;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
+  gap: 8px;
+  height: 44px;
+  padding: 0 18px;
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-size: 14px;
+  font-weight: 600;
   text-align: left;
-  text-transform: uppercase;
   cursor: pointer;
 }
 
 .fin-section__toggle:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover);
 }
 
 .fin-section__caret {
   width: 10px;
-  color: var(--muted);
+  color: var(--subtle);
+  font-size: 10px;
 }
 
 .fin-section__count {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
 .fin-section__badge {
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
   color: var(--accent);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .fin-section__body {
-  padding: 2px 12px 10px;
+  padding: 2px 18px 16px;
+  overflow-x: auto;
 }
 
 .fin-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
 .fin-table th {
-  padding: 4px;
+  padding: 6px 4px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  font-weight: 500;
   text-align: left;
-  text-transform: uppercase;
 }
 
 .fin-table td {
-  padding: 4px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--line);
   white-space: nowrap;
+}
+
+.fin-table tr:last-child td {
+  border-bottom: 0;
 }
 
 .fin-table th.fin-table__num,
@@ -1047,23 +1479,23 @@ textarea {
 }
 
 .fin-table__rank {
-  width: 14px;
+  width: 18px;
   color: var(--muted);
 }
 
 .fin-table__name {
-  max-width: 96px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .fin-table__swatch {
   display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 5px;
-  border-radius: 1px;
-  vertical-align: middle;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  vertical-align: 1px;
 }
 
 .fin-table__extra {
@@ -1072,17 +1504,17 @@ textarea {
 
 .fin-table__extra[data-active="true"] {
   color: var(--fin-positive);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .fin-table__delta[data-tone="good"] {
   color: var(--fin-positive);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .fin-table__delta[data-tone="bad"] {
   color: var(--fin-negative);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .fin-table__delta[data-tone="neutral"] {
@@ -1091,15 +1523,15 @@ textarea {
 
 .fin-panel__empty,
 .fin-panel__note {
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .fin-panel__line {
-  margin: 8px 0 0;
-  font-size: 11px;
+  margin: 10px 0 0;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1110,41 +1542,44 @@ textarea {
 
 .fin-panel__actions {
   display: flex;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .fin-panel__button {
-  padding: 4px 10px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--panel);
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
   color: var(--text);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
 
 .fin-panel__button:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover);
 }
 
-/* --- Item editor (reuses .playlist-shell__modal*) -------------------- */
+/* --- Item editor (reuses .playlist-shell__modal*) ------------------------ */
 .fin-editor {
-  width: 480px;
+  width: 520px;
 }
 
 .fin-editor__title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .fin-editor__swatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
 }
 
 .fin-editor__body {
@@ -1155,7 +1590,7 @@ textarea {
 .fin-editor__grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 10px 12px;
+  gap: 16px 14px;
   /* It is a <fieldset> (disabled = read-only form): drop UA chrome. */
   min-width: 0;
   margin: 0;
@@ -1164,24 +1599,24 @@ textarea {
 }
 
 .fin-editor__grid:disabled select {
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
 .fin-editor__locked {
-  margin: 0 0 10px;
-  padding: 6px 8px;
-  border: 1px solid var(--fin-warning);
-  border-radius: 4px;
-  color: var(--fin-warning);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.4;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--fin-warning-soft);
+  color: var(--fin-warning-text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
 }
 
 .fin-editor__field {
   display: grid;
   align-content: start;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1191,64 +1626,82 @@ textarea {
 
 .fin-editor__label {
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  line-height: 1.2;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
 }
 
 .fin-editor__optional {
+  color: var(--muted);
   font-style: normal;
-  letter-spacing: 0;
-  text-transform: none;
-  opacity: 0.8;
+  font-weight: 400;
 }
 
 .fin-editor__control {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
 .fin-editor input[type="text"],
+.fin-editor input[type="number"],
 .fin-editor select {
   width: 100%;
   min-width: 0;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--page-bg);
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
   color: var(--text);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.3;
   font-variant-numeric: tabular-nums;
-  color-scheme: dark;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.fin-editor select {
+  padding-right: 32px;
+  background: var(--surface) var(--select-chevron) no-repeat right 12px center;
+  appearance: none;
+}
+
+.fin-editor input[type="text"]:hover,
+.fin-editor input[type="number"]:hover,
+.fin-editor select:hover {
+  border-color: var(--subtle);
 }
 
 .fin-editor input[type="text"]:focus,
+.fin-editor input[type="number"]:focus,
 .fin-editor select:focus {
   border-color: var(--accent);
   outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .fin-editor input:disabled {
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
-/* es-MX date field: free text + canonical preview ("dom 15 NOV 2026"). */
+.fin-editor input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+/* es-MX date field: free text + canonical preview ("dom 15 nov 2026"). */
 .fin-editor .fin-date__input[aria-invalid="true"]:not(:disabled) {
-  border-color: rgba(224, 100, 92, 0.65);
+  border-color: var(--fin-negative);
 }
 
 .fin-date__preview {
-  min-height: 14px;
+  min-height: 16px;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 14px;
+  font-size: 12px;
+  line-height: 16px;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
 }
 
 .fin-date__preview[data-state="ok"] {
@@ -1267,46 +1720,46 @@ textarea {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   color: var(--text);
-  font-size: 11px;
+  font-size: 13px;
   white-space: nowrap;
   cursor: pointer;
 }
 
 .fin-editor__hint {
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .fin-editor__computed-value {
   color: var(--text);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
 .fin-editor__computed-note {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 
 .fin-editor__error {
-  min-height: 16px;
-  margin: 10px 0 0;
+  min-height: 18px;
+  margin: 12px 0 0;
   color: var(--fin-negative);
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.4;
 }
 
 .fin-editor__actions {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 8px -14px -14px;
-  padding: 10px 14px;
+  gap: 8px;
+  margin: 10px -22px -22px;
+  padding: 14px 22px;
   border-top: 1px solid var(--line);
 }
 
@@ -1315,18 +1768,20 @@ textarea {
 }
 
 .fin-editor__button {
-  padding: 5px 12px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: transparent;
+  height: 36px;
+  padding: 0 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
 .fin-editor__button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover);
 }
 
 .fin-editor__button:disabled {
@@ -1335,69 +1790,1173 @@ textarea {
 }
 
 .fin-editor__button--primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #181818;
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--on-ink);
 }
 
 .fin-editor__button--primary:hover:not(:disabled) {
-  background: #f7dc7a;
-}
-
-.fin-editor__button--primary:disabled {
-  opacity: 0.4;
-  cursor: default;
+  border-color: var(--ink-hover);
+  background: var(--ink-hover);
 }
 
 .fin-editor__button--danger {
   border-color: transparent;
-  color: var(--fin-negative);
+  background: transparent;
+  color: var(--fin-negative-text);
 }
 
 .fin-editor__button--danger:hover:not(:disabled) {
-  border-color: var(--fin-negative);
-  background: transparent;
+  background: var(--fin-negative-soft);
 }
 
-/* Financial shell layout: summary bar in flow on top, the playlist stage
-   (canvas + absolute overlays) fills the rest. Overlays (toolbar,
-   inspector, readout, side panel, context menu) position against the stage
-   so their coordinates match the canvas host. */
-.playlist-shell--finance {
+/* ==========================================================================
+   Waves 2–4: valleys, futures, command bar, peeks, banners, Rec,
+   onboarding, statements
+   ========================================================================== */
+
+kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* --- Valley card ------------------------------------------------------------ */
+.fin-valley {
+  position: absolute;
+  top: calc(var(--pl-ruler-h, 38px) + var(--pl-lane-h, 0px) + 10px);
+  right: 22px;
+  z-index: 8;
+  width: 360px;
+  max-height: calc(100% - var(--pl-ruler-h, 38px) - var(--pl-lane-h, 0px) - 40px);
+  overflow-y: auto;
+  padding: 16px 16px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.fin-valley__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fin-valley__eyebrow {
+  margin: 0 0 2px;
+  color: var(--fin-warning-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fin-valley[data-state="negative"] .fin-valley__eyebrow {
+  color: var(--fin-negative-text);
+}
+
+.fin-valley__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-valley__subtitle {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fin-valley__close {
+  width: 30px;
+  height: 30px;
+  margin: -4px -6px 0 0;
+}
+
+.fin-valley__block {
+  margin-top: 14px;
+}
+
+.fin-valley__label {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.fin-valley__causes {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fin-valley__causes li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: var(--hover);
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-valley__cause-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.fin-valley__cause-date {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fin-valley__cause-amount {
+  font-weight: 600;
+}
+
+.fin-valley__fixes {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fin-valley__fix {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.fin-valley__fix-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fin-valley__fix-title {
+  font-weight: 600;
+}
+
+.fin-valley__fix-outcome {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-valley__fix-outcome[data-outcome="resolves"] {
+  color: var(--fin-positive);
+}
+
+.fin-valley__apply {
+  height: 32px;
+  padding: 0 14px;
+}
+
+.fin-valley__empty,
+.fin-valley__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fin-valley__hint {
+  margin-top: 10px;
+}
+
+/* --- Futures (branches) ------------------------------------------------------ */
+.fin-futures {
+  flex: none;
+}
+
+.fin-futures__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  max-width: 240px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.fin-futures__trigger:hover {
+  background: var(--surface-3);
+}
+
+.fin-futures__trigger svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.fin-futures__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fin-futures__count {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.fin-futures__menu {
+  min-width: 320px;
+}
+
+.fin-futures__heading {
+  margin: 4px 10px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.fin-futures__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 8px;
+}
+
+.fin-futures__row:hover {
+  background: var(--hover);
+}
+
+.fin-futures__item {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fin-futures__item:focus-visible,
+.fin-futures__action:focus-visible {
+  outline-offset: -2px;
+}
+
+.fin-futures__radio {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+}
+
+.fin-futures__row[data-active="true"] .fin-futures__radio {
+  border: 4px solid var(--accent);
+}
+
+.fin-futures__text {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
-.playlist-shell__stage {
+.fin-futures__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fin-futures__meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fin-futures__chip {
+  flex: none;
+  height: 26px;
+  margin-right: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.fin-futures__chip[data-on="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.fin-futures__divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--line);
+}
+
+.fin-futures__action {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fin-futures__action:hover {
+  background: var(--hover);
+}
+
+.fin-futures__action--danger {
+  color: var(--fin-negative-text);
+}
+
+.fin-futures__hint {
+  margin: 8px 10px 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* "Escribir…" entry of the Nuevo menu */
+.fin-new__slash {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* --- Command bar ------------------------------------------------------------- */
+.fin-command {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  z-index: 12;
+  width: min(640px, calc(100% - 32px));
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
+  transform: translateX(-50%);
+}
+
+.fin-command__field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px 4px 10px;
+}
+
+.fin-command__slash {
+  color: var(--accent);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.fin-command__input-wrap {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 0;
+  height: 40px;
+}
+
+.fin-command__input,
+.fin-command__ghost {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 40px;
+  white-space: pre;
+}
+
+.fin-command__input {
+  z-index: 1;
+  color: var(--text);
+}
+
+.fin-command__input:focus,
+.fin-command__input:focus-visible {
+  outline: none;
+}
+
+.fin-command__ghost {
   overflow: hidden;
+  color: var(--muted);
+  opacity: 0.75;
+  pointer-events: none;
 }
 
-/* Overlays open BELOW the ruler + money lane (the shell sets both heights
-   from the playlist metrics), so the rails never cover the curve. */
-.playlist-shell--finance .fin-side,
-.playlist-shell--finance .playlist-inspector {
-  top: calc(var(--pl-ruler-h, 38px) + var(--pl-lane-h, 0px));
+.fin-command__ghost-typed {
+  color: transparent;
 }
 
-/* Collapsed "Análisis" toggle lives in the money lane's header cell (an
-   inert area under the "Caja" title) instead of over the first track
-   header, where it used to cover the track name. */
-.playlist-shell--finance .fin-side--collapsed {
-  top: calc(var(--pl-ruler-h, 38px) + var(--pl-lane-h, 0px) - 30px);
-  left: 10px;
+.fin-command__key {
+  flex: none;
 }
-.playlist-shell--finance .fin-side--collapsed .fin-side__tab {
-  flex-direction: row;
+
+.fin-command__result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 8px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.fin-command__dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.fin-command__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fin-command__what {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fin-command__assumed {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fin-command__empty {
+  margin: 6px 12px 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.fin-command__effect {
+  margin: 8px 12px 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fin-command__effect[data-tone="positive"] {
+  color: var(--fin-positive);
+}
+
+.fin-command__effect[data-tone="negative"] {
+  color: var(--fin-negative-text);
+}
+
+.fin-command__suggestions {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.fin-command__label {
+  margin: 0 10px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.fin-command__suggestions ul {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fin-command__suggestion {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.fin-command__suggestion[data-selected="true"] {
+  background: var(--hover);
+}
+
+.fin-command__suggestion-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.fin-command__suggestion-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fin-command__suggestion-amount {
+  color: var(--muted);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-command__suggestion-why {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Peek toast (hold Q / hold A) ------------------------------------------- */
+/* Under the money lane it describes, clear of the banners at the bottom. */
+.fin-peek {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--pl-ruler-h, 38px) + var(--pl-lane-h, 0px) + 12px);
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-radius: var(--radius-full);
+  background: var(--ink);
+  color: var(--on-ink);
+  box-shadow: var(--shadow-pop);
+  font-size: 13px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.fin-peek span {
+  opacity: 0.85;
+}
+
+/* --- Banners (onboarding, Rec) ------------------------------------------------ */
+.fin-banners {
+  position: absolute;
+  left: calc(var(--pl-header-w, 216px) + 16px);
+  bottom: 28px;
+  /* Passive hints: under any panel the person opens (side panel,
+     inspector, menus), never over its controls. */
+  z-index: 5;
+  display: grid;
+  gap: 8px;
+  max-width: min(640px, calc(100% - 320px));
+  pointer-events: none;
+}
+
+.fin-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  pointer-events: auto;
+}
+
+.fin-banner__text {
+  flex: 1 1 auto;
+}
+
+.fin-banner .fin-button {
+  height: 32px;
+}
+
+/* --- Rec / onboarding / statement dialogs --------------------------------------- */
+.fin-rec,
+.fin-onboarding,
+.fin-statement {
+  width: 560px;
+}
+
+.fin-rec__intro {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.fin-rec__table {
+  margin-bottom: 14px;
+}
+
+.fin-rec__actual {
+  display: flex;
+  gap: 6px;
+}
+
+.fin-rec .fin-rec__actual select,
+.fin-rec .fin-rec__actual input {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.fin-rec .fin-rec__actual select {
   width: auto;
-  padding: 3px 8px;
-  border-left: 1px solid var(--line);
-  border-radius: 4px;
+  padding-right: 26px;
+  background: var(--surface) var(--select-chevron) no-repeat right 8px center;
+  appearance: none;
 }
-.playlist-shell--finance .fin-side--collapsed .fin-side__tab-label {
-  writing-mode: horizontal-tb;
-  transform: none;
+
+.fin-rec .fin-rec__actual input {
+  width: 96px;
+}
+
+.fin-rec__cash {
+  margin-top: 4px;
+}
+
+.fin-rec input[type="text"],
+.fin-onboarding input[type="text"],
+.fin-onboarding select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-onboarding select {
+  padding-right: 32px;
+  background: var(--surface) var(--select-chevron) no-repeat right 12px center;
+  appearance: none;
+}
+
+.fin-rec input[type="text"]:focus,
+.fin-onboarding input[type="text"]:focus,
+.fin-onboarding select:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.fin-onboarding__label {
+  margin: 18px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.fin-onboarding__rows {
+  display: grid;
+  gap: 6px;
+}
+
+.fin-onboarding__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px 64px;
+  gap: 6px;
+}
+
+.fin-onboarding__check {
+  margin-top: 14px;
+  white-space: normal;
+}
+
+.fin-statement__input {
+  width: 100%;
+  min-height: 110px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.fin-statement__input:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.fin-statement__table {
+  max-height: 200px;
+  margin-top: 12px;
+  overflow-y: auto;
+}
+
+.fin-statement__table tr[data-future="true"] td {
+  color: var(--accent);
+}
+
+.fin-statement__summary,
+.fin-statement__effect {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.fin-statement__effect strong {
+  color: var(--text);
+}
+
+/* --- Timeline navigation (corner above the track names) ---------------------- */
+.fin-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.fin-navctl {
+  position: absolute;
+  top: calc((var(--pl-ruler-h, 52px) - 30px) / 2);
+  left: 10px;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: calc(var(--pl-header-w, 216px) - 20px);
+}
+
+.fin-navctl__button {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  height: 30px;
+  min-width: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.fin-navctl__button:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+}
+
+.fin-navctl__button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fin-navctl__today {
+  padding: 0 10px;
+}
+
+.fin-navctl__help {
+  color: var(--muted);
+}
+
+.fin-navctl__span {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  padding: 0 22px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface) var(--select-chevron) no-repeat right 6px center;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  appearance: none;
+  cursor: pointer;
+}
+
+.fin-navctl__span:hover {
+  border-color: var(--line-strong);
+}
+
+.fin-navhelp {
+  min-width: 360px;
+  max-width: 440px;
+  max-height: none;
+  padding: 14px 16px;
+}
+
+.fin-navhelp__title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fin-navhelp__list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.fin-navhelp__row {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fin-navhelp__row dt {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.fin-navhelp__row dd {
+  margin: 0;
+  color: var(--muted);
+}
+
+.fin-banner--hint .fin-navhelp__title {
+  display: none;
+}
+
+.fin-banner--hint .fin-navhelp__row {
+  grid-template-columns: 170px 1fr;
+}
+
+/* --- Responsive layout: nothing overlaps, everything stays reachable ------
+   Audited at 1920 / 1366 / 1024 / 768 / 390 px (see docs/project-canon.md):
+   bars never let their parts slide under each other; floating UI is kept
+   on screen by src/ui/fit-in-viewport.ts. */
+
+/* The tool bar scrolls sideways when it can't fit (swipe / Shift+rueda). */
+.playlist-shell__bar {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.playlist-shell__bar::-webkit-scrollbar {
+  display: none;
+}
+
+.playlist-shell__bar > *,
+.playlist-shell__toolbar {
+  flex-shrink: 0;
+}
+
+/* Editable amounts in the summary: at least a 24 px target. */
+.fin-summary__input {
+  min-height: 24px;
+}
+
+@media (max-width: 720px) {
+  /* Brand + actions, then the metrics (scrollable), then the tools. */
+  .fin-summary {
+    flex-wrap: wrap;
+    height: auto;
+    row-gap: 6px;
+    padding: 8px 12px;
+  }
+
+  .fin-summary__brand {
+    padding-right: 12px;
+  }
+
+  .playlist-shell__bar {
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  /* Banners span the canvas but leave the inspector toggle free. */
+  .fin-banners {
+    left: 8px;
+    right: 56px;
+    max-width: none;
+  }
+}
+
+
+/* --- Soft UI standard (implementation rule) --------------------------------
+   See docs/project-canon.md "Lenguaje visual". In short:
+   - the page is a quiet grey; content lives on white CARDS that float on it
+     (radius --radius-card, shadow --shadow-card, --gap-card apart), never on
+     full-bleed strips separated by hairlines;
+   - secondary controls are soft fills (--surface-2) without outlines;
+     one filled primary action per surface (--ink);
+   - controls appear where and when they act (hover / selection / state),
+     everything else stays out of sight: no permanent counters or repeated
+     icons. */
+
+.playlist-shell--finance {
+  gap: var(--gap-card);
+  padding: var(--gap-card);
+  background: var(--page-bg);
+}
+
+.playlist-shell--finance .fin-summary {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 64px;
+  /* The forced break is its own (empty) line: no gap around it. */
+  row-gap: 0;
+  border-bottom: 0;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.playlist-shell--finance .playlist-shell__stage {
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+/* The tool row lives INSIDE the header card.
+   Two rows (most windows): brand + metrics across the top; tools on the
+   left and the actions (alertas · tema · Nuevo) on the right below — both
+   rows used, nothing stranded. A pseudo-element forces the break.
+   One row (wide windows): brand · metrics · tools · actions. */
+.playlist-shell--finance .fin-summary::after {
+  content: "";
+  order: 9;
+  flex-basis: 100%;
+  height: 0;
+}
+
+.playlist-shell--finance .fin-summary__metrics {
+  flex: 1 1 auto;
+}
+
+.fin-summary > .playlist-shell__bar {
+  order: 10;
+  flex: 0 1 auto;
+  height: 48px;
+  padding: 0 0 6px;
+  border: 0;
+  background: transparent;
+}
+
+.playlist-shell--finance .fin-summary__spacer {
+  order: 11;
+  flex: 1 1 0;
+}
+
+.playlist-shell--finance .fin-summary__actions {
+  order: 12;
+  padding-bottom: 6px;
+}
+
+@media (min-width: 1800px) {
+  .playlist-shell--finance .fin-summary {
+    flex-wrap: nowrap;
+  }
+
+  .playlist-shell--finance .fin-summary::after {
+    display: none;
+  }
+
+  /* Metrics take what is left (scrolling with a fade if it's tight). */
+  .playlist-shell--finance .fin-summary__metrics {
+    flex: 1 1 0;
+  }
+
+  .fin-summary > .playlist-shell__bar,
+  .playlist-shell--finance .fin-summary__spacer,
+  .playlist-shell--finance .fin-summary__actions {
+    order: 0;
+    height: auto;
+    padding: 0;
+  }
+
+  .playlist-shell--finance .fin-summary__spacer {
+    flex: 0 0 0;
+  }
+}
+
+/* Every tool shows its icon (its name in the tooltip). */
+.playlist-shell__tool-label {
+  display: none;
+}
+
+.playlist-shell__tool {
+  padding: 0 9px;
+}
+
+/* Secondary controls: soft fills, no outlines. */
+.fin-navctl__button,
+.fin-navctl__span {
+  border-color: transparent;
+  background-color: var(--surface-2);
+}
+
+.fin-navctl__button:hover,
+.fin-navctl__span:hover {
+  border-color: transparent;
+  background-color: var(--surface-3);
+}
+
+.fin-banner {
+  border-color: transparent;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-pop);
+}
+
+.playlist-shell__menu,
+.fin-popover {
+  border-color: transparent;
+  border-radius: 14px;
+}
+
+/* Playhead readout in the money lane's header cell (empty space under
+   "Caja"): date, cash and debt where the eye already is, not in a bar. */
+.fin-readout--lane {
+  position: absolute;
+  top: calc(var(--pl-ruler-h, 52px) + 30px);
+  left: 16px;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: start;
+  gap: 1px 12px;
+  width: calc(var(--pl-header-w, 216px) - 32px);
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.fin-readout--lane .fin-readout__date {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.fin-readout--lane .fin-readout__cell {
+  gap: 4px;
+}
+
+@media (max-width: 720px) {
+  .playlist-shell--finance .fin-summary {
+    row-gap: 2px;
+  }
+
+  .playlist-shell--finance .fin-summary__spacer {
+    order: 1;
+    flex: 1 1 0;
+  }
+
+  .playlist-shell--finance .fin-summary__actions {
+    order: 2;
+    padding-bottom: 0;
+  }
+
+  .playlist-shell--finance .fin-summary::after {
+    order: 3;
+  }
+
+  .playlist-shell--finance .fin-summary__metrics {
+    order: 4;
+    flex: 1 1 100%;
+  }
+
+  .fin-summary > .playlist-shell__bar {
+    order: 5;
+    flex: 1 1 100%;
+  }
+}
+
+/* Readout in the lane cell: two compact lines that fit the 216 px cell. */
+.fin-readout--lane .fin-readout__cell {
+  border: 0;
+  padding: 0;
+}
+
+.fin-readout--lane .fin-readout__cell:nth-child(2) .fin-readout__label {
+  display: none;
 }

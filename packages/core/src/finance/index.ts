@@ -27,7 +27,8 @@ export {
   snapshotAt,
 } from "./queries";
 export { estimateDebtPayoffs } from "./payoff";
-export { rankDebtsByAvalanche, suggestAvalanchePayments } from "./strategy";
+export { cardCycleDates, nextCutDate, statementDueDate } from "./card-cycles";
+export { rankDebtsByAvalanche, statementCardCommitments, suggestAvalanchePayments } from "./strategy";
 export { cloneFinancialDocument, compareProjections, summarizeProjection } from "./scenario";
 export {
   createDefaultFinancialItem,
@@ -36,3 +37,17 @@ export {
   remainingInstallmentDebt,
 } from "./items";
 export { createDemoFinancialDocument } from "./demo";
+export { rollForward } from "./rollforward";
+export type {
+  ActualRecord,
+  ActualStatus,
+  LedgerEntry,
+  RollForwardOptions,
+  RollForwardResult,
+} from "./rollforward";
+export { suggestMexicanYear } from "./mx-year";
+export type { YearSuggestion } from "./mx-year";
+export { solveDebtPayment } from "./goalseek";
+export type { DebtPaymentSolution } from "./goalseek";
+export { explainValley, suggestValleyFixes } from "./valley";
+export type { ValleyCause, ValleyExplanation, ValleyFix } from "./valley";

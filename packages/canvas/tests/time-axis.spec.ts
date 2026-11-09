@@ -24,6 +24,9 @@ import {
 } from "../src/playlist-core";
 import { createPlaylistInteractionController } from "../src/playlist-interaction";
 import {
+  CLIP_TEXT_RIGHT_PAD,
+  DETAIL_CHAR_PX,
+  DETAIL_PAD_X,
   clipVisualHash,
   createClipNodeRegistry,
   isClipDetailVisible,
@@ -101,8 +104,9 @@ describe("time axis — ruler ticks", () => {
     expect(explicitNull).toEqual(legacy);
     expect(viaCore).toEqual(legacy);
     // Historical shape: 28 px/beat → half-beat step, bar labels 1-indexed.
-    expect(legacy[0]).toEqual({ beat: 0, x: M.trackHeaderWidth + 0.5, isBar: true, label: "1" });
-    expect(legacy[1]).toEqual({ beat: 0.5, x: M.trackHeaderWidth + 14 + 0.5, isBar: false, label: null });
+    const plain = { centered: false, emphasis: false, dim: false };
+    expect(legacy[0]).toEqual({ beat: 0, x: M.trackHeaderWidth + 0.5, isBar: true, label: "1", labelX: M.trackHeaderWidth + 0.5, ...plain });
+    expect(legacy[1]).toEqual({ beat: 0.5, x: M.trackHeaderWidth + 14 + 0.5, isBar: false, label: null, labelX: M.trackHeaderWidth + 14 + 0.5, ...plain });
     expect(legacy.find((t) => t.beat === 4)?.label).toBe("2");
   });
 
@@ -301,8 +305,13 @@ describe("clip detail line + per-renderer sparkline", () => {
     expect(truncateClipDetail("$1,000", 200)).toBe("$1,000");
     const cut = truncateClipDetail("A very long financial detail line", 60);
     expect(cut.endsWith("…")).toBe(true);
-    expect(cut.length).toBe(Math.floor((60 - 16) / 6));
+    expect(cut.length).toBe(
+      Math.floor((60 - DETAIL_PAD_X - CLIP_TEXT_RIGHT_PAD) / DETAIL_CHAR_PX),
+    );
     expect(truncateClipDetail("abc", 10)).toBe("");
+    // A one-time event card (7 days at the default 10 px/day) shows its
+    // whole amount.
+    expect(truncateClipDetail("−$5,792", 70)).toBe("−$5,792");
   });
 
   // Wraps each node's body Graphics.clear so a test can count redraws.

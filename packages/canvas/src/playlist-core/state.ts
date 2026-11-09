@@ -75,6 +75,18 @@ export interface PlaylistCreateClipInput {
   noSlice?: boolean;
 }
 
+// Opaque snapshot of a document + its undo history (see saveSession).
+export interface PlaylistSession {
+  readonly history: unknown;
+}
+
+function isPlaylistSession(
+  value: PlaylistSession | PlaylistState,
+): value is PlaylistSession {
+  return (value as PlaylistSession).history !== undefined &&
+    (value as PlaylistState).clips === undefined;
+}
+
 // PlaylistCore is the mutable facade backed by a pure reducer + history stack.
 // The public API mirrors the original mutator surface so consumers (controller,
 // shell) keep working unchanged. Internally each mutator dispatches an action.
@@ -190,6 +202,17 @@ export class PlaylistCore {
       return this.timeAxis.formatTime(beat);
     }
     return formatBarBeat(beat, this.metrics.beatsPerBar);
+  }
+
+  // Tooltip text + beat for an exclusive end (a right edge): the axis can
+  // name the last unit still covered ("hasta 31 ago") instead of the
+  // boundary, which belongs to the next unit.
+  formatEndTime(beat: number): string {
+    return this.timeAxis?.formatEnd ? this.timeAxis.formatEnd(beat) : this.formatTime(beat);
+  }
+
+  endTooltipBeat(beat: number): number {
+    return this.timeAxis?.lastCoveredBeat ? this.timeAxis.lastCoveredBeat(beat) : beat;
   }
 
   // Snap a raw time with the active snap mode, this core's metrics (bar
@@ -327,6 +350,30 @@ export class PlaylistCore {
       return null;
     }
     return this.gestureBase ?? this.history.present;
+  }
+
+  // Sessions: the whole document + its undo history, opaque to the host.
+  // A host that keeps several documents (e.g. alternative futures) saves
+  // the active one and loads another; each keeps its own undo stack.
+  // Call with no gesture open. Loading notifies listeners once.
+  saveSession(): PlaylistSession {
+    return { history: this.history };
+  }
+
+  loadSession(source: PlaylistSession | PlaylistState): void {
+    this.gestureDepth = 0;
+    this.gestureBase = null;
+    this.gestureOpenedInAmend = false;
+    if (isPlaylistSession(source)) {
+      this.history = source.history as History<PlaylistState>;
+    } else {
+      const initial =
+        !this.stretchEnabled && source.stretchMode
+          ? { ...source, stretchMode: false }
+          : source;
+      this.history = createHistory(normalizeState(initial, this.metrics));
+    }
+    this.notify();
   }
 
   // Undo / redo.

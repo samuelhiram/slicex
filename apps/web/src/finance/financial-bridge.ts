@@ -27,14 +27,20 @@
 // listeners are notified only then.
 import {
   createDefaultFinancialItem,
+  explainValley,
   findLiquidityWarnings,
   nextPayment,
   projectFinancialDocument,
   snapshotAt,
+  solveDebtPayment,
+  statementDueDate,
+  suggestValleyFixes,
+  type ValleyFix,
   type FinancialDocument,
   type FinancialItem,
   type FinancialItemKind,
   type FinancialProjection,
+  type FinancialProjectionPoint,
   type FinancialSnapshot,
   type ISODate,
   type LiquidityWarning,
@@ -43,23 +49,34 @@ import {
   estimateDebtPayoffs,
   type DebtPayoffEstimate,
 } from "@slicex/core";
-import type {
-  PlaylistClip,
-  PlaylistClipContent,
-  PlaylistCore,
-  PlaylistDragAnnotation,
-  PlaylistOverviewData,
-  PlaylistState,
-  PlaylistTrackMeta,
+import {
+  stepSeriesValueAt,
+  type PlaylistClip,
+  type PlaylistClipContent,
+  type PlaylistCore,
+  type PlaylistDragAnnotation,
+  type PlaylistOverviewData,
+  type PlaylistState,
+  type PlaylistStepSeries,
+  type PlaylistTrackMeta,
 } from "@slicex/canvas";
-import type { FinancialBridgeApi } from "./bridge-api";
-import { formatMoney } from "./format";
+import type {
+  FinancialBridgeApi,
+  FinancialPlacement,
+  FinancialPreview,
+  FinancialSession,
+  PreviewEffect,
+  ValleyInsight,
+} from "./bridge-api";
+import { formatDateShort, formatMoney, formatMoneyWhole } from "./format";
 import { FREQUENCY_SHORT, KIND_COLORS, KIND_LABELS } from "./labels";
 import {
   beatOf,
   canonicalItem,
+  createFinancialPlaylistState,
   dateOf,
   deriveRecurrence,
+  isPayoffPinned,
   isPointItem,
   isPointTrackOf,
   isSliceable,
@@ -67,6 +84,8 @@ import {
   itemClipGeometry,
   itemColor,
   openEndBeat,
+  trackLayoutOf,
+  type FinancialTrackLayout,
   type ObservedGeometry,
 } from "./mapping";
 import {
@@ -76,12 +95,16 @@ import {
   cashSeries,
   describeItemAt,
   dragAnnotation,
+  formatMonthYear,
 } from "./visuals";
 
 // Label the playlist gives to clips created without a template.
 const GENERIC_CLIP_LABEL = "Clip";
 const MAX_SPARK_BARS = 64;
 const EMPTY_BARS: number[] = [];
+// Movements listed under a date tooltip before "y N más".
+const DAY_DETAIL_MAX = 5;
+const NO_POINTS: readonly FinancialProjectionPoint[] = [];
 
 interface Observed {
   start: number;
@@ -106,6 +129,83 @@ interface DocSnapshot {
 }
 
 const EPS = 1e-6;
+
+// Amount by hand: px of upward travel that multiply the amount by e.
+const LEVEL_PX_PER_E = 120;
+// Branch switch morph of the money lane.
+const TRANSITION_MS = 320;
+
+function now(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+/** The amount a vertical drag edits, or null when the item has none. */
+export function levelValue(item: FinancialItem): number | null {
+  switch (item.kind) {
+    case "income":
+    case "expense":
+    case "card-purchase":
+      return item.amount;
+    case "loan":
+      return item.paymentAmount;
+    case "credit-card":
+      return item.paymentMode === "statement" ? null : item.paymentAmount ?? item.minimumPayment;
+    case "installment-plan":
+      return item.originalAmount;
+  }
+}
+
+export function withLevel<T extends FinancialItem>(item: T, value: number): T {
+  switch (item.kind) {
+    case "income":
+    case "expense":
+    case "card-purchase":
+      return { ...item, amount: value };
+    case "loan":
+      return { ...item, paymentAmount: value };
+    case "credit-card":
+      return { ...item, paymentAmount: value };
+    case "installment-plan":
+      return { ...item, originalAmount: value };
+  }
+  return item;
+}
+
+/** Friendly rounding while dragging an amount: fewer digits as it grows. */
+export function niceAmount(raw: number): number {
+  const value = Math.max(1, raw);
+  const step = value < 100 ? 1 : value < 1000 ? 10 : value < 10_000 ? 50 : value < 100_000 ? 100 : 1000;
+  return Math.max(step, Math.round(value / step) * step);
+}
+
+export function levelText(item: FinancialItem, value: number, doc: FinancialDocument): string {
+  const freq = FREQUENCY_SHORT[item.recurrence.frequency];
+  const once = item.recurrence.frequency === "once";
+  switch (item.kind) {
+    case "income":
+      return once ? `+${formatMoneyWhole(value)}` : `+${formatMoneyWhole(value)} ${freq}`;
+    case "expense":
+      return once ? `−${formatMoneyWhole(value)}` : `−${formatMoneyWhole(value)} ${freq}`;
+    case "loan":
+      return `Pagas ${formatMoneyWhole(value)} ${freq}`;
+    case "credit-card":
+      return `Pagas ${formatMoneyWhole(value)}/mes`;
+    case "card-purchase": {
+      const card = doc.items.find((candidate) => candidate.id === item.cardId);
+      return card ? `${formatMoneyWhole(value)} → ${card.name}` : formatMoneyWhole(value);
+    }
+    case "installment-plan": {
+      const months = Math.max(1, item.installmentsTotal);
+      return `${formatMoneyWhole(value)} en ${months} MSI · ${formatMoney(
+        Math.round((value / months) * 100) / 100,
+      )}/mes`;
+    }
+  }
+}
+
+function easeInOut(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
 
 function cloneItem<T extends FinancialItem>(item: T, id: string): T {
   const copy = JSON.parse(JSON.stringify(item)) as T;
@@ -185,7 +285,8 @@ export class FinancialBridge implements FinancialBridgeApi {
   private previousTrackMeta: Map<string, PlaylistTrackMeta> = new Map();
   private overviewCache: {
     revision: number;
-    baseline: DocSnapshot | null;
+    // Mode key: the gesture baseline, the preview or the comparison object.
+    baseline: object | null;
     data: PlaylistOverviewData;
   } | null = null;
   private dragCache: {
@@ -213,6 +314,33 @@ export class FinancialBridge implements FinancialBridgeApi {
   private idCounter = 0;
   private readonly subscription: { unsubscribe: () => void };
 
+  // Wave 2/3 interaction state.
+  private gestureOpen = false;
+  // Goal-seek result of the open gesture, shown in the drag pill.
+  private gestureNote: { text: string; tone: PlaylistDragAnnotation["tone"] } | null = null;
+  private level: { itemId: string; value: number } | null = null;
+  private preview: FinancialPreview | null = null;
+  private previewCache: {
+    revision: number;
+    preview: FinancialPreview;
+    doc: FinancialDocument;
+    projection: FinancialProjection;
+    warnings: LiquidityWarning[];
+  } | null = null;
+  private comparison: FinancialDocument | null = null;
+  private comparisonCache: { doc: FinancialDocument; series: PlaylistStepSeries } | null =
+    null;
+  private transition: {
+    from: PlaylistStepSeries;
+    t0: number;
+    beats: number[];
+  } | null = null;
+  private highlight: ReadonlySet<string> = new Set();
+  private valleyCache: { revision: number; byKey: Map<string, ValleyInsight> } = {
+    revision: -1,
+    byKey: new Map(),
+  };
+
   constructor(core: PlaylistCore, doc: FinancialDocument) {
     this.core = core;
     this.doc = { ...doc, items: doc.items.map(canonicalItem) };
@@ -231,6 +359,8 @@ export class FinancialBridge implements FinancialBridgeApi {
     this.observe(state);
     this.snapshots.set(state, this.snap);
     this.subscription = core.subscribe((next) => this.handleState(next));
+    // Pin derived clip ends (debts end where they're paid off) right away.
+    this.sweepInvariants(state);
   }
 
   // --- subscription (arrow properties: passed by reference to useSyncExternalStore)
@@ -309,18 +439,49 @@ export class FinancialBridge implements FinancialBridgeApi {
   }
 
   getOverviewData(): PlaylistOverviewData {
+    const settled = this.settledOverview();
+    return this.transitionFrame(settled) ?? settled;
+  }
+
+  // The lane without the switch animation: the gesture's "before" ghost,
+  // else a preview (what-if) over the current curve, else the compared
+  // future, else just the current curve. Cached per (revision, mode key).
+  private settledOverview(): PlaylistOverviewData {
     const baseline = this.gestureBaseline();
+    const preview = baseline ? null : this.preview;
+    const comparison = baseline || preview ? null : this.comparison;
+    const key: object | null = baseline ?? preview ?? comparison;
     const cached = this.overviewCache;
-    if (cached && cached.revision === this.revision && cached.baseline === baseline) {
+    if (cached && cached.revision === this.revision && cached.baseline === key) {
       return cached.data;
     }
-    const data = buildOverview(
-      this.doc,
-      this.projection,
-      this.warnings,
-      baseline ? cashSeries(this.doc, this.projectionOf(baseline)) : null,
-    );
-    this.overviewCache = { revision: this.revision, baseline, data };
+    let data: PlaylistOverviewData;
+    if (baseline) {
+      data = buildOverview(
+        this.doc,
+        this.projection,
+        this.warnings,
+        cashSeries(this.doc, this.projectionOf(baseline)),
+      );
+    } else if (preview) {
+      const view = this.previewData(preview);
+      data = buildOverview(
+        view.doc,
+        view.projection,
+        view.warnings,
+        cashSeries(this.doc, this.projection),
+      );
+    } else if (comparison) {
+      data = buildOverview(
+        this.doc,
+        this.projection,
+        this.warnings,
+        this.comparisonSeries(comparison),
+      );
+    } else {
+      data = buildOverview(this.doc, this.projection, this.warnings, null);
+    }
+    this.overviewCache = { revision: this.revision, baseline: key, data };
     return data;
   }
 
@@ -331,9 +492,39 @@ export class FinancialBridge implements FinancialBridgeApi {
     if (cached && cached.revision === this.revision && cached.baseline === baseline) {
       return cached.data;
     }
-    const data = dragAnnotation(this.doc, this.projectionOf(baseline), this.projection);
+    const effect = dragAnnotation(this.doc, this.projectionOf(baseline), this.projection);
+    const note = this.gestureNote ?? this.statementNote(baseline);
+    const data: PlaylistDragAnnotation = note
+      ? { text: `${note.text} · ${effect.text}`, tone: note.tone === "negative" ? "negative" : effect.tone }
+      : effect;
     this.dragCache = { revision: this.revision, baseline, data };
     return data;
+  }
+
+  // A purchase on a "totalero" card dragged across a cut: when it is paid.
+  private statementNote(
+    baseline: DocSnapshot,
+  ): { text: string; tone: PlaylistDragAnnotation["tone"] } | null {
+    const before = new Map<string, FinancialItem>();
+    for (const item of baseline.items) before.set(item.id, item);
+    for (const item of this.doc.items) {
+      if (item.kind !== "card-purchase") continue;
+      const old = before.get(item.id);
+      if (!old || old.kind !== "card-purchase") continue;
+      if (old.recurrence.startDate === item.recurrence.startDate) continue;
+      const card = this.itemIndex.get(item.cardId);
+      if (!card || card.kind !== "credit-card" || card.paymentMode !== "statement") continue;
+      const was = statementDueDate(card, old.recurrence.startDate);
+      const will = statementDueDate(card, item.recurrence.startDate);
+      if (was === will) {
+        return { text: `Se paga el ${formatDateShort(will)}`, tone: "neutral" };
+      }
+      return {
+        text: `Pasa de corte: se paga el ${formatDateShort(will)} (antes ${formatDateShort(was)})`,
+        tone: will > was ? "positive" : "negative",
+      };
+    }
+    return null;
   }
 
   getTrackMeta(trackId: string): PlaylistTrackMeta | null {
@@ -359,12 +550,279 @@ export class FinancialBridge implements FinancialBridgeApi {
     return this.sparkIndex.get(clipId) ?? EMPTY_BARS;
   }
 
+  // --- wave 2: amount by hand
+
+  // Vertical drag on a clip's top edge (the interaction controller opened a
+  // gesture: every touch() below lands in ONE undo entry, and the gesture
+  // baseline gives the lane its ghost and the pill its effect).
+  levelDrag(clipId: string, phase: "start" | "move" | "end", deltaY: number): string | null {
+    if (phase === "start") {
+      const item = this.itemIndex.get(clipId);
+      const clip = this.findClip(clipId);
+      const value = item ? levelValue(item) : null;
+      if (!item || !clip || this.isClipLocked(clip) || value === null) {
+        this.level = null;
+        return item && item.kind === "credit-card" && item.paymentMode === "statement"
+          ? "Pagas el total de cada estado de cuenta"
+          : null;
+      }
+      this.level = { itemId: clipId, value };
+      return levelText(item, value, this.doc);
+    }
+    const level = this.level;
+    if (!level) return null;
+    if (phase === "end") {
+      this.level = null;
+      return null;
+    }
+    const current = this.itemIndex.get(level.itemId);
+    if (!current) return null;
+    const value = niceAmount(level.value * Math.exp(deltaY / LEVEL_PX_PER_E));
+    if (levelValue(current) !== value) {
+      const next = withLevel(current, value);
+      this.doc = {
+        ...this.doc,
+        items: this.doc.items.map((item) => (item.id === next.id ? next : item)),
+      };
+      this.commitTouch();
+    }
+    return levelText(this.itemIndex.get(level.itemId) ?? current, value, this.doc);
+  }
+
+  // --- wave 2: valleys that explain and fix themselves
+
+  valleyAt(day: number): ValleyInsight | null {
+    if (this.warnings.length === 0) return null;
+    const date = dateOf(this.doc, Math.max(0, Math.floor(day)));
+    const reserve = this.doc.minimumCashReserve;
+    if (snapshotAt(this.projection, date).cash >= reserve) return null;
+    // The episode the day belongs to: the latest one that started by then.
+    let warning: LiquidityWarning | null = null;
+    for (const candidate of this.warnings) {
+      if (candidate.startDate <= date) warning = candidate;
+    }
+    if (!warning) return null;
+    if (this.valleyCache.revision !== this.revision) {
+      this.valleyCache = { revision: this.revision, byKey: new Map() };
+    }
+    const key = `${warning.startDate}:${warning.eventId}`;
+    let insight = this.valleyCache.byKey.get(key);
+    if (!insight) {
+      insight = {
+        warning,
+        explanation: explainValley(this.doc, this.projection, warning),
+        fixes: suggestValleyFixes(this.doc, warning, { limit: 3 }),
+      };
+      this.valleyCache.byKey.set(key, insight);
+    }
+    return insight;
+  }
+
+  applyValleyFix(fix: ValleyFix): boolean {
+    return this.replaceItem(fix.patch);
+  }
+
+  setHighlight(itemIds: readonly string[] | null): void {
+    const next = new Set(itemIds ?? []);
+    if (next.size === this.highlight.size && [...next].every((id) => this.highlight.has(id))) {
+      return;
+    }
+    this.highlight = next;
+    this.notifyVisual();
+  }
+
+  isHighlighted(clipId: string): boolean {
+    return this.highlight.has(clipId);
+  }
+
+  // Render-loop provider (time tooltip): O(1) while the day and the
+  // projection are the same; the per-date index is built once per projection.
+  private dayDetailCache: { projection: unknown; day: number; text: string | null } | null = null;
+  private pointsByDate: { projection: unknown; map: Map<string, FinancialProjectionPoint[]> } | null =
+    null;
+
+  getDayDetail(beat: number): string | null {
+    const day = Math.floor(beat);
+    const cache = this.dayDetailCache;
+    if (cache && cache.projection === this.projection && cache.day === day) return cache.text;
+    let text: string | null = null;
+    if (Number.isFinite(day) && day >= 0 && day <= horizonBeat(this.doc)) {
+      const date = dateOf(this.doc, day);
+      const lines = [`Caja ${formatMoneyWhole(this.snapshotAt(date).cash)}`];
+      // That day's cash movements, one line per item (in event order).
+      const totals = new Map<string, { name: string; delta: number }>();
+      for (const point of this.pointsOn(date)) {
+        if (point.cashDelta === 0) continue;
+        const entry = totals.get(point.itemId);
+        if (entry) entry.delta += point.cashDelta;
+        else totals.set(point.itemId, { name: point.name, delta: point.cashDelta });
+      }
+      const moves = [...totals.values()].filter((entry) => Math.round(entry.delta) !== 0);
+      const shown = moves.length > DAY_DETAIL_MAX ? DAY_DETAIL_MAX - 1 : moves.length;
+      for (let i = 0; i < shown; i += 1) {
+        const { name, delta } = moves[i]!;
+        lines.push(`${delta > 0 ? "+" : "−"}${formatMoneyWhole(Math.abs(delta))} ${name}`);
+      }
+      if (shown < moves.length) lines.push(`y ${moves.length - shown} más`);
+      text = lines.join("\n");
+    }
+    this.dayDetailCache = { projection: this.projection, day, text };
+    return text;
+  }
+
+  private pointsOn(date: string): readonly FinancialProjectionPoint[] {
+    if (!this.pointsByDate || this.pointsByDate.projection !== this.projection) {
+      const map = new Map<string, FinancialProjectionPoint[]>();
+      for (const point of this.projection.points) {
+        const list = map.get(point.date);
+        if (list) list.push(point);
+        else map.set(point.date, [point]);
+      }
+      this.pointsByDate = { projection: this.projection, map };
+    }
+    return this.pointsByDate.map.get(date) ?? NO_POINTS;
+  }
+
+  getTrackLayout(): FinancialTrackLayout {
+    return trackLayoutOf(this.core.getState(), (clipId) => this.itemIndex.has(clipId));
+  }
+
+  canExtend(clipId: string): boolean {
+    const item = this.itemIndex.get(clipId);
+    return item !== undefined && !isPointItem(item);
+  }
+
+  // --- wave 3: futures
+
+  setPreview(preview: FinancialPreview | null): void {
+    if (preview === this.preview) return;
+    this.preview = preview;
+    this.previewCache = null;
+    this.notifyVisual();
+  }
+
+  getPreview(): FinancialPreview | null {
+    return this.preview;
+  }
+
+  /** Effect of the active preview vs the current plan (null without one). */
+  getPreviewEffect(): PreviewEffect | null {
+    const preview = this.preview;
+    if (!preview) return null;
+    const view = this.previewData(preview);
+    const annotation = dragAnnotation(this.doc, this.projection, view.projection);
+    return {
+      text: annotation.text,
+      tone: annotation.tone,
+      minBefore: this.projection.minimumCash.cash,
+      minAfter: view.projection.minimumCash.cash,
+      minAfterDate: view.projection.minimumCash.date,
+      finalBefore: this.projection.finalCash,
+      finalAfter: view.projection.finalCash,
+    };
+  }
+
+  setComparison(doc: FinancialDocument | null): void {
+    if (doc === this.comparison) return;
+    this.comparison = doc;
+    this.notifyVisual();
+  }
+
+  getComparison(): FinancialDocument | null {
+    return this.comparison;
+  }
+
+  /** Morph the lane from `series` (the curve shown before) to the current one. */
+  animateFrom(series: PlaylistStepSeries | null): void {
+    if (!series) {
+      this.transition = null;
+      return;
+    }
+    const days = Math.max(1, horizonBeat(this.doc));
+    const beats: number[] = [];
+    for (let day = 1; day < days; day += 1) beats.push(day);
+    this.transition = { from: series, t0: now(), beats };
+    this.notifyVisual();
+  }
+
+  isAnimating(): boolean {
+    return this.transition !== null && now() - this.transition.t0 < TRANSITION_MS;
+  }
+
+  exportSession(): FinancialSession {
+    return { session: this.core.saveSession(), doc: this.doc };
+  }
+
+  // Back to a document saved with exportSession, with its undo history.
+  importSession(session: FinancialSession): void {
+    this.resetTransient();
+    this.doc = session.doc;
+    this.applying += 1;
+    try {
+      this.core.loadSession(session.session);
+    } finally {
+      this.applying -= 1;
+    }
+    const state = this.core.getState();
+    const snapshot = this.snapshots.get(state);
+    if (snapshot) {
+      this.doc = {
+        ...this.doc,
+        items: snapshot.items,
+        initialCash: snapshot.initialCash,
+        minimumCashReserve: snapshot.minimumCashReserve,
+      };
+      this.snap = snapshot;
+    }
+    this.observe(state);
+    this.recompute();
+    this.snapshots.set(state, this.snap);
+    this.sweepInvariants(state);
+  }
+
+  // A brand-new document (onboarding, a restored save, a rolled-forward
+  // plan): fresh playlist + fresh undo history, same zoom. With a layout,
+  // its rows (empty ones too) and placements come back.
+  loadDocument(doc: FinancialDocument, layout: FinancialTrackLayout | null = null): void {
+    this.resetTransient();
+    const viewport = this.core.getState().viewport;
+    const canonical: FinancialDocument = { ...doc, items: doc.items.map(canonicalItem) };
+    const base = createFinancialPlaylistState(canonical, layout);
+    const state: PlaylistState = {
+      ...base,
+      viewport: {
+        ...base.viewport,
+        width: viewport.width,
+        height: viewport.height,
+        pxPerBeat: viewport.pxPerBeat,
+      },
+    };
+    this.doc = canonical;
+    this.snap = {
+      items: canonical.items,
+      initialCash: canonical.initialCash,
+      minimumCashReserve: canonical.minimumCashReserve,
+    };
+    this.archiveBySource.clear();
+    this.applying += 1;
+    try {
+      this.core.loadSession(state);
+    } finally {
+      this.applying -= 1;
+    }
+    const present = this.core.getState();
+    this.observe(present);
+    this.recompute();
+    this.snapshots.set(present, this.snap);
+    this.sweepInvariants(present);
+  }
+
   // --- writes
 
-  createDraftItem(kind: FinancialItemKind): FinancialItem {
+  createDraftItem(kind: FinancialItemKind, atDay?: number): FinancialItem {
     // Past the horizon nothing would be projected: start at its last day.
     const day = Math.min(
-      Math.max(0, Math.floor(this.core.getState().playPosition.time)),
+      Math.max(0, Math.floor(atDay ?? this.core.getState().playPosition.time)),
       horizonBeat(this.doc) - 1,
     );
     const item = createDefaultFinancialItem(
@@ -377,7 +835,7 @@ export class FinancialBridge implements FinancialBridgeApi {
     return canonicalItem(item);
   }
 
-  addItem(draft: FinancialItem): string {
+  addItem(draft: FinancialItem, placement?: FinancialPlacement): string {
     const state = this.core.getState();
     const taken = (id: string) =>
       !id || this.itemIndex.has(id) || state.clips.some((clip) => clip.id === id);
@@ -391,7 +849,28 @@ export class FinancialBridge implements FinancialBridgeApi {
     // writable, audible and free at that date; anything else (and a full
     // lane set) gets a new track at the bottom.
     let trackIndex = -1;
-    if (isPointItem(item)) {
+    // A row the person picked (e.g. right-click on it): used when writable
+    // and free at the item's dates — the endless empty rows below always are.
+    let picked = false;
+    if (placement) {
+      const wanted = Math.max(0, Math.floor(placement.trackIndex));
+      const track = state.tracks[wanted];
+      const end = geometry.start + geometry.duration;
+      if (
+        !track ||
+        (!track.locked &&
+          !state.clips.some(
+            (clip) =>
+              clip.trackId === track.id &&
+              clip.start < end &&
+              clip.start + clip.duration > geometry.start,
+          ))
+      ) {
+        trackIndex = wanted;
+        picked = true;
+      }
+    }
+    if (!picked && isPointItem(item)) {
       const end = geometry.start + geometry.duration;
       trackIndex = state.tracks.findIndex(
         (track) =>
@@ -408,8 +887,19 @@ export class FinancialBridge implements FinancialBridgeApi {
     }
     const newTrack = trackIndex < 0;
     if (newTrack) trackIndex = state.tracks.length;
+    // The row takes the item's name when it had none of its own: a new
+    // lane, an endless row materialised now, or an empty "Track N".
+    const target = state.tracks[trackIndex];
+    const nameRow =
+      newTrack ||
+      !target ||
+      (/^Track \d+$/.test(target.label) &&
+        !state.clips.some((clip) => clip.trackId === target.id));
 
     this.apply(() => {
+      // A new lane goes right under the last track (createClip on a row
+      // past the end would materialise every empty row in between).
+      if (newTrack) this.core.insertTrackBelow(state.tracks.length - 1);
       this.core.createClip({
         trackIndex,
         id,
@@ -424,7 +914,7 @@ export class FinancialBridge implements FinancialBridgeApi {
       if (geometry.contentOffset !== 0) {
         this.core.setClipContentOffset(id, geometry.contentOffset);
       }
-      if (newTrack) {
+      if (nameRow) {
         this.core.renameTrack(
           trackIndex,
           isPointItem(item) ? `${KIND_LABELS[item.kind]} (único)` : item.name,
@@ -526,6 +1016,17 @@ export class FinancialBridge implements FinancialBridgeApi {
 
   private handleState(state: PlaylistState): void {
     if (this.applying > 0 || this.destroyed) return;
+    const open = this.core.getGestureBase() !== null;
+    const closed = this.gestureOpen && !open;
+    this.gestureOpen = open;
+    if (!open) this.gestureNote = null;
+    this.handlePlaylistState(state);
+    // A gesture just ended: pin derived ends that were left free while it
+    // was open (a goal-seek drag lands on the real payoff day).
+    if (closed) this.sweepInvariants(this.core.getState());
+  }
+
+  private handlePlaylistState(state: PlaylistState): void {
     const snapshot = this.snapshots.get(state);
     if (snapshot) {
       // Undo / redo (or a re-notify of a known state).
@@ -614,7 +1115,15 @@ export class FinancialBridge implements FinancialBridgeApi {
     wasIndefinite: boolean,
     excludedTracks: Set<string>,
   ): FinancialItem {
-    const recurrence = deriveRecurrence(this.doc, item, clip, previous, wasIndefinite);
+    let recurrence = deriveRecurrence(this.doc, item, clip, previous, wasIndefinite);
+    const sought = this.goalSeek(item, clip, previous);
+    if (sought && sought.endDate !== undefined && recurrence.endDate !== sought.endDate) {
+      recurrence = { ...recurrence, endDate: sought.endDate };
+    }
+    const payment =
+      sought && "paymentAmount" in item && item.paymentAmount !== sought.paymentAmount
+        ? sought.paymentAmount
+        : undefined;
 
     let name = item.name;
     if (previous && clip.label !== previous.label) {
@@ -632,16 +1141,191 @@ export class FinancialBridge implements FinancialBridgeApi {
       recurrence === item.recurrence &&
       name === item.name &&
       color === item.color &&
-      enabled === item.enabled
+      enabled === item.enabled &&
+      payment === undefined
     ) {
       return item;
     }
     const next = { ...item, recurrence, name } as FinancialItem;
+    if (payment !== undefined) (next as { paymentAmount?: number }).paymentAmount = payment;
     if (color === undefined) delete next.color;
     else next.color = color;
     if (enabled === undefined) delete next.enabled;
     else next.enabled = enabled;
     return next;
+  }
+
+  // Goal-seek: the right edge of a debt dragged by the user = "free on that
+  // date". Cards / balance loans get the payment that pays them off by then
+  // (their end is re-pinned to the real payoff when the gesture ends);
+  // window loans keep their total and spread it over the new window. Only
+  // inside a user pointer gesture (never for editor saves / undo).
+  private goalSeek(
+    item: FinancialItem,
+    clip: PlaylistClip,
+    previous: Observed | null,
+  ): { paymentAmount: number; endDate?: ISODate } | null {
+    if (!previous || this.applying > 0 || this.core.getGestureBase() === null) return null;
+    if (item.kind !== "credit-card" && item.kind !== "loan") return null;
+    const resizedRight =
+      Math.abs(clip.start - previous.start) <= EPS &&
+      Math.abs(clip.duration - previous.duration) > EPS;
+    if (!resizedRight) return null;
+    const base = this.gestureBaseItem(item.id) ?? item;
+    const windowLoan =
+      base.kind === "loan" && base.balance === undefined && base.recurrence.endDate !== undefined;
+    if (!isPayoffPinned(base) && !windowLoan) return null;
+    if (base.kind === "credit-card" && base.paymentMode === "statement") {
+      this.gestureNote = {
+        text: "Pagas el total cada mes: queda libre cuando dejas de usarla",
+        tone: "neutral",
+      };
+      return null;
+    }
+    const endBeat = Math.max(Math.round(clip.start) + 1, Math.round(clip.start + clip.duration));
+    const target = dateOf(this.doc, endBeat - 1);
+    const doc = {
+      ...this.doc,
+      items: this.doc.items.map((candidate) => (candidate.id === base.id ? base : candidate)),
+    };
+    const solution = solveDebtPayment(doc, base.id, target);
+    if (!solution) return null;
+    const per = base.kind === "credit-card" ? "/mes" : FREQUENCY_SHORT[base.recurrence.frequency];
+    const payment = formatMoneyWhole(solution.paymentAmount);
+    const when = solution.payoffDate ? formatMonthYear(solution.payoffDate) : "";
+    if (!solution.feasible) {
+      this.gestureNote = {
+        text: when ? `Lo antes posible: ${when} pagando ${payment}${per}` : `Pagando ${payment}${per}`,
+        tone: "negative",
+      };
+    } else {
+      this.gestureNote = {
+        text: `Libre en ${when} · pagas ${payment}${per}`,
+        tone: "positive",
+      };
+    }
+    return { paymentAmount: solution.paymentAmount, endDate: solution.endDate };
+  }
+
+  // The item as it was when the open gesture started.
+  private gestureBaseItem(id: string): FinancialItem | null {
+    const base = this.core.getGestureBase();
+    const snapshot = base ? this.snapshots.get(base) : undefined;
+    if (!snapshot) return null;
+    for (const item of snapshot.items) if (item.id === id) return item;
+    return null;
+  }
+
+  // Where a payoff-pinned debt's clip ends: the day after its payoff (or
+  // the open end when it never pays off / owes nothing). A card's MSI
+  // plans keep it open until their last installment.
+  private pinnedEnd(item: FinancialItem, clip: PlaylistClip): number {
+    const openEnd = openEndBeat(this.doc);
+    const payoffs = this.payoffs();
+    const endOf = (id: string): number | null => {
+      const estimate = payoffs.get(id);
+      if (!estimate || estimate.payoffDate === null) return null;
+      if (estimate.payoffDate <= this.doc.startDate) return null;
+      return Math.min(openEnd, beatOf(this.doc, estimate.payoffDate) + 1);
+    };
+    let end = endOf(item.id) ?? openEnd;
+    if (item.kind === "credit-card") {
+      for (const other of this.doc.items) {
+        if (other.kind !== "installment-plan" || other.cardId !== item.id) continue;
+        if (other.enabled === false) continue;
+        const planEnd = endOf(other.id);
+        if (planEnd !== null && planEnd > end) end = planEnd;
+      }
+    }
+    return Math.max(end, Math.round(clip.start) + 1);
+  }
+
+  // The end a clip must have, or null when it is free (finite windows).
+  private expectedEnd(item: FinancialItem, clip: PlaylistClip, openEnd: number): number | null {
+    if (isPointItem(item)) return null;
+    if (isPayoffPinned(item)) {
+      // Never fight a drag in progress; the sweep at gesture end pins it.
+      if (this.core.getGestureBase() !== null) return null;
+      return this.pinnedEnd(item, clip);
+    }
+    return item.recurrence.endDate === undefined ? openEnd : null;
+  }
+
+  private resetTransient(): void {
+    this.clearPending();
+    this.level = null;
+    this.preview = null;
+    this.previewCache = null;
+    this.highlight = new Set();
+    this.gestureNote = null;
+    this.transition = null;
+    this.overviewCache = null;
+    this.dragCache = null;
+  }
+
+  // Listeners without a revision bump: React (keyed on the revision) does
+  // nothing, the renderer repaints (preview / highlight / animation).
+  private notifyVisual(): void {
+    for (const listener of Array.from(this.listeners)) listener();
+  }
+
+  private previewData(preview: FinancialPreview): {
+    doc: FinancialDocument;
+    projection: FinancialProjection;
+    warnings: LiquidityWarning[];
+  } {
+    const cached = this.previewCache;
+    if (cached && cached.revision === this.revision && cached.preview === preview) return cached;
+    let doc: FinancialDocument;
+    if (preview.kind === "document") {
+      doc = preview.doc;
+    } else {
+      const items =
+        preview.kind === "exclude"
+          ? this.doc.items.map((item) =>
+              item.id === preview.itemId ? ({ ...item, enabled: false } as FinancialItem) : item,
+            )
+          : [
+              ...this.doc.items,
+              canonicalItem({ ...preview.item, id: "preview-draft" } as FinancialItem),
+            ];
+      doc = { ...this.doc, items };
+    }
+    const projection = projectFinancialDocument(doc);
+    const warnings = findLiquidityWarnings(projection, doc.minimumCashReserve);
+    this.previewCache = { revision: this.revision, preview, doc, projection, warnings };
+    return this.previewCache;
+  }
+
+  private comparisonSeries(doc: FinancialDocument): PlaylistStepSeries {
+    const cached = this.comparisonCache;
+    if (cached && cached.doc === doc) return cached.series;
+    const series = cashSeries(this.doc, projectFinancialDocument(doc));
+    this.comparisonCache = { doc, series };
+    return series;
+  }
+
+  // One frame of the branch-switch morph, or null when none is running.
+  // Allocates per frame only while the ~320 ms animation runs.
+  private transitionFrame(settled: PlaylistOverviewData): PlaylistOverviewData | null {
+    const transition = this.transition;
+    if (!transition) return null;
+    const elapsed = now() - transition.t0;
+    if (elapsed >= TRANSITION_MS) {
+      this.transition = null;
+      return null;
+    }
+    const k = easeInOut(Math.max(0, elapsed / TRANSITION_MS));
+    const from = transition.from;
+    const to = settled.primary;
+    const lerp = (beat: number) =>
+      stepSeriesValueAt(from, beat) * (1 - k) + stepSeriesValueAt(to, beat) * k;
+    const values = transition.beats.map((beat) => lerp(beat));
+    return {
+      ...settled,
+      primary: { initial: lerp(0), beats: transition.beats, values },
+      annotations: [],
+    };
   }
 
   private materialize(
@@ -789,12 +1473,15 @@ export class FinancialBridge implements FinancialBridgeApi {
         if (clip.start > EPS && Math.abs(clip.contentOffset ?? 0) > EPS) {
           this.pendingOffset.add(clip.id);
         }
-      } else if (
-        item.recurrence.endDate === undefined &&
-        Math.abs(clip.start + clip.duration - openEnd) > EPS &&
-        clip.start < openEnd - 1
-      ) {
-        this.pendingRepin.add(clip.id);
+      } else {
+        const expected = this.expectedEnd(item, clip, openEnd);
+        if (
+          expected !== null &&
+          Math.abs(clip.start + clip.duration - expected) > EPS &&
+          clip.start < openEnd - 1
+        ) {
+          this.pendingRepin.add(clip.id);
+        }
       }
     }
     this.queueCorrections();
@@ -872,12 +1559,12 @@ export class FinancialBridge implements FinancialBridgeApi {
           }
           for (const id of repin) {
             const hit = target(id);
-            if (!hit || isPointItem(hit.item) || hit.item.recurrence.endDate !== undefined) {
-              continue;
-            }
+            if (!hit) continue;
+            const want = this.expectedEnd(hit.item, hit.clip, openEnd);
+            if (want === null) continue;
             const end = hit.clip.start + hit.clip.duration;
-            if (Math.abs(end - openEnd) > EPS && hit.clip.start < openEnd - 1) {
-              this.core.resizeClip(id, "right", openEnd);
+            if (Math.abs(end - want) > EPS && hit.clip.start < openEnd - 1) {
+              this.core.resizeClip(id, "right", want);
             }
           }
           const uniqueIds = unique.filter((id) => target(id) !== null);

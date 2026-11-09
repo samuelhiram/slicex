@@ -148,6 +148,12 @@ export function pointInRect(point: PlaylistPoint, rect: PlaylistRect): boolean {
   );
 }
 
+// Half-width (px) of the zoom handles at the ends of the horizontal
+// scrollbar's thumb (the timeline navigator), and the thumb width below
+// which it has none.
+export const SCROLLBAR_EDGE_PX = 6;
+export const SCROLLBAR_EDGE_MIN_THUMB = 36;
+
 export function getHorizontalScrollbarRect(
   state: PlaylistState,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,

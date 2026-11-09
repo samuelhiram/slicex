@@ -1,9 +1,13 @@
-// Play-position rounded rect + triangle on the ruler (chromeGraphics).
-// The full-height vertical line + the in-timeline triangle live on the
-// overlay layer (drawTimelineOverlay) so they're clipped by the mask.
+// Play-position knob on the ruler (chromeGraphics): a small downward
+// pointer at the bottom edge of the ruler, so the date labels stay legible.
+// The full-height line lives on the overlay layer (drawTimelineOverlay) so
+// it is clipped by the timeline mask.
 import type { Graphics } from "pixi.js";
 import type { PlaylistPresentation } from "../../playlist-core";
 import { COLORS } from "../palette";
+
+export const PLAY_KNOB_HALF_WIDTH = 5;
+export const PLAY_KNOB_HEIGHT = 7;
 
 export function drawPlayPositionRulerMarker(
   graphics: Graphics,
@@ -11,14 +15,12 @@ export function drawPlayPositionRulerMarker(
 ): void {
   const { metrics, playPosition } = presentation;
   if (!playPosition.isVisible) return;
+  const x = playPosition.x + 0.5;
+  const bottom = metrics.rulerHeight;
   graphics
-    .roundRect(playPosition.x - 7, 3, 14, metrics.rulerHeight - 6, 3)
-    .fill({ color: COLORS.playPosition })
-    .stroke({ color: COLORS.text, width: 1, alpha: 0.8 });
-  graphics
-    .moveTo(playPosition.x - 7, metrics.rulerHeight - 1)
-    .lineTo(playPosition.x + 7, metrics.rulerHeight - 1)
-    .lineTo(playPosition.x, metrics.rulerHeight + 7)
-    .lineTo(playPosition.x - 7, metrics.rulerHeight - 1)
+    .moveTo(x - PLAY_KNOB_HALF_WIDTH, bottom - PLAY_KNOB_HEIGHT)
+    .lineTo(x + PLAY_KNOB_HALF_WIDTH, bottom - PLAY_KNOB_HEIGHT)
+    .lineTo(x, bottom)
+    .closePath()
     .fill({ color: COLORS.playPosition });
 }

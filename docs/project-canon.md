@@ -59,6 +59,75 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
   alertas, altas), readout del playhead, editor (doble clic; alta diferida: el item se crea al
   Guardar), panel "Análisis" (escenario base vs actual, estrategia avalancha a la fecha del
   playhead).
+- **Olas 2–4 (2026-11-08)** — "la línea responde", "futuros", "vivir en tu realidad":
+  - *Deudas que terminan donde las liquidas:* tarjetas y préstamos con saldo sin fecha final
+    (`isPayoffPinned`) tienen el borde derecho derivado del pago total (`estimateDebtPayoffs`;
+    una tarjeta se alarga hasta su último MSI). Arrastrar ese borde es **búsqueda de objetivo**
+    (`solveDebtPayment` en `@slicex/core/finance/goalseek.ts`): calcula el pago que te libera en
+    esa fecha; al soltar, el clip cae en el día real de liquidación. Préstamos por ventana
+    conservan su total y lo reparten.
+  - *Monto con la mano:* el borde superior de un clip es un "nivel" genérico del canvas
+    (`PlaylistInteractionOptions.onClipLevelDrag`); el bridge lo mapea al monto (`levelDrag`).
+    Un arrastre = una entrada de undo; la píldora muestra el efecto.
+  - *Valles que se explican y se arreglan:* `explainValley` / `suggestValleyFixes`
+    (`valley.ts`); la tarjeta `ValleyCard` aparece al pasar sobre un valle de la franja
+    (`onOverviewHover`) o con el playhead dentro de uno, ilumina los pagos que lo cavan
+    (`getClipHighlight`) y aplica arreglos de un clic.
+  - *Futuros (ramas):* `Futures` (`apps/web/src/finance/futures.ts`) guarda cada versión como
+    documento + sesión del playlist (`core.saveSession/loadSession`: cada futuro con su undo).
+    "Bifurcar aquí", comparar (fantasma bajo la curva), cambiar con transición animada,
+    mantener **Q** para asomarse al otro futuro, mantener **A** sobre un clip para ver el año sin él.
+  - *La tarjeta como compás:* `CreditCardItem.paymentMode: "statement"` (totalero: paga el
+    estado de cuenta completo, nunca intereses); cortes dibujados como marcas en el clip
+    (`PlaylistClipContent.marks`); al cruzar el corte una compra muestra cuándo se paga.
+  - *Escribir sobre el timeline:* "/" abre `CommandBar` (`command.ts`: "renta 8000 el 1"),
+    vista previa en vivo en la franja, Enter crea; vacío ofrece el año mexicano
+    (`suggestMexicanYear`: aguinaldo, Buen Fin, predial…) aceptable con Tab.
+  - *Rec y persistencia:* el plan (todos los futuros + bitácora) se guarda en `localStorage`
+    (`persistence.ts`). Al volver otro día, `rollForward` lo pone al día suponiendo que todo pasó
+    como se planeó; `RecDialog` corrige ("no pasó", "otro monto", saldo real). Pegar un estado de
+    cuenta sobre una tarjeta (`statement.ts`) actualiza su saldo o agrega compras futuras.
+  - *Tu año en 60 segundos:* primera visita = ejemplo + banner; el onboarding arma el año del
+    usuario con tres preguntas. La persistencia en servidor (`@slicex/db`) sigue dormida.
+- **Lenguaje visual (2026-11-07):** UI calmada y de alto contraste, tema **claro y oscuro**
+  (toggle en el header; primera visita sigue al sistema; elección en `localStorage`
+  `slicex.theme`, `apps/web/src/theme.ts`). Tokens CSS en `globals.css`
+  (`:root[data-theme=…]`) espejados en la paleta del canvas
+  (`packages/canvas/src/playlist-renderer-pixi/palette.ts`, `LIGHT_PALETTE`/`DARK_PALETTE`);
+  se cambian juntos. Fuente Inter (woff2 locales en `apps/web/src/assets/fonts/inter/`, OFL);
+  el shell espera a la fuente antes de crear el renderer (Pixi rasteriza cada `Text` una vez).
+  Regla de dos niveles (mes / días, píldora "Hoy", fines de semana sombreados) vía
+  `PlaylistTimeAxis.bands()` + ticks `centered`/`emphasis`/`dim`; clips como tarjetas tintadas
+  con barra de acento; headers con íconos (ojo / enfoque / candado) en vez de "M S L".
+- **Estándar Soft UI (regla de implementación, 2026-11-08).** Toda UI nueva lo cumple:
+  - **Cartas sobre página gris:** `--page-bg` gris suave; el contenido vive en tarjetas
+    flotantes (`--radius-card`, `--shadow-card`, separadas `--gap-card`). Nada de franjas a
+    todo lo ancho separadas por líneas finas. El header es UNA tarjeta (métricas + herramientas
+    + acciones): un renglón en ventanas anchas (≥1800 px), dos en el resto (métricas arriba;
+    herramientas a la izquierda y acciones a la derecha abajo), tres en teléfono.
+  - **Controles secundarios = rellenos suaves** (`--surface-2`) sin contorno; una sola acción
+    primaria rellena (`--ink`) por superficie. Radios `--radius-s/m/l` = 8/12/18 px.
+  - **Controles donde y cuando actúan:** los íconos de cada track (ojo / enfoque / candado /
+    asa) solo en la fila con hover o selección, o cuando su estado está activo; sin contadores
+    permanentes (solo un chip con selección múltiple); un banner a la vez; la lectura del
+    playhead (fecha · caja · deuda) vive en la celda vacía bajo "Caja", no en una barra.
+  - **Todo alcanzable a cualquier ancho:** lo flotante (menús, popovers, menú contextual, barra
+    "/") pasa por `apps/web/src/ui/fit-in-viewport.ts` (se recorre / se limita / hace scroll
+    dentro de la ventana); las barras se desplazan de lado en vez de encimarse. Auditado en
+    1920 / 1366 / 1024 / 768 / 390 px (ningún control fuera de pantalla, tapado, sin nombre
+    accesible ni menor a 24 px).
+- **Tracks infinitos y permanentes (como FL)**: el shell usa `virtualTracks` por defecto
+  (filas "Track N" vacías siempre debajo). Las filas no se borran solas: el acomodo
+  (`FinancialTrackLayout` en `apps/web/src/finance/mapping.ts`: filas, incluso vacías, y
+  item → fila) se guarda por futuro en `slicex.plan.v1` y `createFinancialPlaylistState(doc, layout)`
+  lo restaura; las filas vacías auto-nombradas al final no se guardan (son idénticas a las
+  infinitas). Menús contextuales en español: "Nuevo … aquí" crea en esa fila y fecha
+  (`bridge.addItem(item, { trackIndex })`); el menú de track no tiene "borrar track".
+- **Agarrador de longitud**: el clip seleccionado muestra una barra vertical en el centro de
+  la pantalla, dentro del clip (`getClipExtendHandle` en `playlist-core/presentation.ts`,
+  compartido por renderer y hit-test). Arrastrarla mueve el final derecho (izquierda acorta,
+  derecha alarga) aunque esté fuera de pantalla; un gesto = una entrada de undo. El host
+  lo veta por clip (`clipExtend`; finanzas: no en eventos de un solo día).
 
 ### Lo que no está conectado todavía como flujo final de producto
 
@@ -209,6 +278,10 @@ La composición está separada en capas de dibujo:
 - timeline con `mask`
 - chrome del ruler y track headers
 - foreground para scrollbars y context menu
+
+Colores: la paleta viva `COLORS` (`palette.ts`) se muta en sitio con `applyPlaylistTheme`;
+`renderer.setTheme("light" | "dark")` la cambia e invalida una sola vez todas las capas
+cacheadas (grid, máscara, nodos de clip, overview lane, píldora de arrastre). Nunca por frame.
 
 Esto confirma que el proyecto actual sí está orientado a un playlist canvas interactivo, no a un layout React estático.
 

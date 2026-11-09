@@ -230,6 +230,9 @@ export type PlaylistDragPreview =
       edge: "left" | "right";
       previewStart: number;
       previewDuration: number;
+      // Screen x where the extend grabber is held (clip-extend gesture);
+      // absent for an edge resize.
+      handleX?: number;
     }
   | {
       kind: "marker";
@@ -251,6 +254,9 @@ export interface PlaylistTooltip {
   kind: "time" | "ratio" | "offset";
   text: string;
   anchor: PlaylistPoint;
+  // Beat a "time" tooltip is about: lets the host add a detail line under
+  // the date (PlaylistRendererCallbacks.getTooltipDetail).
+  time?: number;
 }
 
 export interface PlaylistTrackContextMenu {
@@ -290,6 +296,8 @@ export type PlaylistHover =
   | { kind: "clip"; clipId: string }
   | { kind: "resize-left"; clipId: string }
   | { kind: "resize-right"; clipId: string }
+  // The extend grabber of the selected clip (getClipExtendHandle).
+  | { kind: "clip-extend"; clipId: string }
   | { kind: "automation-point"; clipId: string; pointId: string }
   | { kind: "track"; trackId: string }
   | { kind: "marker"; markerId: string }
@@ -363,6 +371,23 @@ export interface PlaylistTimeAxisTick {
   // label (when non-null). Minor ticks only draw a short line.
   major: boolean;
   label: string | null;
+  // Label centred in the [beat, beat + 1) cell (e.g. one label per day)
+  // instead of starting at the tick line.
+  centered?: boolean;
+  // Highlighted label (e.g. "today"): drawn on a pill in the "now" colour.
+  emphasis?: boolean;
+  // De-emphasised label (e.g. weekend days).
+  dim?: boolean;
+}
+
+// A span of the axis. "group": a labelled span on the ruler's upper tier
+// (e.g. a month) — its presence turns the ruler into two tiers. "shade": a
+// tinted column behind the tracks (e.g. a weekend).
+export interface PlaylistTimeAxisBand {
+  start: number;
+  end: number;
+  kind: "group" | "shade";
+  label?: string | null;
 }
 
 export interface PlaylistTimeAxis {
@@ -373,9 +398,25 @@ export interface PlaylistTimeAxis {
   // Text for time tooltips (drag / resize / slice / ruler hover). Replaces
   // the default bar.beat.tick format.
   formatTime(beat: number): string;
+  // Optional text for an EXCLUSIVE end (a clip's right edge), e.g. "hasta"
+  // + the last whole unit the clip still covers. Absent: formatTime.
+  formatEnd?(beat: number): string;
+  // Optional: the beat that names an exclusive end's last covered unit
+  // (e.g. beat - 1 for whole days). Used as the tooltip's beat for host
+  // details. Absent: the end itself.
+  lastCoveredBeat?(endBeat: number): number;
   // Optional snap targets for the "axis" snap mode, ascending, covering at
   // least [fromBeat, toBeat]. Pure function of its arguments.
   snapTargets?(fromBeat: number, toBeat: number): readonly number[];
+  // Optional bands intersecting [fromBeat, toBeat] at zoom pxPerBeat (any
+  // order; bands may start before fromBeat). Same call contract as
+  // ticks(): at most once per presentation build, pure function of its
+  // arguments.
+  bands?(
+    fromBeat: number,
+    toBeat: number,
+    pxPerBeat: number,
+  ): PlaylistTimeAxisBand[];
 }
 
 // ---------------------------------------------------------------------------
@@ -443,6 +484,8 @@ export type PlaylistClipContent =
       // In [-1, 1]. > 0: bar rising from the body bottom; < 0: bar hanging
       // from under the title bar. |value| = relative height.
       values: readonly number[];
+      // Optional vertical guide lines at these beats (e.g. a billing cut).
+      marks?: readonly number[];
     }
   | {
       kind: "level";
@@ -450,6 +493,8 @@ export type PlaylistClipContent =
       // the body bottom; value / max = relative height.
       series: PlaylistStepSeries;
       max: number;
+      // Optional vertical guide lines at these beats (e.g. a billing cut).
+      marks?: readonly number[];
     };
 
 /** A pill attached to the drag tooltip (e.g. the effect of the gesture). */

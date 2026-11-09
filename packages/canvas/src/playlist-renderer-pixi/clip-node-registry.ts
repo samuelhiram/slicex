@@ -4,6 +4,13 @@ import {
   type PlaylistClipContent,
   type PlaylistClipPresentation,
 } from "../playlist-core";
+import {
+  CANVAS_FONT_FAMILY,
+  COLORS,
+  mixColor,
+  parseHexColor,
+  type PlaylistThemePalette,
+} from "./palette";
 
 // Canon §3.8 — per-clip factory + cache with diffed redraws.
 //
@@ -19,21 +26,37 @@ import {
 // Visual changes (color, label, muted state, selection ring) only redraw
 // the affected node — never the whole scene.
 
-interface PixiPaletteColors {
-  text: number;
-  textMuted: number;
-  selected: number;
-  hover: number;
-  rowLine: number;
-  panel: number;
-  panelStrong: number;
-  automationLine: number;
-}
+// The renderer passes the LIVE theme palette (palette.ts COLORS), so a theme
+// switch + invalidate() repaints every node with the new colours. Callers
+// (tests) may pass just the core keys; the rest falls back to COLORS.
+type PixiPaletteColors = Pick<
+  PlaylistThemePalette,
+  | "text"
+  | "textMuted"
+  | "selected"
+  | "hover"
+  | "rowLine"
+  | "panel"
+  | "panelStrong"
+  | "automationLine"
+> &
+  Partial<PlaylistThemePalette>;
 
-const CLIP_BODY_ALPHA = 1;
-const CLIP_BODY_ALPHA_MUTED = 0.28;
-const CLIP_TITLE_ALPHA = 0.34;
-const CLIP_RESIZE_ALPHA = 0.2;
+// Clip card: tinted surface + accent bar in the clip colour, hairline
+// outline, title + detail in the theme text colours.
+const CLIP_RADIUS = 8;
+const CLIP_MUTED_TINT_SCALE = 0.4;
+const CLIP_ACCENT_WIDTH = 3;
+const CLIP_ACCENT_INSET = 4;
+const CLIP_RESIZE_ALPHA = 0.32;
+const TITLE_FONT_SIZE = 12;
+const TITLE_PAD_X = 11;
+// Right edge kept free of text: the resize grip column + a margin.
+export const CLIP_TEXT_RIGHT_PAD = 6;
+const TITLE_Y = 5;
+// Conservative advance of the 12px / 600 title font (no canvas measuring:
+// deterministic and headless-safe, same approach as the detail line).
+const TITLE_CHAR_PX = 7.2;
 
 interface ClipNode {
   container: Container;
@@ -42,6 +65,10 @@ interface ClipNode {
   // Lazy Text instances. We never destroy them (Pixi v8 TexturePool crash);
   // we just toggle visibility when the label drops below the draw threshold.
   label: Text | null;
+  // Truncation cache for the title (same scheme as the detail line).
+  labelSource: string;
+  labelWidth: number;
+  labelDisplay: string;
   ratioBadge: Text | null;
   offsetBadge: Text | null;
   // Secondary line under the title (host-provided via getClipDetail).
@@ -64,20 +91,13 @@ interface ClipNode {
   content: PlaylistClipContent | null;
   contentStart: number;
   contentPxPerBeat: number;
+  // Host highlight the overlay was last drawn with.
+  highlighted: boolean;
   // Visual hash captures everything that would force a redraw. Position and
   // size are kept separate so we can skip a redraw when only x/y changed.
   hash: string;
   width: number;
   height: number;
-}
-
-function parseHexColor(value: string, fallback: number): number {
-  const normalized = value.trim();
-  if (!normalized.startsWith("#")) return fallback;
-  const hex = normalized.slice(1);
-  if (hex.length !== 6) return fallback;
-  const parsed = Number.parseInt(hex, 16);
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 // F9: deterministic hash → seed → sparkline bar count + heights. Picks N
@@ -160,6 +180,12 @@ export type ClipContentProvider = (
 // the visual hash, the content reference, the clip start or the zoom
 // changes; see drawClipContent for the layout.
 export interface ClipNodeProviders {
+  // Clips have a host "level" dragged from their top edge (see the
+  // interaction controller's onClipLevelDrag): hovered clips show a grip.
+  levelHandles?: boolean;
+  // Host emphasis (e.g. "these payments cause the valley"): a warm ring.
+  // Called once per VISIBLE clip per frame: O(1), a plain boolean.
+  isClipHighlighted?: (clipId: string) => boolean;
   getClipDetail?: ClipDetailProvider;
   getClipSparkline?: ClipSparklineProvider;
   getClipContent?: ClipContentProvider;
@@ -210,15 +236,15 @@ export function clipVisualHash(
 }
 
 // Detail line layout (local coords). Shown only when the body has room.
-const DETAIL_FONT_SIZE = 10;
-const DETAIL_LINE_HEIGHT = 13;
+const DETAIL_FONT_SIZE = 11;
+const DETAIL_LINE_HEIGHT = 15;
 const DETAIL_MIN_BODY_HEIGHT = 14;
 const DETAIL_MIN_WIDTH = 36;
-const DETAIL_PAD_X = 12;
-// Conservative average glyph width for the 10px detail font. Same estimate
-// style as the ratio badge (tagText.length * 6): no canvas measuring, so the
-// truncation is deterministic and works headless.
-const DETAIL_CHAR_PX = 6;
+export const DETAIL_PAD_X = 11;
+// Conservative average glyph width for the 11px / 600 detail font (Inter
+// digits measure ~6.6px). Same estimate style as the ratio badge: no canvas
+// measuring, so the truncation is deterministic and works headless.
+export const DETAIL_CHAR_PX = 6.7;
 
 export function isClipDetailVisible(
   view: PlaylistClipPresentation,
@@ -233,9 +259,24 @@ export function isClipDetailVisible(
 }
 
 // Truncates `text` with an ellipsis so it fits inside a clip of `width` px
-// (left pad DETAIL_PAD_X, right pad 4). Pure; returns the input when it fits.
+// (left pad DETAIL_PAD_X, right pad CLIP_TEXT_RIGHT_PAD). Pure; returns the
+// input when it fits.
 export function truncateClipDetail(text: string, width: number): string {
-  const maxChars = Math.floor((width - DETAIL_PAD_X - 4) / DETAIL_CHAR_PX);
+  return truncateToChars(
+    text,
+    Math.floor((width - DETAIL_PAD_X - CLIP_TEXT_RIGHT_PAD) / DETAIL_CHAR_PX),
+  );
+}
+
+// Title of a clip of `width` px (same pads as the detail line).
+export function truncateClipTitle(text: string, width: number): string {
+  return truncateToChars(
+    text,
+    Math.floor((width - TITLE_PAD_X - CLIP_TEXT_RIGHT_PAD) / TITLE_CHAR_PX),
+  );
+}
+
+function truncateToChars(text: string, maxChars: number): string {
   if (maxChars <= 0) return "";
   if (text.length <= maxChars) return text;
   if (maxChars === 1) return "…";
@@ -244,12 +285,12 @@ export function truncateClipDetail(text: string, width: number): string {
 
 // Content area of the body: below the title bar (and the detail line when
 // it is shown, so the text stays readable), 3px above the bottom edge.
-const CONTENT_BOTTOM_PAD = 3;
-const CONTENT_EVENT_ALPHA_POS = 0.62;
-const CONTENT_EVENT_ALPHA_NEG = 0.5;
-const CONTENT_LEVEL_FILL_ALPHA = 0.26;
-const CONTENT_LEVEL_LINE_ALPHA = 0.7;
-const CONTENT_DARK = 0x0b0b0b;
+const CONTENT_BOTTOM_PAD = 5;
+const CONTENT_EVENT_ALPHA_POS = 0.85;
+const CONTENT_EVENT_ALPHA_NEG = 0.55;
+const CONTENT_LEVEL_FILL_ALPHA = 0.2;
+const CONTENT_LEVEL_LINE_ALPHA = 0.95;
+const MARK_DASH = 3;
 
 // Draws PlaylistClipContent in the body (local coords). Beats are absolute:
 // x = (beat - clip.start) * pxPerBeat. Only what falls inside the clip window
@@ -277,6 +318,28 @@ export function drawClipContent(
   const start = clip.start;
   const end = start + clip.duration;
   const alphaScale = view.effectivelyMuted ? 0.45 : 1;
+  // Content is drawn in the clip's own colour (the card is a tint of it).
+  const ink = parseHexColor(clip.color, palette.text);
+
+  // Guide marks (e.g. billing cuts): dashed vertical lines across the
+  // content area, under the bars. Binary search to the first visible one.
+  const marks = content.marks;
+  if (marks && marks.length > 0) {
+    let drew = false;
+    for (let i = sortedUpperBound(marks, start - 1e-9); i < marks.length; i += 1) {
+      const beat = marks[i]!;
+      if (beat > end + 1e-9) break;
+      const x = Math.round((beat - start) * pxPerBeat) + 0.5;
+      if (x < 2 || x > width - 2) continue;
+      for (let y = top; y < bottom; y += MARK_DASH * 2) {
+        body.moveTo(x, y).lineTo(x, Math.min(bottom, y + MARK_DASH));
+      }
+      drew = true;
+    }
+    if (drew) {
+      body.stroke({ color: palette.textMuted, width: 1, alpha: 0.55 * alphaScale });
+    }
+  }
 
   if (content.kind === "events") {
     const beats = content.beats;
@@ -297,12 +360,12 @@ export function drawClipContent(
       const x = Math.min(maxX, Math.max(1, Math.round(center - barWidth / 2)));
       if (raw > 0) {
         body.rect(x, bottom - h, barWidth, h).fill({
-          color: palette.text,
+          color: ink,
           alpha: CONTENT_EVENT_ALPHA_POS * alphaScale,
         });
       } else {
         body.rect(x, top, barWidth, h).fill({
-          color: CONTENT_DARK,
+          color: ink,
           alpha: CONTENT_EVENT_ALPHA_NEG * alphaScale,
         });
       }
@@ -339,7 +402,7 @@ export function drawClipContent(
     .lineTo(width, bottom)
     .closePath()
     .fill({
-      color: palette.text,
+      color: ink,
       alpha: CONTENT_LEVEL_FILL_ALPHA * alphaScale,
     });
   // Top edge as a crisp line (same walk, stroke only).
@@ -354,8 +417,8 @@ export function drawClipContent(
     y = nextY;
   }
   body.lineTo(width, y).stroke({
-    color: palette.text,
-    width: 1.25,
+    color: ink,
+    width: 1.5,
     alpha: CONTENT_LEVEL_LINE_ALPHA * alphaScale,
   });
 }
@@ -373,12 +436,27 @@ function drawClipBodyLocal(
   const height = view.rect.height;
   const color = parseHexColor(view.clip.color, 0x777777);
   const muted = view.effectivelyMuted;
-  const bodyAlpha = muted ? CLIP_BODY_ALPHA_MUTED : CLIP_BODY_ALPHA;
-  body.roundRect(0, 0, width, height, 4).fill({ color, alpha: bodyAlpha });
-  body.rect(0, 0, width, view.titleRect.height).fill({
-    color: palette.panel,
-    alpha: muted ? CLIP_TITLE_ALPHA * 0.6 : CLIP_TITLE_ALPHA,
-  });
+  const surface = palette.background ?? COLORS.background;
+  const tint =
+    (palette.clipTint ?? COLORS.clipTint) *
+    (muted ? CLIP_MUTED_TINT_SCALE : 1);
+  // Card: the clip colour tinted onto the theme surface (opaque, so the
+  // grid never shows through), plus an inset accent bar in the full colour.
+  body
+    .roundRect(0, 0, width, height, clipRadius(width, height))
+    .fill({ color: mixColor(surface, color, tint) });
+  const accentHeight = height - CLIP_ACCENT_INSET * 2;
+  if (width >= 10 && accentHeight >= 6) {
+    body
+      .roundRect(
+        CLIP_ACCENT_INSET - 1,
+        CLIP_ACCENT_INSET,
+        CLIP_ACCENT_WIDTH,
+        accentHeight,
+        CLIP_ACCENT_WIDTH / 2,
+      )
+      .fill({ color, alpha: muted ? 0.4 : 1 });
+  }
   if (muted) {
     const step = 8;
     for (let x = -height; x <= width + height; x += step) {
@@ -390,7 +468,7 @@ function drawClipBodyLocal(
       body
         .moveTo(clampedX1, clampedX1 - x1)
         .lineTo(clampedX2, clampedX2 - x1)
-        .stroke({ color: palette.text, alpha: 0.18, width: 1 });
+        .stroke({ color: palette.textMuted, alpha: 0.22, width: 1 });
     }
   }
   // Host content (getClipContent) replaces the sparkline for this clip.
@@ -422,55 +500,85 @@ function drawClipBodyLocal(
           const yTop = titleH + 3 + (drawableHeight - h);
           body
             .rect(x, yTop, barWidth, h)
-            .fill({ color: palette.text, alpha: 0.32 });
+            .fill({ color, alpha: 0.6 });
         }
       }
     }
   }
 }
 
+function clipRadius(width: number, height: number): number {
+  return Math.max(0, Math.min(CLIP_RADIUS, width / 2, height / 2));
+}
+
 function drawClipOverlayLocal(
   overlay: Graphics,
   view: PlaylistClipPresentation,
   palette: PixiPaletteColors,
+  levelHandles = false,
+  highlighted = false,
 ): void {
   overlay.clear();
   const width = view.rect.width;
   const height = view.rect.height;
-  const resizeHandleWidth = view.resizeLeftRect.width;
-  const handleHeight =
-    view.resizeLeftRect.height ?? view.titleRect.height ?? height;
+  const radius = clipRadius(width, height);
+  const color = parseHexColor(view.clip.color, palette.rowLine);
 
-  // F10: outer-glow halo around selected clips. Drawn first so the
-  // crisper inner stroke sits on top. Reuses palette.selected so the
-  // halo stays in the SliceX accent.
-  if (view.selected) {
+  // Selection: a soft halo + a crisp accent ring. Host highlight: a warm
+  // ring. Otherwise a hairline in the clip colour (stronger on hover).
+  if (highlighted && !view.selected) {
+    const warm = palette.toneWarning ?? COLORS.toneWarning;
     overlay
-      .roundRect(-2, -2, width + 4, height + 4, 5)
-      .stroke({ color: palette.selected, width: 1, alpha: 0.35 });
+      .roundRect(-3, -3, width + 6, height + 6, radius + 3)
+      .stroke({ color: warm, width: 4, alpha: 0.25 });
+    overlay
+      .roundRect(0, 0, width, height, radius)
+      .stroke({ color: warm, width: 2, alpha: 1 });
+  } else if (view.selected) {
+    overlay
+      .roundRect(-2, -2, width + 4, height + 4, radius + 2)
+      .stroke({ color: palette.selected, width: 3, alpha: 0.22 });
+    overlay
+      .roundRect(0, 0, width, height, radius)
+      .stroke({ color: palette.selected, width: 1.75, alpha: 1 });
+  } else {
+    overlay.roundRect(0.5, 0.5, width - 1, height - 1, radius).stroke({
+      color,
+      width: 1,
+      alpha: view.hovered
+        ? 0.9
+        : (palette.clipBorderAlpha ?? COLORS.clipBorderAlpha),
+    });
   }
-  overlay.roundRect(0, 0, width, height, 4).stroke({
-    color: view.selected
-      ? palette.selected
-      : view.hovered
-        ? palette.hover
-        : palette.rowLine,
-    width: view.selected ? 2.5 : 1,
-    alpha: view.hovered || view.selected ? 1 : 0.8,
-  });
 
-  overlay.rect(0, 0, resizeHandleWidth, handleHeight).fill({
-    color: palette.text,
-    alpha: CLIP_RESIZE_ALPHA,
-  });
-  overlay
-    .rect(width - resizeHandleWidth, 0, resizeHandleWidth, handleHeight)
-    .fill({ color: palette.text, alpha: CLIP_RESIZE_ALPHA });
+  // Resize affordance: two short grips, only while it is actionable. They
+  // sit below the title + detail rows when the card is tall enough, so they
+  // never cross the text.
+  const textBottom = view.titleRect.height + DETAIL_LINE_HEIGHT + 2;
+  const gripTop = height - textBottom >= 12 ? textBottom : 6;
+  const gripHeight = Math.min(16, height - gripTop - 6);
+  if ((view.hovered || view.selected) && width >= 24 && gripHeight >= 6) {
+    const gripY = gripTop + (height - gripTop - 6 - gripHeight) / 2;
+    const inset = Math.min(4, view.resizeLeftRect.width / 2);
+    // Selected: in the selection accent, like the rest of its handles (a
+    // grey grip next to the blue ring read as a leftover).
+    const grip = view.selected
+      ? { color: palette.selected, alpha: 0.9 }
+      : { color: palette.text, alpha: CLIP_RESIZE_ALPHA };
+    overlay.roundRect(inset, gripY, 2, gripHeight, 1).fill(grip);
+    overlay.roundRect(width - inset - 2, gripY, 2, gripHeight, 1).fill(grip);
+  }
+
+  // Level grip: a short bar centred on the top edge of a hovered clip.
+  if (levelHandles && view.hovered && !view.isAutomation && width >= 40) {
+    overlay
+      .roundRect(width / 2 - 9, 1.5, 18, 3, 1.5)
+      .fill({ color: palette.text, alpha: 0.4 });
+  }
 
   // F6: subtle dot in the top-right corner when a clip belongs to a group
   // and the user is hovering. Renders only on hover so a fully-grouped
-  // playlist doesn't look noisy. Outside the resize handle band so it
-  // doesn't interfere with the resize affordance.
+  // playlist doesn't look noisy.
   if (view.groupId && view.hovered) {
     const dotX = Math.max(8, width - 10);
     const dotY = 8;
@@ -544,7 +652,16 @@ function applyText(
 }
 
 export interface ClipNodeRegistry {
-  syncFrame(parent: Container, views: PlaylistClipPresentation[]): void;
+  // `stickyLeft`: screen x of the visible timeline's left edge; titles of
+  // clips starting before it stick to it (default: no sticking).
+  syncFrame(parent: Container, views: PlaylistClipPresentation[], stickyLeft?: number): void;
+  // Re-rasterises every node's labels with the fonts available now (a web
+  // font that finished loading after the nodes were created). Once, never
+  // per frame.
+  refreshText(): void;
+  // Forces every cached node to redraw on its next sync (e.g. after a
+  // theme switch changed the live palette). O(nodes), never per frame.
+  invalidate(): void;
   destroy(): void;
 }
 
@@ -556,6 +673,8 @@ export function createClipNodeRegistry(
   const getClipDetail = providers.getClipDetail;
   const getClipSparkline = providers.getClipSparkline;
   const getClipContent = providers.getClipContent;
+  const levelHandles = providers.levelHandles === true;
+  const isClipHighlighted = providers.isClipHighlighted;
 
   // Secondary line under the title bar. Created lazily ONCE per node (same
   // factory pattern as the title label), never per frame.
@@ -564,6 +683,7 @@ export function createClipNodeRegistry(
     view: PlaylistClipPresentation,
     detail: string | null,
     visible: boolean,
+    shift: number,
   ): void {
     if (!visible || detail === null) {
       hideText(node.detail);
@@ -584,7 +704,7 @@ export function createClipNodeRegistry(
         text: node.detailDisplay,
         style: {
           fill: palette.textMuted,
-          fontFamily: "Segoe UI, Arial, sans-serif",
+          fontFamily: CANVAS_FONT_FAMILY,
           fontSize: DETAIL_FONT_SIZE,
           fontWeight: "600" as any,
         },
@@ -597,37 +717,69 @@ export function createClipNodeRegistry(
       DETAIL_FONT_SIZE,
       "600",
     );
-    text.x = DETAIL_PAD_X;
-    text.y = view.titleRect.height + 1;
+    text.x = DETAIL_PAD_X + shift;
+    text.y = view.titleRect.height + 2;
+  }
+
+  // Sticky text: when the clip starts left of the visible timeline, its
+  // title + detail slide right to stay at the left edge (you always know
+  // which item it is), but never past the clip's own right end. Pure
+  // arithmetic on cached display strings: a transform per frame, no redraw.
+  function stickyShift(node: ClipNode, view: PlaylistClipPresentation, left: number): number {
+    const hidden = left - view.rect.x;
+    if (!(hidden > 0)) return 0;
+    const textWidth = Math.max(
+      TITLE_PAD_X + node.labelDisplay.length * TITLE_CHAR_PX,
+      DETAIL_PAD_X + node.detailDisplay.length * DETAIL_CHAR_PX,
+    );
+    const room = view.rect.width - textWidth - CLIP_TEXT_RIGHT_PAD;
+    return Math.round(Math.max(0, Math.min(hidden, room)));
   }
 
   function applyLabels(
     node: ClipNode,
     view: PlaylistClipPresentation,
     detailVisible: boolean,
-  ): void {
+    stickyLeft: number,
+  ): number {
     const width = view.rect.width;
     const height = view.rect.height;
     if (width < 44 || height < 24) {
       hideText(node.label);
       hideText(node.ratioBadge);
       hideText(node.offsetBadge);
-      return;
+      return 0;
     }
-    const label = ensureText(node, "label", () =>
-      new Text({
-        text: view.clip.label,
-        style: {
-          fill: palette.text,
-          fontFamily: "Segoe UI, Arial, sans-serif",
-          fontSize: 12,
-          fontWeight: "700" as any,
-        },
-      }),
-    );
-    applyText(label, view.clip.label, palette.text, 12, "700");
-    label.x = 12;
-    label.y = 4;
+    if (node.labelSource !== view.clip.label || node.labelWidth !== width) {
+      node.labelSource = view.clip.label;
+      node.labelWidth = width;
+      node.labelDisplay = truncateClipTitle(view.clip.label, width);
+    }
+    const shift = stickyShift(node, view, stickyLeft);
+    if (node.labelDisplay.length === 0) {
+      hideText(node.label);
+    } else {
+      const label = ensureText(node, "label", () =>
+        new Text({
+          text: node.labelDisplay,
+          style: {
+            fill: palette.text,
+            fontFamily: CANVAS_FONT_FAMILY,
+            fontSize: TITLE_FONT_SIZE,
+            fontWeight: "600" as any,
+          },
+        }),
+      );
+      applyText(
+        label,
+        node.labelDisplay,
+        view.effectivelyMuted ? palette.textMuted : palette.text,
+        TITLE_FONT_SIZE,
+        "600",
+      );
+      label.x = TITLE_PAD_X + shift;
+      label.y = TITLE_Y;
+    }
 
     const ratio = view.clip.stretchRatio ?? 1;
     if (Math.abs(ratio - 1) > 0.001 && width >= 60) {
@@ -637,7 +789,7 @@ export function createClipNodeRegistry(
           text: tagText,
           style: {
             fill: palette.text,
-            fontFamily: "Segoe UI, Arial, sans-serif",
+            fontFamily: CANVAS_FONT_FAMILY,
             fontSize: 10,
             fontWeight: "700" as any,
           },
@@ -658,7 +810,7 @@ export function createClipNodeRegistry(
           text: offsetText,
           style: {
             fill: palette.textMuted,
-            fontFamily: "Segoe UI, Arial, sans-serif",
+            fontFamily: CANVAS_FONT_FAMILY,
             fontSize: 10,
             fontWeight: "600" as any,
           },
@@ -678,6 +830,7 @@ export function createClipNodeRegistry(
     } else {
       hideText(node.offsetBadge);
     }
+    return shift;
   }
 
   function createNode(): ClipNode {
@@ -691,6 +844,9 @@ export function createClipNodeRegistry(
       body,
       overlay,
       label: null,
+      labelSource: "",
+      labelWidth: -1,
+      labelDisplay: "",
       ratioBadge: null,
       offsetBadge: null,
       detail: null,
@@ -701,6 +857,7 @@ export function createClipNodeRegistry(
       content: null,
       contentStart: 0,
       contentPxPerBeat: 0,
+      highlighted: false,
       hash: "",
       width: 0,
       height: 0,
@@ -710,6 +867,7 @@ export function createClipNodeRegistry(
   function syncFrame(
     parent: Container,
     views: PlaylistClipPresentation[],
+    stickyLeft: number = Number.NEGATIVE_INFINITY,
   ): void {
     const seen = new Set<string>();
     for (const view of views) {
@@ -737,10 +895,12 @@ export function createClipNodeRegistry(
           ? getClipSparkline(view.clip.id)
           : null;
       const hash = clipVisualHash(view, detail);
+      const highlighted = isClipHighlighted ? isClipHighlighted(view.clip.id) : false;
       const visualChanged =
         hash !== node.hash ||
         node.width !== view.rect.width ||
-        node.height !== view.rect.height;
+        node.height !== view.rect.height ||
+        highlighted !== node.highlighted;
       // Content is laid out at absolute beats: a move or a zoom re-lays it
       // out even with the same reference (number compares, no allocation).
       const contentPxPerBeat =
@@ -769,13 +929,20 @@ export function createClipNodeRegistry(
         node.contentPxPerBeat = contentPxPerBeat;
       }
       if (visualChanged) {
-        drawClipOverlayLocal(node.overlay, view, palette);
+        drawClipOverlayLocal(node.overlay, view, palette, levelHandles, highlighted);
+        node.highlighted = highlighted;
         node.hash = hash;
         node.width = view.rect.width;
         node.height = view.rect.height;
       }
-      applyLabels(node, view, detailVisible);
-      applyDetail(node, view, detail, detailVisible);
+      // The detail's display string feeds the sticky width: refresh it first.
+      if (detail !== null && (node.detailSource !== detail || node.detailWidth !== view.rect.width)) {
+        node.detailSource = detail;
+        node.detailWidth = view.rect.width;
+        node.detailDisplay = truncateClipDetail(detail, view.rect.width);
+      }
+      const shift = applyLabels(node, view, detailVisible, stickyLeft);
+      applyDetail(node, view, detail, detailVisible, shift);
     }
     // Hide nodes whose clips are off-screen this frame. We keep them
     // parented so future frames can show them again in O(1) — only
@@ -810,5 +977,20 @@ export function createClipNodeRegistry(
     cache.clear();
   }
 
-  return { syncFrame, destroy };
+  function invalidate(): void {
+    for (const node of cache.values()) node.hash = "";
+  }
+
+  function refreshText(): void {
+    for (const node of cache.values()) {
+      // style.update() bumps the style key, so Pixi rasterises a new
+      // texture (its texture cache is keyed by text + style key).
+      node.label?.style.update();
+      node.ratioBadge?.style.update();
+      node.offsetBadge?.style.update();
+      node.detail?.style.update();
+    }
+  }
+
+  return { syncFrame, refreshText, invalidate, destroy };
 }

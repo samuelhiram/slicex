@@ -1,7 +1,8 @@
 // Debt payoff estimates: when does each debt account reach 0 for good?
 //
 // Each account is simulated on its OWN events only (cash is irrelevant: the
-// planned payments are fixed amounts capped at the debt), with exactly the
+// planned payments are fixed amounts — or a "statement" card's statement —
+// capped at the debt), with exactly the
 // projection's arithmetic (same-day order, average-daily-balance accrual at
 // the same moments, cents after every step), so inside the projection range
 // the simulated debt equals the projection's `accountDebtAfter`. Schedules
@@ -32,14 +33,22 @@ const DEFAULT_MAX_MONTHS = 360;
 const INTEREST = 0;
 const CHARGE = 1;
 const PAYMENT = 2;
+/** "statement" card: the statement closes at the cut. */
+const CUT = 3;
+
+/**
+ * A statement closes once its cut day is over: after every event of that
+ * day (the projection closes it lazily before the next event, same effect).
+ */
+const STATEMENT_CUT_PRIORITY = Math.max(...Object.values(EVENT_TYPE_PRIORITY)) + 1;
 
 /** One schedule of the account's own events. */
 interface Source {
   cursor: DayCursor;
-  /** Same-day order (EVENT_TYPE_PRIORITY). */
+  /** Same-day order (EVENT_TYPE_PRIORITY; STATEMENT_CUT_PRIORITY for cuts). */
   priority: number;
-  role: typeof INTEREST | typeof CHARGE | typeof PAYMENT;
-  /** Planned positive magnitude (charges, card / loan payments). */
+  role: typeof INTEREST | typeof CHARGE | typeof PAYMENT | typeof CUT;
+  /** Planned positive magnitude (charges, fixed card / loan payments). */
   amount: number;
   /** CHARGE: the schedule keeps charging past the cap (a subscription), see `simulate`. */
   steady: boolean;
@@ -64,6 +73,11 @@ interface AccountInput {
    * steady charges is the current cycle, paid by the next payment.
    */
   paysPastCap: boolean;
+  /**
+   * "statement" card: the CUT source closes the statement and every
+   * (non-MSI) payment pays the pending statement instead of its amount.
+   */
+  statement: boolean;
 }
 
 interface Totals {
@@ -96,14 +110,25 @@ function isSteady(rec: FinancialRecurrence, capDate: ISODate): boolean {
  * payoff, interest accrued up to the end of the cap date is counted in
  * totalInterest and finalDebt. Either way
  * totalPaid = opening + charges + totalInterest − finalDebt.
+ *
+ * "statement" cards (no interest, rate 0) follow the same rule, where a
+ * payment "clears" when what it leaves is only steady charges made after the
+ * last cut: those belong to the next statement, which pays them in full.
+ * Without steady charges that is exactly "the payment leaves the debt at 0".
+ * Steady charges after the last cut are then still owed at the payoff (the
+ * current cycle), so totalPaid = opening + charges up to that cut.
  */
 function simulate(input: AccountInput, startDay: number, capDay: number): Totals {
-  const { rate, sources } = input;
+  const { rate, sources, statement } = input;
   let debt = input.opening;
   let pending = 0;
   let accruedTo = startDay;
   let interest = 0;
   let paid = 0;
+  // "statement" cards: pending statement (the opening debt until the first cut)
+  // and the steady charges made since the last cut (the current cycle).
+  let statementDue = debt;
+  let steadySinceCut = 0;
 
   let chargesLeft = 0;
   for (const s of sources) if (s.role === CHARGE && s.cursor.day <= capDay) chargesLeft++;
@@ -153,17 +178,32 @@ function simulate(input: AccountInput, startDay: number, capDay: number): Totals
         accrue(nextDay);
         debt = roundMoney(debt + next.amount);
         if (!next.steady) candidate = null;
+        else if (statement) steadySinceCut = roundMoney(steadySinceCut + next.amount);
         break;
       }
+      case CUT:
+        statementDue = debt;
+        steadySinceCut = 0;
+        break;
       default: {
-        const planned = next.plan ? installmentAmount(next.plan, next.firstNumber + next.taken) : next.amount;
+        let planned: number;
+        if (next.plan) {
+          planned = installmentAmount(next.plan, next.firstNumber + next.taken);
+        } else if (statement) {
+          planned = statementDue;
+          statementDue = 0;
+        } else {
+          planned = next.amount;
+        }
         const applied = Math.min(planned, Math.max(0, debt));
         if (applied !== 0) {
           accrue(nextDay);
           debt = roundMoney(debt - applied);
           paid = roundMoney(paid + applied);
         }
-        if (debt > 0) {
+        // Debt the payment leaves behind, the current cycle's steady charges aside ("statement").
+        const carried = statement ? roundMoney(debt - steadySinceCut) : debt;
+        if (carried > 0) {
           candidate = null;
         } else if (candidate === null) {
           candidate = nextDay;
@@ -206,12 +246,19 @@ function cardInput(
   startDay: number,
   capDay: number,
 ): AccountInput {
-  const rate = finiteRate(card.annualRate);
+  const statement = card.paymentMode === "statement";
+  // A "statement" card is always paid in full: it never pays interest.
+  const rate = statement ? 0 : finiteRate(card.annualRate);
   const sources: Source[] = [];
   // Interest is charged at every cut over the whole window (whatever the card's recurrence).
   if (rate > 0) {
     const cursor = new DayCursor().startMonthly(card.cutDay, { lo: startDay, hi: capDay });
     sources.push(source(cursor, EVENT_TYPE_PRIORITY["credit-card-interest"], INTEREST, 0));
+  }
+  // A statement closes at every cut over the whole window, like the projection.
+  if (statement) {
+    const cursor = new DayCursor().startMonthly(card.cutDay, { lo: startDay, hi: capDay });
+    sources.push(source(cursor, STATEMENT_CUT_PRIORITY, CUT, 0));
   }
   if (purchases) {
     for (const purchase of purchases) {
@@ -223,9 +270,10 @@ function cardInput(
       sources.push(source(cursor, EVENT_TYPE_PRIORITY["credit-card-purchase"], CHARGE, amount, steady));
     }
   }
-  const planned = positiveMoney(card.paymentAmount ?? card.minimumPayment);
+  // "statement": each payment pays the pending statement (its amount is computed by `simulate`).
+  const planned = statement ? 0 : positiveMoney(card.paymentAmount ?? card.minimumPayment);
   const rec = card.recurrence;
-  const payWindow = planned > 0 ? intersectWindow(rec.startDate, rec.endDate, range) : null;
+  const payWindow = statement || planned > 0 ? intersectWindow(rec.startDate, rec.endDate, range) : null;
   let paysPastCap = false;
   if (payWindow) {
     const cursor = new DayCursor().startMonthly(card.dueDay, payWindow);
@@ -234,7 +282,7 @@ function cardInput(
       paysPastCap = rec.endDate === undefined || rec.endDate > range.to;
     }
   }
-  return { opening: positiveMoney(card.balance), rate, sources, paysPastCap };
+  return { opening: positiveMoney(card.balance), rate, sources, paysPastCap, statement };
 }
 
 function loanInput(loan: LoanItem, range: Range): AccountInput {
@@ -245,7 +293,7 @@ function loanInput(loan: LoanItem, range: Range): AccountInput {
     sources.push(source(cursor, EVENT_TYPE_PRIORITY["loan-payment"], PAYMENT, amount));
   }
   // The MVP accrues no loan interest (annualRate is informative).
-  return { opening: loanOpeningDebt(loan, range), rate: 0, sources, paysPastCap: true };
+  return { opening: loanOpeningDebt(loan, range), rate: 0, sources, paysPastCap: true, statement: false };
 }
 
 function installmentInput(plan: InstallmentPlanItem, card: CreditCardItem | undefined, range: Range): AccountInput {
@@ -278,7 +326,7 @@ function installmentInput(plan: InstallmentPlanItem, card: CreditCardItem | unde
       sources.push(s);
     }
   }
-  return { opening: installmentOpeningDebt(plan, range.from), rate: 0, sources, paysPastCap: true };
+  return { opening: installmentOpeningDebt(plan, range.from), rate: 0, sources, paysPastCap: true, statement: false };
 }
 
 /**
@@ -286,14 +334,21 @@ function installmentInput(plan: InstallmentPlanItem, card: CreditCardItem | unde
  * loans, MSI plans; keyed by item id, document order; the first item wins
  * when ids repeat). Each account is simulated from `doc.startDate` to
  * `addMonths(doc.startDate, maxMonths)` (default 360) on its own events only:
- * card cuts (interest), purchases on the card, MSI debt openings, and the
- * planned payments capped at the debt. Same rules as the projection, so
- * inside the projection range the simulated debt matches `accountDebtAfter`.
- * MSI plans are their own accounts (they do not add to the card's debt).
+ * card cuts (interest, or the statement close of a "statement" card),
+ * purchases on the card, MSI debt openings, and the planned payments (a
+ * "statement" card: the pending statement) capped at the debt. Same rules as
+ * the projection, so inside the projection range the simulated debt matches
+ * `accountDebtAfter`. MSI plans are their own accounts (they do not add to
+ * the card's debt).
  *
  * payoffDate is the payment that clears the account for good: after it no
  * purchase or debt opening is left, or the only ones left are recurring
  * charges with no end (subscriptions) that every following payment clears.
+ * A "statement" card's payment always pays its whole statement, so its
+ * payoff is the due date that pays the statement holding the last finite
+ * charge (a purchase after the cut moves it a month later); subscription
+ * charges made after that statement's cut are the next cycle, still owed on
+ * the payoff date and not counted in totalPaid.
  * `doc.startDate` when nothing is owed from the start; null when the debt is
  * still there at the cap (e.g. a card whose payment never covers its
  * interest: its debt then compounds every month up to the cap).

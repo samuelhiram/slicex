@@ -23,8 +23,7 @@ export function drawMarkers(
       .lineTo(view.x - 6, baseY)
       .lineTo(view.x + 6, baseY)
       .lineTo(view.x, metrics.rulerHeight - 2)
-      .fill({ color, alpha: 0.92 })
-      .stroke({ color: COLORS.text, width: 1, alpha: 0.7 });
+      .fill({ color, alpha: 0.95 });
     // Vertical line down the timeline (subtle).
     graphics
       .moveTo(view.x + 0.5, metrics.rulerHeight)
@@ -34,7 +33,7 @@ export function drawMarkers(
     if (label) {
       addText(textLayer, label, view.x + 8, baseY + 1, {
         color: COLORS.text,
-        size: 10,
+        size: 11,
         weight: "600",
       });
     }

@@ -48,6 +48,38 @@ export type ActiveGesture =
       pointerId: number;
     }
   | {
+      // Dragging an edge of the horizontal scrollbar's thumb: zoom so the
+      // visible range keeps the opposite edge and follows the pointer.
+      kind: "scrollbar-zoom";
+      pointerId: number;
+      edge: "start" | "end";
+      // Beat of the edge that stays put.
+      fixedBeat: number;
+      // Track x of beat 0 and beats per track px, frozen at gesture start.
+      trackX: number;
+      beatsPerPx: number;
+    }
+  | {
+      kind: "clip-level";
+      pointerId: number;
+      clipId: string;
+      startY: number;
+    }
+  | {
+      // The selected clip's extend grabber: the right end moves by the
+      // time the pointer travels (relative: the end may be off-screen).
+      kind: "clip-extend";
+      pointerId: number;
+      clipId: string;
+      // Pointer time at the last move (beats), the clip's end at press and
+      // the end travel so far (beats, gain applied move by move).
+      startPointerTime: number;
+      originalEnd: number;
+      travelled: number;
+      // Grabber centre minus pointer x at press, so the pill never jumps.
+      grabOffsetX: number;
+    }
+  | {
       kind: "scrollbar-horizontal";
       pointerId: number;
       startPoint: PlaylistPoint;

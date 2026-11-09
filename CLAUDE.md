@@ -12,9 +12,11 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 
 - Foco actual: **MVP del motor financiero sobre el playlist** (branch `feat/financial-engine-mvp`). El playlist muestra objetos financieros reales (ingresos, gastos, préstamos, tarjetas, compras, MSI) generados por `@slicex/core/finance` y sincronizados por `FinancialBridge` ([apps/web/src/finance/](apps/web/src/finance/)); ver [docs/project-canon.md](docs/project-canon.md) §2. En memoria, sin persistencia todavía.
 - Las 8 herramientas de la toolbar (`select`, `draw`, `paint`, `delete`, `mute`, `slip`, `slice`, `zoom`) tienen implementación viva en [playlist-interaction/tools/](packages/canvas/src/playlist-interaction/tools/). Ninguna es stub.
+- Olas 2–4 del producto implementadas (búsqueda de objetivo en deudas, monto con la mano, valles que se arreglan, futuros/ramas, tarjeta totalera, comando "/", año mexicano, Rec + persistencia local, onboarding); ver [docs/project-canon.md](docs/project-canon.md) §2. El plan se guarda en `localStorage` (`slicex.plan.v1`); la persistencia en servidor sigue dormida.
+- UI con tema **claro y oscuro** (tokens en `globals.css` ↔ paleta del canvas en `palette.ts`, se cambian juntos; ver [docs/project-canon.md](docs/project-canon.md) §2 "Lenguaje visual"). Lenguaje calmado y de alto contraste: nada de estética DAW.
 - La UI principal monta el playlist con el documento financiero demo ([PlaylistShell.tsx](apps/web/src/components/PlaylistShell.tsx) → `createDemoFinancialDocument(hoy)` → `createFinancialPlaylistState`) más [PlaylistInspector.tsx](apps/web/src/components/PlaylistInspector.tsx) y los paneles de [apps/web/src/finance/components/](apps/web/src/finance/components/).
 - Scaffolding de persistencia (`@slicex/contracts`, `@slicex/db`, ruta `/api/timelines/[timelineId]`, `editorStore.ts`, y el legado `calculateBalanceAt`/`TimelineDocument` de `@slicex/core`) sigue **dormido pero vivo**. **No proponer borrarlo sin confirmación explícita.**
-- Suite actual: **745 tests unitarios en 55 archivos**, todos verdes (2026-11-07). Playwright tiene **1 spec** ([reload-stress.pw.ts](apps/web/tests/reload-stress.pw.ts)), no cero.
+- Suite actual: **1013 tests unitarios en 71 archivos**, todos verdes (2026-11-08). Playwright tiene **1 spec** ([reload-stress.pw.ts](apps/web/tests/reload-stress.pw.ts)), no cero.
 - `master` es la **única branch** del repo (local y remota) desde 2026-08-13.
 
 ## Stack
@@ -29,7 +31,7 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 | Persistencia | Prisma 7 + `@prisma/adapter-pg` sobre Cloudflare Hyperdrive (Postgres) |
 | Validación | Zod en `@slicex/contracts` |
 | Observabilidad | `@sentry/cloudflare` (Worker) + `@sentry/react` (browser) + JSON `console` → Workers Logpush |
-| Tests | Vitest (745 unit) + Playwright (1 spec: `apps/web/tests/*.pw.ts`) |
+| Tests | Vitest (1013 unit) + Playwright (1 spec: `apps/web/tests/*.pw.ts`) |
 | Deploy | `wrangler deploy` o Workers Builds (push a `master` → build+deploy) |
 
 ## Mapa rápido

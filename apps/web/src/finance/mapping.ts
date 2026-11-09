@@ -40,10 +40,20 @@ export const FINANCE_PLAYLIST_METRICS: PlaylistMetrics = {
   ...DEFAULT_PLAYLIST_METRICS,
   beatsPerBar: 7,
   minPxPerBeat: 1.5,
+  // Two-tier calendar ruler (month over days) and a header column wide
+  // enough for the item name + its yearly impact.
+  rulerHeight: 52,
+  trackHeaderWidth: 216,
+  // The horizontal scrollbar is the timeline navigator (miniature of the
+  // year + zoomable window): tall enough to grab comfortably.
+  scrollbarSize: 20,
 };
 
-/** Visual width (days) of a one-time event clip. */
-export const POINT_CLIP_DAYS = 6;
+/**
+ * Visual width (days) of a one-time event clip: a week, so at the default
+ * zoom the card fits its name and the whole amount.
+ */
+export const POINT_CLIP_DAYS = 7;
 /** Default zoom: ~10 px per day. */
 export const FINANCE_DEFAULT_PX_PER_DAY = 10;
 
@@ -72,6 +82,22 @@ export function isSliceable(item: FinancialItem): boolean {
   if (item.kind === "credit-card" || item.kind === "installment-plan") return false;
   if (item.kind === "loan" && item.balance !== undefined) return false;
   return true;
+}
+
+/**
+ * Debts whose clip ENDS WHERE THEY ARE PAID OFF: revolving cards and loans
+ * with an explicit balance and no end date. Their right edge is derived
+ * (the bridge pins it to the payoff) and dragging it is a goal-seek: "free
+ * on that date" → the payment that gets you there. Their recurrence end is
+ * therefore never read from the clip.
+ */
+export function isPayoffPinned(item: FinancialItem): boolean {
+  if (item.kind === "credit-card") return item.recurrence.endDate === undefined;
+  return (
+    item.kind === "loan" &&
+    item.balance !== undefined &&
+    item.recurrence.endDate === undefined
+  );
 }
 
 export function beatOf(doc: FinancialDocument, date: ISODate): number {
@@ -173,6 +199,8 @@ export function clipMatchesItem(
   if (Math.abs(clipAnchorBeat(clip) - (geometry.start - geometry.contentOffset)) > EPS) {
     return false;
   }
+  // A payoff-pinned debt's length is derived, not part of the item.
+  if (isPayoffPinned(item)) return true;
   return Math.abs(clip.duration - geometry.duration) <= EPS;
 }
 
@@ -223,9 +251,11 @@ export function deriveRecurrence(
   const openEnd = openEndBeat(doc);
   const sameLength =
     previous !== null && Math.abs(previous.duration - clip.duration) <= EPS;
-  const indefinite = wasIndefinite
-    ? endExclusive >= openEnd || sameLength
-    : endExclusive === openEnd;
+  const indefinite = isPayoffPinned(item)
+    ? true
+    : wasIndefinite
+      ? endExclusive >= openEnd || sameLength
+      : endExclusive === openEnd;
   const endDate = indefinite ? undefined : dateOf(doc, endExclusive - 1);
 
   const nextAnchor = anchorDate === startDate ? undefined : anchorDate;
@@ -288,49 +318,90 @@ export function itemToClip(
 }
 
 /**
- * Playlist state for a financial document: one track per window item
- * (grouped by kind), one shared track per kind for one-time events.
+ * Where the person put things: every track (row) of the playlist, empty
+ * ones included, and the track each item's clip sits on. Persisted with
+ * the plan so rows never vanish on reload or when switching futures — like
+ * FL's playlist, tracks are a place, not a by-product of the items.
+ */
+export interface FinancialTrackLayout {
+  tracks: PlaylistTrack[];
+  /** item id -> track id */
+  placement: Record<string, string>;
+}
+
+/**
+ * Playlist state for a financial document. With a saved `layout`, its
+ * tracks come first (in order, empty ones too) and every item whose track
+ * still exists and is free at its dates goes back there. Everything else
+ * (new items, a first visit) gets the default placement below them: one
+ * track per window item (grouped by kind) and shared lanes per kind for
+ * one-time events.
  */
 export function createFinancialPlaylistState(
   doc: FinancialDocument,
+  layout: FinancialTrackLayout | null = null,
 ): PlaylistState {
   const base = createDemoPlaylistState();
-  const tracks: PlaylistTrack[] = [];
+  const tracks: PlaylistTrack[] = layout ? layout.tracks.map((track) => ({ ...track })) : [];
+  const trackIds = new Set(tracks.map((track) => track.id));
   const clips: PlaylistClip[] = [];
+  const isFree = (trackId: string, start: number, end: number): boolean =>
+    !clips.some(
+      (clip) => clip.trackId === trackId && clip.start < end && clip.start + clip.duration > start,
+    );
+  const uniqueId = (id: string): string => {
+    let candidate = id;
+    for (let n = 2; trackIds.has(candidate); n += 1) candidate = `${id}-${n}`;
+    return candidate;
+  };
+
+  const pending: FinancialItem[] = [];
+  for (const item of doc.items) {
+    const trackId = layout?.placement[item.id];
+    if (trackId !== undefined && trackIds.has(trackId)) {
+      const clip = itemToClip(doc, item, trackId);
+      if (isFree(trackId, clip.start, clip.start + clip.duration)) {
+        clips.push(clip);
+        continue;
+      }
+    }
+    pending.push(item);
+  }
 
   for (const kind of KIND_ORDER) {
-    // One-time events share lanes; a new lane opens only when an event
-    // would overlap the previous one on every existing lane (greedy
-    // interval packing, events sorted by start).
+    // One-time events share lanes: the first lane of their kind free at
+    // that date, else a new one (greedy interval packing by start).
     const pointClips: PlaylistClip[] = [];
-    for (const item of doc.items) {
+    for (const item of pending) {
       if (item.kind !== kind) continue;
       if (isPointItem(item)) {
         pointClips.push(itemToClip(doc, item, ""));
         continue;
       }
-      const trackId = itemTrackId(item);
+      const trackId = uniqueId(itemTrackId(item));
+      trackIds.add(trackId);
       tracks.push({ id: trackId, label: item.name, color: KIND_COLORS[kind] });
       clips.push(itemToClip(doc, item, trackId));
     }
     pointClips.sort((a, b) => a.start - b.start);
-    const laneEnds: number[] = [];
     for (const clip of pointClips) {
-      let lane = laneEnds.findIndex((end) => end <= clip.start);
-      if (lane < 0) {
-        lane = laneEnds.length;
-        laneEnds.push(0);
-        tracks.push({
+      const end = clip.start + clip.duration;
+      let track = tracks.find(
+        (candidate) =>
+          isPointTrackOf(candidate.id, kind) && !candidate.locked && isFree(candidate.id, clip.start, end),
+      );
+      if (!track) {
+        let lane = 0;
+        while (trackIds.has(pointTrackId(kind, lane))) lane += 1;
+        track = {
           id: pointTrackId(kind, lane),
-          label:
-            lane === 0
-              ? POINT_TRACK_LABELS[kind]
-              : `${POINT_TRACK_LABELS[kind]} ${lane + 1}`,
+          label: lane === 0 ? POINT_TRACK_LABELS[kind] : `${POINT_TRACK_LABELS[kind]} ${lane + 1}`,
           color: KIND_COLORS[kind],
-        });
+        };
+        trackIds.add(track.id);
+        tracks.push(track);
       }
-      laneEnds[lane] = clip.start + clip.duration;
-      clips.push({ ...clip, trackId: pointTrackId(kind, lane) });
+      clips.push({ ...clip, trackId: track.id });
     }
   }
 
@@ -338,10 +409,76 @@ export function createFinancialPlaylistState(
     ...base,
     tracks: tracks.length > 0 ? tracks : [{ id: "trk-empty", label: "Track 1", color: "#888888" }],
     clips,
-    markers: [{ id: "m-today", time: 0, kind: "start", label: "Hoy" }],
+    // "Today" is drawn by the calendar axis (a pill on the ruler).
+    markers: [],
     viewport: { ...base.viewport, scrollX: 0, scrollY: 0, pxPerBeat: FINANCE_DEFAULT_PX_PER_DAY },
     snap: { mode: "beat", lastActiveMode: "beat" },
     selection: { clipIds: [], automationPointIds: [] },
     playPosition: { time: 0, isRunning: false },
   };
+}
+
+const AUTO_ROW_LABEL = /^Track \d+$/;
+
+/** The layout of a playlist state (see FinancialTrackLayout). */
+export function trackLayoutOf(
+  state: PlaylistState,
+  isItem: (clipId: string) => boolean,
+): FinancialTrackLayout {
+  const placement: Record<string, string> = {};
+  const used = new Set<string>();
+  for (const clip of state.clips) {
+    used.add(clip.trackId);
+    if (isItem(clip.id)) placement[clip.id] = clip.trackId;
+  }
+  // Trailing rows that are still plain endless rows (empty, auto-named,
+  // untouched — e.g. materialised by a right-click) are not saved: the
+  // endless rows below draw the same thing anyway.
+  let end = state.tracks.length;
+  while (end > 1) {
+    const track = state.tracks[end - 1]!;
+    const pristine =
+      !used.has(track.id) &&
+      track.id.startsWith("track-") &&
+      AUTO_ROW_LABEL.test(track.label) &&
+      track.muted !== true &&
+      track.locked !== true &&
+      track.height === undefined;
+    if (!pristine) break;
+    end -= 1;
+  }
+  return {
+    // Solo is a listening mode, not part of the plan.
+    tracks: state.tracks.slice(0, end).map(({ soloed: _soloed, ...track }) => track),
+    placement,
+  };
+}
+
+/** A FinancialTrackLayout read back from storage, or null when malformed. */
+export function parseTrackLayout(value: unknown): FinancialTrackLayout | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as { tracks?: unknown; placement?: unknown };
+  if (!Array.isArray(raw.tracks) || !raw.placement || typeof raw.placement !== "object") return null;
+  const tracks: PlaylistTrack[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw.tracks) {
+    if (!entry || typeof entry !== "object") continue;
+    const track = entry as Partial<PlaylistTrack>;
+    if (typeof track.id !== "string" || seen.has(track.id)) continue;
+    seen.add(track.id);
+    const next: PlaylistTrack = {
+      id: track.id,
+      label: typeof track.label === "string" ? track.label : track.id,
+      color: typeof track.color === "string" ? track.color : "#888888",
+    };
+    if (track.muted === true) next.muted = true;
+    if (track.locked === true) next.locked = true;
+    if (typeof track.height === "number" && Number.isFinite(track.height)) next.height = track.height;
+    tracks.push(next);
+  }
+  const placement: Record<string, string> = {};
+  for (const [itemId, trackId] of Object.entries(raw.placement as Record<string, unknown>)) {
+    if (typeof trackId === "string" && seen.has(trackId)) placement[itemId] = trackId;
+  }
+  return { tracks, placement };
 }

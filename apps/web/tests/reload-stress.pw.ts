@@ -103,9 +103,10 @@ test.describe("reload stress", () => {
       );
     }
 
-    // Sanity: toolbar should render the 8 tool buttons + Str = 9 buttons.
+    // Sanity: the finance toolbar renders its 6 tools (Select, Draw, Slice,
+    // Mute, Delete, Zoom). Paint and Slip stay hotkey-only (Ola 1).
     for (const s of samples) {
-      expect(s.toolbarButtons, `toolbar buttons on reload #${s.reload}`).toBeGreaterThanOrEqual(8);
+      expect(s.toolbarButtons, `toolbar buttons on reload #${s.reload}`).toBe(6);
       expect(s.loadingVisible, `loading overlay visible on reload #${s.reload}`).toBe(false);
       expect(s.errorVisible, `error overlay visible on reload #${s.reload}`).toBe(false);
     }

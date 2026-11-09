@@ -12,7 +12,7 @@
 // (besides renderer-impl.ts + clip-node-registry.ts): check-perf-patterns
 // whitelists this file explicitly. See scripts/check-perf-patterns.mjs.
 import { Container, Text } from "pixi.js";
-import { COLORS } from "./palette";
+import { CANVAS_FONT_FAMILY, COLORS } from "./palette";
 
 const TEXT_POOL_CURSOR = new WeakMap<Container, number>();
 
@@ -58,7 +58,7 @@ export function addText(
       text,
       style: {
         fill: options.color ?? COLORS.text,
-        fontFamily: "Segoe UI, Arial, sans-serif",
+        fontFamily: CANVAS_FONT_FAMILY,
         fontSize: options.size ?? 12,
         fontWeight: (options.weight ?? "500") as any,
         letterSpacing: 0,

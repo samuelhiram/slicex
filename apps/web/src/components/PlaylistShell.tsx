@@ -10,12 +10,33 @@ import {
   type PlaylistMetrics,
   type PlaylistSnapMode,
   type PlaylistToolId,
+  type ViewportNavigator,
 } from "@slicex/canvas";
-import { createDemoFinancialDocument } from "@slicex/core";
-import type { FinancialItem } from "@slicex/core";
+import type {
+  ActualRecord,
+  FinancialDocument,
+  FinancialItem,
+  FinancialItemKind,
+} from "@slicex/core";
 import { PlaylistInspector } from "./PlaylistInspector";
-import type { FinancialBridgeApi } from "../finance/bridge-api";
+import type {
+  FinancialBridgeApi,
+  FinancialPlacement,
+  PreviewEffect,
+} from "../finance/bridge-api";
 import { FinancialBridge } from "../finance/financial-bridge";
+import { applyRecCorrections, bootstrapPlan, type RecState } from "../finance/bootstrap";
+import { formatDateShort } from "../finance/format";
+import { Futures } from "../finance/futures";
+import { loadPlan, savePlan } from "../finance/persistence";
+import { parseStatement } from "../finance/statement";
+import { CommandBar } from "../finance/components/CommandBar";
+import { FuturesMenu } from "../finance/components/FuturesMenu";
+import { OnboardingDialog, WelcomeBanner } from "../finance/components/Onboarding";
+import { RecDialog } from "../finance/components/RecDialog";
+import { StatementDialog } from "../finance/components/StatementDialog";
+import { ValleyCard } from "../finance/components/ValleyCard";
+import { NavControls, NavHelp } from "../finance/components/NavControls";
 import {
   FINANCE_PLAYLIST_METRICS,
   createFinancialPlaylistState,
@@ -25,6 +46,8 @@ import { FinancialSummaryBar } from "../finance/components/FinancialSummaryBar";
 import { PlayheadReadout } from "../finance/components/PlayheadReadout";
 import { FinancialEditorModal } from "../finance/components/FinancialEditorModal";
 import { FinancialSidePanel } from "../finance/components/FinancialSidePanel";
+import { useTheme } from "../theme";
+import { useFitInViewport } from "../ui/fit-in-viewport";
 
 // Playback speed of the financial timeline: 1 beat = 1 day.
 const PLAYBACK_DAYS_PER_SECOND = 7;
@@ -43,13 +66,24 @@ const SHELL_METRICS: PlaylistMetrics = {
 const SHELL_LAYOUT_STYLE = {
   "--pl-ruler-h": `${SHELL_METRICS.rulerHeight}px`,
   "--pl-lane-h": `${SHELL_METRICS.overviewLaneHeight}px`,
+  "--pl-header-w": `${SHELL_METRICS.trackHeaderWidth}px`,
 } as React.CSSProperties;
+
+const NAV_HINT_KEY = "slicex.navHint";
+
+function navHintSeen(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(NAV_HINT_KEY) === "1";
+  } catch {
+    return true;
+  }
+}
 
 // Financial item editor: edit an existing item (double-click on its clip)
 // or create one from a draft ("+ Ingreso" & co.; added only on "Guardar").
 type EditorState =
   | { mode: "edit"; id: string }
-  | { mode: "create"; draft: FinancialItem }
+  | { mode: "create"; draft: FinancialItem; placement?: FinancialPlacement }
   | null;
 
 // Local calendar date of the device ("today" for the projection). The only
@@ -60,6 +94,41 @@ function localTodayISO(): string {
   const m = String(now.getMonth() + 1).padStart(2, "0");
   const d = String(now.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+// The canvas draws its labels with Inter (shipped by the app). Pixi
+// rasterises a Text once, so the renderer is created once the font is ready
+// (local file: a few ms) — but never later than FONT_WAIT_MS. If the font
+// arrives after that, `lateFont` resolves and the shell asks the renderer to
+// re-rasterise its labels once (renderer.refreshFonts).
+const FONT_WAIT_MS = 1200;
+
+interface CanvasFontWait {
+  // true = the font is ready; false = gave up waiting (fallback face).
+  ready: Promise<boolean>;
+  // Settles when the font load settles (loaded or failed).
+  lateFont: Promise<void>;
+}
+
+function waitForCanvasFont(): CanvasFontWait {
+  const fonts = typeof document !== "undefined" ? document.fonts : undefined;
+  if (!fonts || typeof fonts.load !== "function") {
+    return { ready: Promise.resolve(true), lateFont: Promise.resolve() };
+  }
+  const loaded = Promise.all([
+    fonts.load('500 12px "Inter Variable"'),
+    fonts.load('600 12px "Inter Variable"'),
+  ]).then(
+    () => undefined,
+    () => undefined,
+  );
+  const timeout = new Promise<boolean>((resolve) => {
+    setTimeout(() => resolve(false), FONT_WAIT_MS);
+  });
+  return {
+    ready: Promise.race([loaded.then(() => true), timeout]),
+    lateFont: loaded,
+  };
 }
 
 // Finance-native snap: 1 beat = 1 day, 1 bar = 1 week (beatsPerBar 7),
@@ -183,50 +252,73 @@ function pickColorThen(
   input.click();
 }
 
+// What the context menus can ask of the shell (financial actions).
+interface MenuActions {
+  /** Open the editor on a NEW item of `kind` dated `day`, to land on row `trackIndex`. */
+  newItem(kind: FinancialItemKind, day: number, trackIndex: number): void;
+  /** Open the editor on an existing item (clip id = item id). */
+  editItem(clipId: string): void;
+}
+
+const DIVIDER: MenuItemDef = { label: "", onSelect: () => {}, divider: true };
+
+// Track (row) menu. Rows are permanent, like FL's playlist: they can be
+// emptied, renamed, muted or locked, and new ones inserted, but never
+// removed — the endless empty rows below are always there anyway.
 function buildTrackMenuItems(
   core: PlaylistCore,
   trackIndex: number,
+  actions: MenuActions,
 ): MenuItemDef[] {
   const state = core.getState();
   const track = state.tracks[trackIndex];
   if (!track) return [];
   const trackId = track.id;
   const hasClips = state.clips.some((clip) => clip.trackId === trackId);
-  const hasSelectedClipsOnTrack = state.clips.some(
-    (clip) =>
-      clip.trackId === trackId && state.selection.clipIds.includes(clip.id),
-  );
   const close = () => core.closeContextMenu();
+  const day = Math.max(0, Math.floor(state.playPosition.time));
   return [
     {
-      label: track.muted ? "Unmute track" : "Mute track",
+      label: "Nuevo ingreso en este track…",
+      onSelect: () => {
+        close();
+        actions.newItem("income", day, trackIndex);
+      },
+    },
+    {
+      label: "Nuevo gasto en este track…",
+      onSelect: () => {
+        close();
+        actions.newItem("expense", day, trackIndex);
+      },
+    },
+    DIVIDER,
+    {
+      label: track.muted ? "Reactivar track" : "Silenciar track",
       onSelect: () => {
         core.toggleTrackMute(trackIndex);
         close();
       },
     },
     {
-      label: track.soloed ? "Unsolo track" : "Solo track",
+      label: track.soloed ? "Quitar solo" : "Solo este track",
       onSelect: () => {
         core.toggleTrackSolo(trackIndex);
         close();
       },
     },
     {
-      label: track.locked ? "Unlock track" : "Lock track",
+      label: track.locked ? "Desbloquear track" : "Bloquear track",
       onSelect: () => {
         core.toggleTrackLock(trackIndex);
         close();
       },
     },
-    { label: "", onSelect: () => {}, divider: true },
+    DIVIDER,
     {
-      label: "Rename track",
+      label: "Renombrar track…",
       onSelect: () => {
-        const next = window.prompt(
-          "Rename track",
-          track.label ?? `Track ${trackIndex + 1}`,
-        );
+        const next = window.prompt("Nombre del track", track.label ?? `Track ${trackIndex + 1}`);
         if (next?.trim()) {
           core.renameTrack(trackIndex, next.trim());
         }
@@ -234,43 +326,32 @@ function buildTrackMenuItems(
       },
     },
     {
-      label: "Recolor track",
+      label: "Color del track…",
       onSelect: () => {
-        pickColorThen(track.color ?? "#888888", (color) =>
-          core.recolorTrack(trackIndex, color),
-        );
+        pickColorThen(track.color ?? "#888888", (color) => core.recolorTrack(trackIndex, color));
         close();
       },
     },
-    { label: "", onSelect: () => {}, divider: true },
+    DIVIDER,
     {
-      label: "Insert track below",
+      label: "Insertar track arriba",
+      onSelect: () => {
+        core.insertTrackBelow(trackIndex - 1);
+        close();
+      },
+    },
+    {
+      label: "Insertar track abajo",
       onSelect: () => {
         core.insertTrackBelow(trackIndex);
         close();
       },
     },
     {
-      label: "Delete track content",
-      disabled: !hasClips,
+      label: "Vaciar track",
+      disabled: !hasClips || track.locked === true,
       onSelect: () => {
         core.clearTrackClips(trackIndex);
-        close();
-      },
-    },
-    {
-      label: "Delete selected clips on track",
-      disabled: !hasSelectedClipsOnTrack,
-      onSelect: () => {
-        core.deleteSelectedClipsOnTrack(trackIndex);
-        close();
-      },
-    },
-    {
-      label: "Delete empty track",
-      disabled: hasClips || state.tracks.length <= 1,
-      onSelect: () => {
-        core.deleteEmptyTrack(trackIndex);
         close();
       },
     },
@@ -280,6 +361,7 @@ function buildTrackMenuItems(
 function buildClipMenuItems(
   core: PlaylistCore,
   clipId: string,
+  actions: MenuActions,
 ): MenuItemDef[] {
   const state = core.getState();
   const clip = state.clips.find((c) => c.id === clipId);
@@ -287,49 +369,33 @@ function buildClipMenuItems(
   const close = () => core.closeContextMenu();
   return [
     {
-      label: "Rename and recolor",
+      label: "Editar…",
+      hotkey: "Doble clic",
       onSelect: () => {
-        const nextLabel = window.prompt("Rename clip", clip.label);
-        if (nextLabel != null && nextLabel.trim()) {
-          core.setClipLabel(clip.id, nextLabel.trim());
-        }
-        pickColorThen(clip.color, (color) => core.setClipColor(clip.id, color));
         close();
+        actions.editItem(clip.id);
       },
     },
     {
-      label: "Make unique",
-      onSelect: () => {
-        core.makeClipUnique(clip.id);
-        close();
-      },
-    },
-    {
-      label: "Select source",
-      onSelect: () => {
-        core.selectClipSource(clip.id);
-        close();
-      },
-    },
-    {
-      label: "Select all similar",
-      hotkey: "Shift+C",
-      onSelect: () => {
-        core.selectAllSimilarClips(clip.id);
-        close();
-      },
-    },
-    { label: "", onSelect: () => {}, divider: true },
-    {
-      label: clip.muted ? "Unmute" : "Mute",
+      label: clip.muted ? "Reactivar" : "Silenciar",
       onSelect: () => {
         core.toggleClipMute(clip.id);
         close();
       },
     },
+    DIVIDER,
     {
-      label: "Delete",
-      hotkey: "Del",
+      label: "Copiar",
+      hotkey: "Ctrl+C",
+      onSelect: () => {
+        if (!state.selection.clipIds.includes(clip.id)) core.setClipSelection([clip.id]);
+        core.copyToClipboard();
+        close();
+      },
+    },
+    {
+      label: "Borrar",
+      hotkey: "Supr",
       onSelect: () => {
         core.deleteClip(clip.id);
         close();
@@ -342,15 +408,15 @@ const MARKER_KIND_OPTIONS: ReadonlyArray<{
   kind: PlaylistMarkerKind;
   label: string;
 }> = [
-  { kind: "label", label: "Label" },
-  { kind: "start", label: "Start" },
-  { kind: "loop", label: "Loop" },
-  { kind: "marker-loop", label: "Marker loop" },
-  { kind: "marker-skip", label: "Marker skip" },
-  { kind: "marker-pause", label: "Marker pause" },
-  { kind: "time-signature", label: "Time signature" },
-  { kind: "rec-start", label: "Recording start" },
-  { kind: "rec-stop", label: "Recording stop" },
+  { kind: "label", label: "Etiqueta" },
+  { kind: "start", label: "Inicio" },
+  { kind: "loop", label: "Bucle" },
+  { kind: "marker-loop", label: "Bucle de marcador" },
+  { kind: "marker-skip", label: "Salto" },
+  { kind: "marker-pause", label: "Pausa" },
+  { kind: "time-signature", label: "Compás" },
+  { kind: "rec-start", label: "Inicio de grabación" },
+  { kind: "rec-stop", label: "Fin de grabación" },
 ];
 
 function buildMarkerMenuItems(
@@ -362,12 +428,9 @@ function buildMarkerMenuItems(
   const close = () => core.closeContextMenu();
   return [
     {
-      label: "Rename marker",
+      label: "Renombrar marcador…",
       onSelect: () => {
-        const next = window.prompt(
-          "Rename marker",
-          marker.label ?? "",
-        );
+        const next = window.prompt("Nombre del marcador", marker.label ?? "");
         if (next != null) {
           core.updateMarker(marker.id, { label: next.trim() || undefined });
         }
@@ -381,17 +444,17 @@ function buildMarkerMenuItems(
         close();
       },
     })),
-    { label: "", onSelect: () => {}, divider: true },
+    DIVIDER,
     {
-      label: "Jump playhead here",
+      label: "Llevar el cursor aquí",
       onSelect: () => {
         core.setPlayPosition(marker.time);
         close();
       },
     },
     {
-      label: "Delete marker",
-      hotkey: "Del",
+      label: "Borrar marcador",
+      hotkey: "Supr",
       onSelect: () => {
         core.removeMarker(marker.id);
         close();
@@ -400,17 +463,30 @@ function buildMarkerMenuItems(
   ];
 }
 
+// Empty space (any row — the endless ones below included): new things
+// land exactly there, on that day and that row.
 function buildBackgroundMenuItems(
   core: PlaylistCore,
   time: number,
   trackIndex: number,
+  actions: MenuActions,
 ): MenuItemDef[] {
   const state = core.getState();
   const close = () => core.closeContextMenu();
   const hasClipboard = state.clipboard != null && state.clipboard.entries.length > 0;
+  const day = Math.max(0, Math.floor(time));
+  const create = (kind: FinancialItemKind) => () => {
+    close();
+    actions.newItem(kind, day, trackIndex);
+  };
   return [
+    { label: "Nuevo ingreso aquí…", onSelect: create("income") },
+    { label: "Nuevo gasto aquí…", onSelect: create("expense") },
+    { label: "Nuevo préstamo aquí…", onSelect: create("loan") },
+    { label: "Nueva compra a MSI aquí…", onSelect: create("installment-plan") },
+    DIVIDER,
     {
-      label: "Paste here",
+      label: "Pegar aquí",
       hotkey: "Ctrl+V",
       disabled: !hasClipboard,
       onSelect: () => {
@@ -419,21 +495,7 @@ function buildBackgroundMenuItems(
       },
     },
     {
-      label: "Insert clip",
-      onSelect: () => {
-        core.createClip({
-          trackIndex,
-          start: time,
-          duration: 4,
-          type: "pattern",
-          label: "Clip",
-          color: "#7aa6d8",
-        });
-        close();
-      },
-    },
-    {
-      label: "Select all clips",
+      label: "Seleccionar todo",
       hotkey: "Ctrl+A",
       onSelect: () => {
         core.selectAllClips();
@@ -441,7 +503,7 @@ function buildBackgroundMenuItems(
       },
     },
     {
-      label: "Deselect",
+      label: "Deseleccionar",
       hotkey: "Ctrl+D",
       onSelect: () => {
         core.deselectAll();
@@ -451,8 +513,17 @@ function buildBackgroundMenuItems(
   ];
 }
 
-function PlaylistContextMenuOverlay({ core }: { core: PlaylistCore | null }) {
+function PlaylistContextMenuOverlay({
+  core,
+  actions,
+}: {
+  core: PlaylistCore | null;
+  actions: MenuActions;
+}) {
   const [menu, setMenu] = React.useState<PlaylistContextMenu>(null);
+  // Opened at the pointer: near an edge it would hang off screen.
+  const menuRef = React.useRef<HTMLDivElement | null>(null);
+  useFitInViewport(menuRef, menu !== null, [menu]);
 
   React.useEffect(() => {
     if (!core) {
@@ -484,17 +555,18 @@ function PlaylistContextMenuOverlay({ core }: { core: PlaylistCore | null }) {
 
   let items: MenuItemDef[] = [];
   if (menu.kind === "track") {
-    items = buildTrackMenuItems(core, menu.trackIndex);
+    items = buildTrackMenuItems(core, menu.trackIndex, actions);
   } else if (menu.kind === "clip") {
-    items = buildClipMenuItems(core, menu.clipId);
+    items = buildClipMenuItems(core, menu.clipId, actions);
   } else if (menu.kind === "background") {
-    items = buildBackgroundMenuItems(core, menu.time, menu.trackIndex);
+    items = buildBackgroundMenuItems(core, menu.time, menu.trackIndex, actions);
   } else if (menu.kind === "marker") {
     items = buildMarkerMenuItems(core, menu.markerId);
   }
 
   return (
     <div
+      ref={menuRef}
       className="playlist-shell__menu"
       style={{ left: menu.position.x, top: menu.position.y }}
       role="menu"
@@ -540,6 +612,7 @@ function PlaylistToolbar({ core }: ToolbarProps) {
       role="toolbar"
       aria-label="Herramientas"
     >
+      <div className="playlist-shell__segmented" role="group" aria-label="Herramienta">
       {TOOL_BUTTONS.map((button) => {
         const hotkey = PLAYLIST_TOOL_HOTKEYS[button.id];
         const isActive = active === button.id;
@@ -567,6 +640,7 @@ function PlaylistToolbar({ core }: ToolbarProps) {
           </button>
         );
       })}
+      </div>
       <label
         className="playlist-shell__snap"
         title="Ajustar a (Retroceso alterna Libre)"
@@ -593,43 +667,92 @@ function PlaylistToolbar({ core }: ToolbarProps) {
           ))}
         </select>
       </label>
-      <div
-        className="playlist-shell__counter"
-        role="status"
-        aria-label="Objetos en el timeline"
-        title={`${clipCount} ${clipCount === 1 ? "objeto" : "objetos"} en el timeline${selectedCount > 0 ? ` · ${selectedCount} seleccionados` : ""}`}
-        data-has-selection={selectedCount > 0 ? "true" : "false"}
-      >
-        <span className="playlist-shell__counter-value">{clipCount}</span>
-        <span className="playlist-shell__counter-label">
-          {clipCount === 1 ? "objeto" : "objetos"}
-        </span>
-        {selectedCount > 0 ? (
+      {/* Only a multi-selection is worth a chip (how many will move). */}
+      {selectedCount > 1 ? (
+        <div
+          className="playlist-shell__counter"
+          role="status"
+          aria-label="Selección"
+          title={`${selectedCount} de ${clipCount} objetos seleccionados`}
+          data-has-selection="true"
+        >
           <span className="playlist-shell__counter-selected">
-            {selectedCount} sel.
+            {selectedCount} seleccionados
           </span>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 export function PlaylistShell() {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
+  // Light / dark: the DOM follows the CSS tokens; the canvas palette is
+  // switched through the renderer (created later, inside the init frame).
+  const { theme, toggle: toggleTheme } = useTheme();
+  const themeRef = React.useRef(theme);
+  themeRef.current = theme;
+  const rendererRef = React.useRef<ReturnType<
+    typeof createPlaylistRenderer
+  > | null>(null);
   const [core, setCore] = React.useState<PlaylistCore | null>(null);
   const [bridge, setBridge] = React.useState<FinancialBridgeApi | null>(null);
+  const [futures, setFutures] = React.useState<Futures | null>(null);
+  const [navigator, setNavigator] = React.useState<ViewportNavigator | null>(null);
+  const [navHint, setNavHint] = React.useState<"hint" | "help" | null>(() =>
+    navHintSeen() ? null : "hint",
+  );
+  const dismissNavHint = React.useCallback(() => {
+    setNavHint(null);
+    try {
+      globalThis.localStorage?.setItem(NAV_HINT_KEY, "1");
+    } catch {
+      // private mode: the hint just shows again next time
+    }
+  }, []);
   const [error, setError] = React.useState<string | null>(null);
   // Double-click on a clip surfaces a "playlist-clip-open" CustomEvent from
   // the controller; the shell opens the financial editor for that item
-  // (item.id === clip.id). "+ Ingreso" & co. open it on a draft.
+  // (item.id === clip.id). "Nuevo" opens it on a draft.
   const [editor, setEditor] = React.useState<EditorState>(null);
   const closeEditor = React.useCallback(() => setEditor(null), []);
   const openDraft = React.useCallback(
     (draft: FinancialItem) => setEditor({ mode: "create", draft }),
     [],
   );
+  // Right-click menus: "Nuevo … aquí" lands on that day and that row.
+  const menuActions = React.useMemo<MenuActions>(
+    () => ({
+      newItem: (kind, day, trackIndex) => {
+        if (!bridge) return;
+        setEditor({
+          mode: "create",
+          draft: bridge.createDraftItem(kind, day),
+          placement: { trackIndex },
+        });
+      },
+      editItem: (clipId) => {
+        if (bridge?.getItem(clipId)) setEditor({ mode: "edit", id: clipId });
+      },
+    }),
+    [bridge],
+  );
   // Where focus goes back when the editor closes and its opener is gone.
   const getHost = React.useCallback(() => hostRef.current, []);
+
+  // Waves 2–4.
+  const [today] = React.useState(localTodayISO);
+  const [hoverDay, setHoverDay] = React.useState<number | null>(null);
+  const [commandOpen, setCommandOpen] = React.useState(false);
+  const [peek, setPeek] = React.useState<{ label: string; effect: PreviewEffect | null } | null>(
+    null,
+  );
+  const [onboarding, setOnboarding] = React.useState<"banner" | "dialog" | null>(null);
+  const [rec, setRec] = React.useState<RecState | null>(null);
+  const [recOpen, setRecOpen] = React.useState(false);
+  const [statement, setStatement] = React.useState<{ cardId: string; text: string } | null>(
+    null,
+  );
 
   React.useEffect(() => {
     const host = hostRef.current;
@@ -653,29 +776,66 @@ export function PlaylistShell() {
     let renderer: ReturnType<typeof createPlaylistRenderer> | null = null;
     let financial: FinancialBridge | null = null;
     let unsubscribeBridge: (() => void) | null = null;
+    let unsubscribeFutures: (() => void) | null = null;
+    let unsubscribeLayout: (() => void) | null = null;
     let tickId = 0;
     let lastFrame = performance.now();
+    let pumpId = 0;
+    let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
     let unsubscribeTransport: (() => void) | null = null;
 
     const initId = requestAnimationFrame(() => {
       if (cancelled) return;
-      const doc = createDemoFinancialDocument(localTodayISO());
-      instance = createPlaylistCore(createFinancialPlaylistState(doc), {
+      const font = waitForCanvasFont();
+      void font.ready.then((fontReady) => {
+        build();
+        if (!fontReady) {
+          void font.lateFont.then(() => {
+            if (!cancelled) rendererRef.current?.refreshFonts();
+          });
+        }
+      });
+    });
+
+    function build(): void {
+      if (cancelled || !host) return;
+      const plan = bootstrapPlan(today, loadPlan());
+      const doc = plan.doc;
+      instance = createPlaylistCore(createFinancialPlaylistState(doc, plan.layout), {
         metrics: SHELL_METRICS,
         timeAxis: createCalendarTimeAxis(doc.startDate),
         // Financial clips have no time-stretch meaning: a stretch would
         // rescale the schedule phase and shift every payday.
         stretchEnabled: false,
-        // Only the real lanes: no endless empty tracks under the items.
-        virtualTracks: false,
+        // Tracks are endless (FL): empty rows always wait below the items
+        // to draw, paste or drop on; rows are never removed by themselves.
       });
       const bridgeInstance = new FinancialBridge(instance, doc);
       financial = bridgeInstance;
+      const futuresInstance = new Futures(bridgeInstance, plan.saved);
       setCore(instance);
       setBridge(bridgeInstance);
-      interaction = createPlaylistInteractionController(host, instance);
+      setFutures(futuresInstance);
+      if (plan.firstVisit) setOnboarding("banner");
+      if (plan.rec) setRec(plan.rec);
+      interaction = createPlaylistInteractionController(host, instance, {
+        // Amount by hand: drag a clip's top edge (one undo entry).
+        onClipLevelDrag: ({ clipId, phase, deltaY }) =>
+          bridgeInstance.levelDrag(clipId, phase, deltaY),
+        // Length by hand: the selected item's grabber, at the centre of the
+        // screen, moves its end (goal-seek for debts that end at payoff).
+        clipExtend: (clipId) => bridgeInstance.canExtend(clipId),
+        // Zoomed in it never gets slower than ~a day per 3 px (a month per 100 px).
+        clipExtendMinBeatsPerPx: 1 / 3,
+        // Valleys explain themselves under the pointer.
+        onOverviewHover: (beat) => setHoverDay(beat),
+      });
+      setNavigator(interaction.navigator ?? null);
       renderer = createPlaylistRenderer(host, instance, {
+        theme: themeRef.current,
+        clipLevelHandles: true,
+        clipExtend: (clipId) => bridgeInstance.canExtend(clipId),
         onError: (reason) => {
           setError(reason instanceof Error ? reason.message : "Renderer failed.");
         },
@@ -687,16 +847,58 @@ export function PlaylistShell() {
         getOverviewData: () => bridgeInstance.getOverviewData(),
         getDragAnnotation: () => bridgeInstance.getDragAnnotation(),
         getTrackMeta: (trackId) => bridgeInstance.getTrackMeta(trackId),
+        getClipHighlight: (clipId) => bridgeInstance.isHighlighted(clipId),
+        // The cash that day + that day's movements under every date tooltip.
+        getTooltipDetail: (beat) => bridgeInstance.getDayDetail(beat),
       });
       // Provider data (clip detail / content, the money lane, track meta)
       // comes from the bridge, which can change with no core notify (e.g.
       // only an amount edited in the editor). The bridge notifies only on
       // real data changes, never per frame, and invalidate() just schedules
-      // the renderer's coalesced rAF frame.
+      // the renderer's coalesced rAF frame. While the lane morphs between
+      // futures (~320 ms) a short rAF pump repaints it; it stops by itself.
       const rendererInstance = renderer;
-      unsubscribeBridge = bridgeInstance.subscribe(() =>
-        rendererInstance.invalidate(),
-      );
+      rendererRef.current = rendererInstance;
+      const pump = () => {
+        pumpId = 0;
+        if (cancelled) return;
+        rendererInstance.invalidate();
+        if (bridgeInstance.isAnimating()) pumpId = requestAnimationFrame(pump);
+      };
+      // Autosave (debounced) on real changes of the plan or its futures.
+      let savedRevision = bridgeInstance.getRevision();
+      const scheduleSave = () => {
+        if (saveTimer !== null) clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+          saveTimer = null;
+          if (!cancelled) savePlan(futuresInstance.toSaved());
+        }, 600);
+      };
+      unsubscribeBridge = bridgeInstance.subscribe(() => {
+        rendererInstance.invalidate();
+        if (bridgeInstance.isAnimating() && pumpId === 0) {
+          pumpId = requestAnimationFrame(pump);
+        }
+        const revision = bridgeInstance.getRevision();
+        if (revision !== savedRevision) {
+          savedRevision = revision;
+          scheduleSave();
+        }
+      });
+      unsubscribeFutures = futuresInstance.subscribe(scheduleSave);
+      // Rows are part of the plan too (a renamed / added / emptied track,
+      // an item moved to another row): reference checks only, O(1).
+      let lastTracks = instance.getState().tracks;
+      let lastClips = instance.getState().clips;
+      const layoutSub = instance.subscribe((state) => {
+        if (state.tracks === lastTracks && state.clips === lastClips) return;
+        lastTracks = state.tracks;
+        lastClips = state.clips;
+        scheduleSave();
+      });
+      unsubscribeLayout = () => layoutSub.unsubscribe();
+      // A rolled-forward plan is today's plan: persist it right away.
+      if (plan.rec) savePlan(futuresInstance.toSaved());
 
       // Canon §3.5 + §3.10: only run the play-position rAF when playback
       // is actually engaged. While paused there's no animation to advance,
@@ -733,7 +935,7 @@ export function PlaylistShell() {
         sub.unsubscribe();
         stopTick();
       };
-    });
+    }
 
     const handleClipOpen = (event: Event) => {
       const detail = (event as CustomEvent<{ clipId: string }>).detail;
@@ -746,20 +948,159 @@ export function PlaylistShell() {
     return () => {
       cancelled = true;
       cancelAnimationFrame(initId);
+      if (pumpId !== 0) cancelAnimationFrame(pumpId);
+      if (saveTimer !== null) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
       unsubscribeTransport?.();
       unsubscribeBridge?.();
+      unsubscribeFutures?.();
+      unsubscribeLayout?.();
       interaction?.destroy();
+      rendererRef.current = null;
       renderer?.destroy();
       financial?.destroy();
       host.removeEventListener("playlist-clip-open", handleClipOpen);
       setCore(null);
       setBridge(null);
+      setFutures(null);
+      setNavigator(null);
     };
-  }, []);
+  }, [today]);
 
-  // While the (aria-modal) editor is open everything behind it is inert:
-  // no Tab into the canvas host, no Delete / Ctrl+Z reaching the playlist.
-  const editorOpen = editor !== null && bridge !== null;
+  // Theme switch: one repaint of the cached canvas layers (never per frame).
+  React.useEffect(() => {
+    rendererRef.current?.setTheme(theme);
+  }, [theme]);
+
+  // While a dialog is open everything behind it is inert: no Tab into the
+  // canvas host, no Delete / Ctrl+Z reaching the playlist.
+  const editorOpen =
+    (editor !== null ||
+      onboarding === "dialog" ||
+      recOpen ||
+      statement !== null) &&
+    bridge !== null;
+
+  // Hold Q: peek at the other future. Hold A over a clip: your year without
+  // it. "/": write a movement. Paste on a selected card: its statement.
+  React.useEffect(() => {
+    if (!bridge || !futures || !core) return undefined;
+    let held: string | null = null;
+    const typing = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+    };
+    const startPeek = (label: string, preview: Parameters<FinancialBridgeApi["setPreview"]>[0]) => {
+      const before = bridge.getOverviewData()?.primary ?? null;
+      bridge.setPreview(preview);
+      bridge.animateFrom(before);
+      setPeek({ label, effect: bridge.getPreviewEffect() });
+    };
+    const endPeek = () => {
+      if (held === null) return;
+      held = null;
+      const before = bridge.getOverviewData()?.primary ?? null;
+      bridge.setPreview(null);
+      bridge.animateFrom(before);
+      setPeek(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (editorOpen || commandOpen) return;
+      // Undo / redo also work when focus sits on a DOM control outside the
+      // canvas (e.g. right after "Aplicar" on a valley fix); the canvas host
+      // handles its own shortcuts.
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !typing(event.target) &&
+        !hostRef.current?.contains(event.target as Node)
+      ) {
+        const key = event.key.toLowerCase();
+        if (key === "z" && !event.shiftKey) {
+          event.preventDefault();
+          core.undo();
+          return;
+        }
+        if (key === "y" || (key === "z" && event.shiftKey)) {
+          event.preventDefault();
+          core.redo();
+          return;
+        }
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey || typing(event.target)) return;
+      if (event.key === "/") {
+        event.preventDefault();
+        setCommandOpen(true);
+        return;
+      }
+      if (event.repeat || held !== null) return;
+      const key = event.key.toLowerCase();
+      if (key === "q") {
+        const target = futures.peekTarget();
+        const doc = target ? futures.docOf(target.id) : null;
+        if (!target || !doc) return;
+        held = "q";
+        startPeek(`Futuro: ${target.name}`, { kind: "document", doc });
+        return;
+      }
+      if (key === "a") {
+        const hover = core.getState().hover;
+        if (!hover || hover.kind !== "clip") return;
+        const item = bridge.getItem(hover.clipId);
+        if (!item) return;
+        held = "a";
+        startPeek(`Sin ${item.name}`, { kind: "exclude", itemId: item.id });
+      }
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (held !== null && event.key.toLowerCase() === held) endPeek();
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      if (editorOpen || typing(event.target)) return;
+      const ids = core.getState().selection.clipIds;
+      const card = ids.length === 1 ? bridge.getItem(ids[0]!) : null;
+      if (!card || card.kind !== "credit-card") return;
+      const text = event.clipboardData?.getData("text") ?? "";
+      if (parseStatement(text, { today }).length === 0) return;
+      event.preventDefault();
+      setStatement({ cardId: card.id, text });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", endPeek);
+    window.addEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", endPeek);
+      window.removeEventListener("paste", onPaste);
+      endPeek();
+    };
+  }, [bridge, futures, core, editorOpen, commandOpen, today]);
+
+  const createYear = React.useCallback(
+    (doc: FinancialDocument) => {
+      bridge?.loadDocument(doc);
+      setOnboarding(null);
+      setRec(null);
+    },
+    [bridge],
+  );
+
+  const applyRec = React.useCallback(
+    (actuals: ActualRecord[], cashOverride: number | undefined) => {
+      if (!bridge || !futures || !rec) return;
+      const ledger = applyRecCorrections(bridge, rec, today, actuals, cashOverride);
+      futures.upsertLedger(ledger);
+      setRecOpen(false);
+      setRec(null);
+    },
+    [bridge, futures, rec, today],
+  );
 
   return (
     <section
@@ -772,21 +1113,37 @@ export function PlaylistShell() {
           bridge={bridge}
           onCreateDraft={openDraft}
           inert={editorOpen}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          onOpenCommand={() => setCommandOpen(true)}
+          tools={
+            // Tools + futures inside the header card: nothing floats over
+            // the ruler dates or the money lane.
+            <div className="playlist-shell__bar" inert={editorOpen}>
+              <PlaylistToolbar core={core} />
+              {futures ? (
+                <FuturesMenu bridge={bridge} futures={futures} inert={editorOpen} />
+              ) : null}
+            </div>
+          }
         />
       ) : null}
-      {/* Tools + playhead readout get their own row: nothing floats over
-          the ruler dates or the money lane. */}
-      <div className="playlist-shell__bar" inert={editorOpen}>
-        <PlaylistToolbar core={core} />
-        {bridge ? <PlayheadReadout bridge={bridge} /> : null}
-      </div>
       <div className="playlist-shell__stage" inert={editorOpen}>
         <div
           ref={hostRef}
           className="playlist-shell__surface"
           tabIndex={0}
+          role="application"
+          aria-roledescription="línea de tiempo"
+          aria-label="Línea de tiempo: arrastra para mover, rueda para avanzar en el tiempo"
         />
-        <PlaylistContextMenuOverlay core={core} />
+        <PlaylistContextMenuOverlay core={core} actions={menuActions} />
+        {/* Date · cash · debt at the playhead, in the money lane's header
+            cell (rails open below the lane: nothing covers it). */}
+        {bridge ? <PlayheadReadout bridge={bridge} className="fin-readout--lane" /> : null}
+        {core && navigator && bridge ? (
+          <NavControls core={core} navigator={navigator} bridge={bridge} />
+        ) : null}
         {error ? (
           <div className="playlist-shell__status" role="alert">
             <strong>Error</strong>
@@ -795,6 +1152,73 @@ export function PlaylistShell() {
         ) : null}
         <PlaylistInspector core={core} />
         {bridge ? <FinancialSidePanel bridge={bridge} /> : null}
+        {bridge && !commandOpen ? <ValleyCard bridge={bridge} hoverDay={hoverDay} /> : null}
+        {bridge && commandOpen ? (
+          <CommandBar bridge={bridge} today={today} onClose={() => {
+            setCommandOpen(false);
+            hostRef.current?.focus();
+          }} />
+        ) : null}
+        {peek ? (
+          <div className="fin-peek" role="status" aria-live="polite">
+            <strong>{peek.label}</strong>
+            {peek.effect ? (
+              <span data-tone={peek.effect.tone}>{peek.effect.text}</span>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="fin-banners">
+          {navHint && navigator && onboarding !== "banner" && !rec ? (
+            <section className="fin-banner fin-banner--hint" aria-label="Cómo moverte">
+              {navHint === "help" ? (
+                <div className="fin-banner__text">
+                  <NavHelp />
+                </div>
+              ) : (
+                <div className="fin-banner__text">
+                  <strong>Muévete libre:</strong> la rueda avanza en el tiempo, Shift+rueda
+                  cambia de fila, Ctrl+rueda o pellizca hace zoom y Espacio+arrastra es la mano.
+                </div>
+              )}
+              {navHint === "hint" ? (
+                <button type="button" className="fin-button" onClick={() => setNavHint("help")}>
+                  Ver todo
+                </button>
+              ) : null}
+              <button type="button" className="fin-button fin-button--primary" onClick={dismissNavHint}>
+                Entendido
+              </button>
+            </section>
+          ) : null}
+          {onboarding === "banner" ? (
+            <WelcomeBanner
+              onStart={() => setOnboarding("dialog")}
+              onDismiss={() => setOnboarding(null)}
+            />
+          ) : null}
+          {rec && !recOpen ? (
+            <section className="fin-banner" aria-label="Tu año al día">
+              <div className="fin-banner__text">
+                <strong>Tu año está al día.</strong> Desde el {formatDateShort(rec.since)} supusimos
+                que todo pasó como lo planeaste.
+              </div>
+              <button type="button" className="fin-button" onClick={() => setRecOpen(true)}>
+                Revisar
+              </button>
+              <button
+                type="button"
+                className="fin-icon-button"
+                aria-label="Está bien así"
+                title="Está bien así"
+                onClick={() => setRec(null)}
+              >
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M5 5l10 10M15 5 5 15" />
+                </svg>
+              </button>
+            </section>
+          ) : null}
+        </div>
       </div>
       {editor && bridge ? (
         editor.mode === "edit" ? (
@@ -804,16 +1228,48 @@ export function PlaylistShell() {
             itemId={editor.id}
             onClose={closeEditor}
             returnFocusFallback={getHost}
+            onImportStatement={(cardId) => {
+              setEditor(null);
+              setStatement({ cardId, text: "" });
+            }}
           />
         ) : (
           <FinancialEditorModal
             key={"create:" + editor.draft.id}
             bridge={bridge}
             draft={editor.draft}
+            placement={editor.placement}
             onClose={closeEditor}
             returnFocusFallback={getHost}
           />
         )
+      ) : null}
+      {onboarding === "dialog" ? (
+        <OnboardingDialog
+          today={today}
+          onCreate={createYear}
+          onClose={() => setOnboarding("banner")}
+        />
+      ) : null}
+      {rec && recOpen ? (
+        <RecDialog
+          pending={rec.pending}
+          since={rec.since}
+          onApply={applyRec}
+          onClose={() => setRecOpen(false)}
+        />
+      ) : null}
+      {statement && bridge ? (
+        <StatementDialog
+          bridge={bridge}
+          cardId={statement.cardId}
+          today={today}
+          initialText={statement.text}
+          onClose={() => {
+            setStatement(null);
+            hostRef.current?.focus();
+          }}
+        />
       ) : null}
     </section>
   );

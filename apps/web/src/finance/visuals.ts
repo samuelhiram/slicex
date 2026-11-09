@@ -5,6 +5,7 @@
 // stable (the renderer repaints on reference change).
 import {
   accountActivity,
+  cardCycleDates,
   summarizeProjection,
   toDayNumber,
   type DebtPayoffEstimate,
@@ -31,7 +32,7 @@ import {
 import { FREQUENCY_SHORT } from "./labels";
 import { beatOf, horizonBeat } from "./mapping";
 
-const MONTHS = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
 /** "AGO 2028" */
 export function formatMonthYear(iso: ISODate): string {
@@ -103,6 +104,12 @@ function endOfDaySeries(
   }
   return { initial, beats, values };
 }
+
+/**
+ * Where inside its day an event / mark is drawn (beats): at the day's start,
+ * on the same line as the playhead and the step of the cash curve.
+ */
+export const EVENT_DAY_OFFSET = 0;
 
 /** Cash at the end of each day with events. */
 export function cashSeries(
@@ -203,7 +210,10 @@ function sameNumbers(a: readonly number[], b: readonly number[]): boolean {
   return true;
 }
 
+const NO_MARKS: readonly number[] = [];
+
 function sameContent(a: PlaylistClipContent, b: PlaylistClipContent): boolean {
+  if (!sameNumbers(a.marks ?? NO_MARKS, b.marks ?? NO_MARKS)) return false;
   if (a.kind === "events" && b.kind === "events") {
     return sameNumbers(a.beats, b.beats) && sameNumbers(a.values, b.values);
   }
@@ -273,7 +283,7 @@ export function buildClipContents(
       eventBeats.set(point.itemId, beats);
       eventSigned.set(point.itemId, values);
     }
-    beats.push(beat);
+    beats.push(beat + EVENT_DAY_OFFSET);
     values.push(signed);
   }
 
@@ -287,14 +297,31 @@ export function buildClipContents(
     });
     contents.set(id, { kind: "events", beats, values });
   }
+  // A card's billing cuts ("la tarjeta como compás"): guide marks.
+  const cutBeats = new Map<string, number[]>();
+  for (const item of doc.items) {
+    if (item.kind !== "credit-card") continue;
+    const cuts = cardCycleDates(item, doc.startDate, projection.endDate).cuts;
+    cutBeats.set(item.id, cuts.map((date) => beatAt(date) + EVENT_DAY_OFFSET));
+  }
   for (const id of debtItems) {
     const beats = levelBeats.get(id) ?? [];
     const values = levelValues.get(id) ?? [];
     const initial = openings.get(id) ?? 0;
     let max = initial;
     for (const v of values) if (v > max) max = v;
-    if (max <= 0) continue;
-    contents.set(id, { kind: "level", series: { initial, beats, values }, max });
+    const marks = cutBeats.get(id);
+    if (max <= 0) {
+      // A card with nothing owed still shows its cycles.
+      if (marks && marks.length > 0) {
+        contents.set(id, { kind: "events", beats: [], values: [], marks });
+      }
+      continue;
+    }
+    contents.set(
+      id,
+      marks ? { kind: "level", series: { initial, beats, values }, max, marks } : { kind: "level", series: { initial, beats, values }, max },
+    );
   }
 
   for (const [id, content] of contents) {
@@ -314,11 +341,18 @@ export function describeItemAt(
   debtAt: ReadonlyMap<string, number>,
 ): string {
   const freq = FREQUENCY_SHORT[item.recurrence.frequency];
+  // A one-time event is a narrow card: just the amount, whole pesos (the
+  // editor shows the cents), so it fits instead of being cut.
+  const once = item.recurrence.frequency === "once";
   switch (item.kind) {
     case "income":
-      return `+${formatMoney(item.amount)} ${freq}`;
+      return once
+        ? `+${formatMoneyWhole(item.amount)}`
+        : `+${formatMoney(item.amount)} ${freq}`;
     case "expense":
-      return `−${formatMoney(item.amount)} ${freq}`;
+      return once
+        ? `−${formatMoneyWhole(item.amount)}`
+        : `−${formatMoney(item.amount)} ${freq}`;
     case "card-purchase": {
       const card = doc.items.find((candidate) => candidate.id === item.cardId);
       return card
@@ -333,6 +367,17 @@ export function describeItemAt(
     }
     case "credit-card": {
       const debt = debtAt.get(item.id) ?? item.balance;
+      if (item.paymentMode === "statement") {
+        // Totalero: the next statement paid in full, never interest.
+        for (const point of projection.points) {
+          if (point.date < date || point.itemId !== item.id) continue;
+          if (point.type !== "credit-card-payment" || point.cashDelta >= 0) continue;
+          return `Totalero · pagas ${formatMoneyWhole(-point.cashDelta)} el ${formatDateShort(point.date)} · sin intereses`;
+        }
+        return debt > 0.5
+          ? `Totalero · debes ${formatMoneyWhole(debt)} · sin intereses`
+          : "Totalero · sin saldo";
+      }
       if (debt <= 0.5) return `Liquidada · ${item.annualRate}%`;
       // Of a typical monthly payment, how much only feeds the interest
       // (a month of interest on today's balance, same 360-day basis).
@@ -423,7 +468,7 @@ export function buildTrackMeta(
         subtitle = "No se liquida";
       } else {
         // The header is ~20 characters wide: the payoff date is the news.
-        subtitle = `Libre ${formatMonthYear(payoff.payoffDate)}`;
+        subtitle = `Libre en ${formatMonthYear(payoff.payoffDate)}`;
       }
     } else if (only) {
       subtitle = `${impact > 0 ? "+" : ""}${compactMoney(impact)}${period}`;

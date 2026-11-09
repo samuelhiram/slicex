@@ -39,16 +39,16 @@ import { addText, clearTextLayer, disposeTextLayer } from "../text-pool";
 const PLOT_PAD_TOP = 12;
 const PLOT_PAD_BOTTOM = 6;
 const SCALE_PAD_RATIO = 0.08;
-const AREA_ALPHA = 0.26;
-const LINE_WIDTH = 1.5;
+const LINE_WIDTH = 2;
 const DASH_PX = 5;
 const GAP_PX = 4;
-const LABEL_SIZE = 9;
-const LABEL_CHAR_PX = 5.4;
-const TITLE_SIZE = 12;
-const TITLE_CHAR_PX = 7.2;
+const LABEL_SIZE = 10;
+const LABEL_CHAR_PX = 6;
+const PILL_HEIGHT = 16;
+const TITLE_SIZE = 13;
+const TITLE_CHAR_PX = 7.8;
 const PIN_RADIUS = 3.5;
-const DOT_RADIUS = 4;
+const DOT_RADIUS = 4.5;
 
 export const OVERVIEW_TONE_POSITIVE = 0;
 export const OVERVIEW_TONE_WARNING = 1;
@@ -279,6 +279,8 @@ export interface OverviewLaneLayer {
     data: PlaylistOverviewData | null,
   ): void;
   readonly stats: OverviewLaneStats;
+  // Rebuild every tier on the next sync (e.g. the theme changed).
+  invalidate(): void;
   dispose(): void;
 }
 
@@ -361,56 +363,19 @@ export function createOverviewLaneLayer(
       g.moveTo(lane.x, yZero)
         .lineTo(right, yZero)
         .stroke({ color: COLORS.overviewZeroLine, width: 1, alpha: 0.9 });
-      // Thresholds: dashed lines + labels at the left edge.
+      // Thresholds: dashed lines (their labels are drawn with the curves,
+      // above the series, see drawFixedLabels).
       for (const threshold of frameData.thresholds) {
         const y = yLine(threshold.value);
         if (y < lane.y || y > laneBottom) continue;
-        const color = thresholdColor(threshold);
         dashH(g, lane.x, right, y);
-        g.stroke({ color, width: 1, alpha: 0.55 });
-        if (threshold.label) {
-          addText(
-            text,
-            threshold.label,
-            lane.x + 6,
-            y - 12 >= lane.y + 1 ? y - 12 : y + 2,
-            { size: LABEL_SIZE, color, weight: "600" },
-          );
-        }
-      }
-      // Scale labels (raw extents) at the right edge.
-      if (scale.dataMax > scale.dataMin) {
-        const format = frameData.formatValue ?? defaultFormatValue;
-        const topY = clampNumber(
-          yOf(scale.dataMax) - 6,
-          lane.y + 1,
-          laneBottom - 12,
-        );
-        const bottomY = clampNumber(
-          yOf(scale.dataMin) - 6,
-          lane.y + 1,
-          laneBottom - 12,
-        );
-        addText(text, format(scale.dataMax), right - 6, topY, {
-          size: LABEL_SIZE,
-          color: COLORS.textMuted,
-          weight: "500",
-          anchorX: 1,
-        });
-        if (bottomY - topY >= 12) {
-          addText(text, format(scale.dataMin), right - 6, bottomY, {
-            size: LABEL_SIZE,
-            color: COLORS.textMuted,
-            weight: "500",
-            anchorX: 1,
-          });
-        }
+        g.stroke({ color: thresholdColor(threshold), width: 1, alpha: 0.7 });
       }
       const maxTitleChars = Math.floor((head.width - 24) / TITLE_CHAR_PX);
-      addText(text, truncate(frameData.title, maxTitleChars), 16, lane.y + 8, {
+      addText(text, truncate(frameData.title, maxTitleChars), 16, lane.y + 12, {
         size: TITLE_SIZE,
         color: COLORS.text,
-        weight: "700",
+        weight: "600",
       });
     }
 
@@ -419,7 +384,7 @@ export function createOverviewLaneLayer(
       .stroke({ color: COLORS.rowLine, width: 1 });
     g.moveTo(head.width - 0.5, head.y)
       .lineTo(head.width - 0.5, laneBottom)
-      .stroke({ color: COLORS.rowLine, width: 1.5 });
+      .stroke({ color: COLORS.rowLine, width: 1 });
   }
 
   // Curves over the visible beat range only. Runs after rebuildFrame on the
@@ -447,8 +412,8 @@ export function createOverviewLaneLayer(
     if (data.endBeat !== undefined && data.endBeat < viewEndBeat) {
       const endX = Math.max(lane.x, xOf(data.endBeat));
       g.rect(endX, lane.y, right - endX, lane.height).fill({
-        color: COLORS.background,
-        alpha: 0.45,
+        color: COLORS.gridMinor,
+        alpha: 0.75,
       });
       dashV(g, Math.round(endX) + 0.5, lane.y + 2, lane.y + lane.height - 2);
       g.stroke({ color: COLORS.overviewBaseline, width: 1, alpha: 0.6 });
@@ -471,7 +436,7 @@ export function createOverviewLaneLayer(
           }
           g.lineTo(xOf(from), y).lineTo(xOf(to), y);
         });
-        g.stroke({ color: COLORS.overviewSecondary, width: 1, alpha: 0.38 });
+        g.stroke({ color: COLORS.overviewSecondary, width: 1, alpha: 0.45 });
       }
     }
 
@@ -482,7 +447,7 @@ export function createOverviewLaneLayer(
     const closeRun = (): void => {
       g.lineTo(runEndX, yZero)
         .closePath()
-        .fill({ color: toneColor(runKey >> 1), alpha: AREA_ALPHA });
+        .fill({ color: toneColor(runKey >> 1), alpha: COLORS.areaAlpha });
     };
     walkVisibleSteps(data.primary, fromBeat, toBeat, (from, to, value) => {
       const x0 = xOf(from);
@@ -540,53 +505,135 @@ export function createOverviewLaneLayer(
       }
     }
 
-    // 5. Annotations: pin + label pill, culled to the visible range. A
-    // label that would overlap one already placed flips below its pin, and
-    // is dropped (pin kept) when both spots are taken. Rebuild-time only.
+    // 5. Labels, above the curves (and the horizon shade): the fixed ones
+    // (threshold names at the left edge, scale extents at the right) claim
+    // their boxes first, then every pin, then the annotation pills, which
+    // avoid all of them. Rebuild-time only.
     placedLabels.length = 0;
-    for (const annotation of data.annotations) {
+    drawFixedLabels(g, text, lane, data);
+    const annotations = data.annotations;
+    for (let i = 0; i < annotations.length; i += 1) {
+      const annotation = annotations[i]!;
+      const x = xOf(annotation.beat);
+      if (x < lane.x - PIN_RADIUS || x > right + PIN_RADIUS) continue;
+      const y = clampNumber(yOf(annotation.value), plotTop, plotBottom);
+      g.circle(x, y, PIN_RADIUS)
+        .fill({ color: annotationColor(annotation) })
+        .stroke({ color: COLORS.overviewBackground, width: 2 });
+      placedLabels.push(x - PIN_RADIUS - 1, y - PIN_RADIUS - 1, PIN_RADIUS * 2 + 2, PIN_RADIUS * 2 + 2);
+    }
+    for (let i = 0; i < annotations.length; i += 1) {
+      const annotation = annotations[i]!;
+      const label = annotation.label;
+      if (label.length === 0) continue;
       const x = xOf(annotation.beat);
       if (x < lane.x - PIN_RADIUS || x > right + PIN_RADIUS) continue;
       const y = clampNumber(yOf(annotation.value), plotTop, plotBottom);
       const color = annotationColor(annotation);
-      g.circle(x, y, PIN_RADIUS)
-        .fill({ color })
-        .stroke({ color: COLORS.background, width: 1.5 });
-      const label = annotation.label;
-      if (label.length === 0) continue;
-      const width = label.length * LABEL_CHAR_PX + 8;
+      const width = label.length * LABEL_CHAR_PX + 14;
       const labelX = clampNumber(
         x - width / 2,
         lane.x + 2,
         Math.max(lane.x + 2, right - width - 2),
       );
-      const above = y - 20 >= lane.y + 1 ? y - 20 : y + 6;
-      const below = y + 6 + 14 <= lane.y + lane.height ? y + 6 : above;
-      const free = (top: number): boolean => {
-        for (let i = 0; i < placedLabels.length; i += 4) {
-          if (
-            labelX < placedLabels[i]! + placedLabels[i + 2]! + 4 &&
-            labelX + width + 4 > placedLabels[i]! &&
-            top < placedLabels[i + 1]! + 14 &&
-            top + 14 > placedLabels[i + 1]!
-          ) {
-            return false;
-          }
-        }
-        return true;
-      };
-      const labelY = free(above) ? above : free(below) ? below : Number.NaN;
+      const above =
+        y - PILL_HEIGHT - 6 >= lane.y + 1 ? y - PILL_HEIGHT - 6 : y + 6;
+      const below =
+        y + 6 + PILL_HEIGHT <= lane.y + lane.height ? y + 6 : above;
+      const labelY = isFree(labelX, above, width, PILL_HEIGHT)
+        ? above
+        : isFree(labelX, below, width, PILL_HEIGHT)
+          ? below
+          : Number.NaN;
       if (Number.isNaN(labelY)) continue;
-      placedLabels.push(labelX, labelY, width, 14);
-      g.roundRect(labelX, labelY, width, 14, 3)
-        .fill({ color: COLORS.panelStrong, alpha: 0.92 })
-        .stroke({ color, width: 1, alpha: 0.85 });
-      addText(text, label, labelX + 4, labelY + 1, {
+      placedLabels.push(labelX, labelY, width, PILL_HEIGHT);
+      g.roundRect(labelX, labelY, width, PILL_HEIGHT, PILL_HEIGHT / 2)
+        .fill({ color: COLORS.panelStrong })
+        .stroke({ color, width: 1, alpha: 0.55 });
+      addText(text, label, labelX + 7, labelY + 2, {
         size: LABEL_SIZE,
-        color: COLORS.text,
+        color,
         weight: "600",
       });
     }
+  }
+
+  // True when [x, x + width] × [y, y + height] (plus a 4px gap) overlaps no
+  // box placed in this rebuild.
+  function isFree(x: number, y: number, width: number, height: number): boolean {
+    for (let i = 0; i < placedLabels.length; i += 4) {
+      if (
+        x < placedLabels[i]! + placedLabels[i + 2]! + 4 &&
+        x + width + 4 > placedLabels[i]! &&
+        y < placedLabels[i + 1]! + placedLabels[i + 3]! &&
+        y + height > placedLabels[i + 1]!
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Threshold names (left edge, next to their dashed line) and the scale
+  // extents (right edge), each on a small backing in the lane colour so the
+  // series or the horizon shade never runs through the text.
+  function drawFixedLabels(
+    g: Graphics,
+    text: Container,
+    lane: { x: number; y: number; width: number; height: number },
+    data: PlaylistOverviewData,
+  ): void {
+    const laneBottom = lane.y + lane.height;
+    const right = lane.x + lane.width;
+    for (const threshold of data.thresholds) {
+      if (!threshold.label) continue;
+      const lineY = yLine(threshold.value);
+      if (lineY < lane.y || lineY > laneBottom) continue;
+      const y = lineY - 15 >= lane.y + 1 ? lineY - 15 : lineY + 2;
+      const width = threshold.label.length * LABEL_CHAR_PX + 8;
+      const x = lane.x + 4;
+      g.roundRect(x, y, width, 14, 4).fill({
+        color: COLORS.overviewBackground,
+        alpha: 0.88,
+      });
+      addText(text, threshold.label, x + 4, y + 1, {
+        size: LABEL_SIZE,
+        color: thresholdColor(threshold),
+        weight: "600",
+      });
+      placedLabels.push(x, y, width, 14);
+    }
+    if (scale.dataMax > scale.dataMin) {
+      const format = data.formatValue ?? defaultFormatValue;
+      const topY = clampNumber(yOf(scale.dataMax) - 7, lane.y + 1, laneBottom - 15);
+      const bottomY = clampNumber(yOf(scale.dataMin) - 7, lane.y + 1, laneBottom - 15);
+      drawScaleLabel(g, text, format(scale.dataMax), right, topY);
+      if (bottomY - topY >= 14) {
+        drawScaleLabel(g, text, format(scale.dataMin), right, bottomY);
+      }
+    }
+  }
+
+  function drawScaleLabel(
+    g: Graphics,
+    text: Container,
+    label: string,
+    right: number,
+    y: number,
+  ): void {
+    const width = label.length * LABEL_CHAR_PX + 8;
+    const x = right - 4 - width;
+    g.roundRect(x, y, width, 14, 4).fill({
+      color: COLORS.overviewBackground,
+      alpha: 0.88,
+    });
+    addText(text, label, right - 8, y + 1, {
+      size: LABEL_SIZE,
+      color: COLORS.textMuted,
+      weight: "500",
+      anchorX: 1,
+    });
+    placedLabels.push(x, y, width, 14);
   }
 
   function syncDynamic(
@@ -620,20 +667,14 @@ export function createOverviewLaneLayer(
     const lane = presentation.layout.overviewRect;
     const top = lane.y;
     const bottom = lane.y + lane.height;
-    // Continue the ruler's play marker: its tip (which the lane covers)
-    // and the line through the lane.
-    g.moveTo(playX - 7, top - 1)
-      .lineTo(playX + 7, top - 1)
-      .lineTo(playX, top + 7)
-      .lineTo(playX - 7, top - 1)
-      .fill({ color: COLORS.playPosition });
+    // Continue the playhead line (knob on the ruler) through the lane.
     g.moveTo(playX + 0.5, top)
       .lineTo(playX + 0.5, bottom)
-      .stroke({ color: COLORS.playPosition, width: 2, alpha: 0.9 });
+      .stroke({ color: COLORS.playPosition, width: 1.5 });
     if (dotTone >= 0) {
       g.circle(playX + 0.5, dotY, DOT_RADIUS)
         .fill({ color: toneColor(dotTone) })
-        .stroke({ color: COLORS.text, width: 1.5 });
+        .stroke({ color: COLORS.overviewBackground, width: 2 });
     }
   }
 
@@ -689,5 +730,10 @@ export function createOverviewLaneLayer(
     plotData = null;
   }
 
-  return { sync, stats, dispose };
+  function invalidate(): void {
+    built = false;
+    lastPlayX = Number.NEGATIVE_INFINITY;
+  }
+
+  return { sync, stats, invalidate, dispose };
 }

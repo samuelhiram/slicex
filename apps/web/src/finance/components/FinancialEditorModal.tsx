@@ -23,7 +23,7 @@ import type {
   FinancialRecurrence,
   RecurrenceFrequency,
 } from "@slicex/core";
-import type { FinancialBridgeApi } from "../bridge-api";
+import type { FinancialBridgeApi, FinancialPlacement } from "../bridge-api";
 import {
   formatDateInput,
   formatDateWeekday,
@@ -34,6 +34,28 @@ import {
 } from "../format";
 import { FREQUENCY_LABELS, KIND_COLORS, KIND_LABELS, KIND_ORDER } from "../labels";
 import { parseNumberInput, useFinancialRevision } from "./FinancialUi";
+import {
+  LAST_DAY,
+  lastPayment,
+  monthlyDay,
+  paymentCount,
+  scheduleSummary,
+  snapEndToLastPayment,
+  withMonthlyDay,
+  withPaymentCount,
+  withStartDate,
+} from "../schedule-ui";
+
+/** Payments a new end covers by default: about a year. */
+const DEFAULT_PAYMENTS: Readonly<Record<RecurrenceFrequency, number>> = {
+  once: 1,
+  weekly: 52,
+  biweekly: 26,
+  semimonthly: 24,
+  monthly: 12,
+};
+
+const MONTH_DAYS: ReadonlyArray<number> = Array.from({ length: 30 }, (_, i) => i + 1);
 
 interface FinancialEditorModalBaseProps {
   bridge: FinancialBridgeApi;
@@ -44,6 +66,10 @@ interface FinancialEditorModalBaseProps {
    * shortcuts keep working).
    */
   returnFocusFallback?: () => HTMLElement | null;
+  /** Credit cards: open the "paste a statement" flow for this card. */
+  onImportStatement?: (cardId: string) => void;
+  /** Create: the row the new item should land on (see bridge.addItem). */
+  placement?: FinancialPlacement;
 }
 
 export type FinancialEditorModalProps = FinancialEditorModalBaseProps &
@@ -192,7 +218,8 @@ export function normalizeForSave(draft: FinancialItem): FinancialItem {
     delete recurrence.anchorDate;
     recurrence.endDate = recurrence.startDate;
   }
-  item.recurrence = recurrence;
+  item.recurrence =
+    usesFrequency(draft.kind) && !isOnce(draft) ? snapEndToLastPayment(recurrence) : recurrence;
   return item as unknown as FinancialItem;
 }
 
@@ -678,12 +705,14 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
     setDraft((prev) => {
       if (!prev) return prev;
       // Moving the date moves the whole schedule (window start + phase).
-      const recurrence: FinancialRecurrence = {
-        ...prev.recurrence,
-        startDate: value,
-        anchorDate: value,
-      };
-      if (isISODate(value) && recurrence.endDate !== undefined) {
+      let recurrence: FinancialRecurrence = withStartDate(prev.recurrence, value);
+      // A recurring end is a number of payments: it travels with the start.
+      const count =
+        usesFrequency(prev.kind) && !isOnce(prev) && isISODate(value)
+          ? paymentCount(prev.recurrence)
+          : null;
+      if (count !== null && count > 0) recurrence = withPaymentCount(recurrence, count);
+      else if (isISODate(value) && recurrence.endDate !== undefined) {
         if (isOnce(prev)) {
           // Hidden end of a one-day window follows the date.
           recurrence.endDate = value;
@@ -724,6 +753,11 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
       const recurrence: FinancialRecurrence = { ...prev.recurrence };
       if (indefinite) {
         delete recurrence.endDate;
+      } else if (usesFrequency(prev.kind) && !isOnce(prev)) {
+        return {
+          ...prev,
+          recurrence: withPaymentCount(recurrence, DEFAULT_PAYMENTS[recurrence.frequency]),
+        };
       } else {
         const base = isISODate(recurrence.startDate)
           ? recurrence.startDate
@@ -733,6 +767,18 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
       return { ...prev, recurrence };
     });
 
+  const onMonthlyDayChange = (day: number) =>
+    setDraft((prev) =>
+      prev ? { ...prev, recurrence: withMonthlyDay(prev.recurrence, day) } : prev,
+    );
+
+  const onPaymentCountChange = (count: number) =>
+    setDraft((prev) =>
+      prev && count >= 1
+        ? { ...prev, recurrence: withPaymentCount(prev.recurrence, count) }
+        : prev,
+    );
+
   const onKindChange = (kind: FinancialItemKind) =>
     setDraft((prev) =>
       prev && prev.kind !== kind ? switchKind(prev, kind, doc) : prev,
@@ -741,7 +787,7 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
   const save = () => {
     if (locked || validateFinancialDraft(draft, cards) !== null) return;
     if (creating) {
-      bridge.addItem(normalizeForSave(draft));
+      bridge.addItem(normalizeForSave(draft), props.placement);
       onClose();
       return;
     }
@@ -772,7 +818,12 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
   const recurrence = draft.recurrence;
   const showFrequency = usesFrequency(draft.kind);
   const showEndDate = !(showFrequency && recurrence.frequency === "once");
+  // Frequency kinds (income, expense, loan, purchase) end after N payments;
+  // cards / MSI keep their own end date.
+  const byPayments = showFrequency && recurrence.frequency !== "once";
   const indefinite = recurrence.endDate === undefined;
+  const payments = byPayments ? paymentCount(recurrence) : null;
+  const last = byPayments ? lastPayment(recurrence) : null;
   const title = creating
     ? `${NEW_TITLE_PREFIX[draft.kind]} ${KIND_LABELS[draft.kind]}`
     : `Editar ${KIND_LABELS[draft.kind]}`;
@@ -886,9 +937,71 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
                     </option>
                   ))}
                 </select>
+                <span className="fin-date__preview" data-state="ok">
+                  {byPayments && recurrence.frequency !== "monthly"
+                    ? scheduleSummary(recurrence)
+                    : ""}
+                </span>
               </label>
             ) : null}
-            {showEndDate ? (
+            {byPayments && recurrence.frequency === "monthly" ? (
+              <label className="fin-editor__field">
+                <span className="fin-editor__label">Día de pago</span>
+                <select
+                  value={monthlyDay(recurrence)}
+                  onChange={(event) => onMonthlyDayChange(Number(event.target.value))}
+                >
+                  {MONTH_DAYS.map((day) => (
+                    <option key={day} value={day}>
+                      Día {day}
+                    </option>
+                  ))}
+                  <option value={LAST_DAY}>Último día del mes</option>
+                </select>
+                <span className="fin-date__preview" data-state="ok">
+                  {scheduleSummary(recurrence)}
+                </span>
+              </label>
+            ) : null}
+            {byPayments ? (
+              <div className="fin-editor__field">
+                <label className="fin-editor__label" htmlFor="fin-editor-payments">
+                  Pagos
+                </label>
+                <span className="fin-editor__control">
+                  <input
+                    id="fin-editor-payments"
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    step={1}
+                    value={indefinite ? "" : String(payments ?? "")}
+                    disabled={indefinite}
+                    placeholder="—"
+                    onChange={(event) => {
+                      const n = Math.floor(Number(event.target.value));
+                      if (Number.isFinite(n) && n >= 1) onPaymentCountChange(n);
+                    }}
+                  />
+                  <label className="fin-editor__check">
+                    <input
+                      type="checkbox"
+                      checked={indefinite}
+                      onChange={(event) => onIndefiniteChange(event.target.checked)}
+                    />
+                    <span>Indefinido</span>
+                  </label>
+                </span>
+                <span className="fin-date__preview" data-state="ok">
+                  {indefinite
+                    ? "Sin final: sigue hasta el horizonte"
+                    : last
+                      ? `Último: ${formatDateWeekday(last)}`
+                      : "Ningún pago en ese rango"}
+                </span>
+              </div>
+            ) : null}
+            {showEndDate && !byPayments ? (
               <DateField
                 label="Fecha final"
                 value={recurrence.endDate}
@@ -935,6 +1048,16 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
                 Eliminar
               </button>
             )}
+            {!creating && draft.kind === "credit-card" && props.onImportStatement ? (
+              <button
+                type="button"
+                className="fin-editor__button"
+                disabled={locked}
+                onClick={() => props.onImportStatement?.(draft.id)}
+              >
+                Pegar estado de cuenta…
+              </button>
+            ) : null}
             <span className="fin-editor__actions-spacer" />
             <button
               ref={cancelRef}
@@ -1020,6 +1143,26 @@ function KindFields({
     case "credit-card":
       return (
         <>
+          <label className="fin-editor__field fin-editor__field--wide">
+            <span className="fin-editor__label">Forma de pago</span>
+            <select
+              value={draft.paymentMode === "statement" ? "statement" : "fixed"}
+              onChange={(event) =>
+                patch({
+                  paymentMode: event.target.value === "statement" ? "statement" : undefined,
+                })
+              }
+            >
+              <option value="fixed">Pago fijo cada mes</option>
+              <option value="statement">Pago total del estado de cuenta (totalero)</option>
+            </select>
+            {draft.paymentMode === "statement" ? (
+              <span className="fin-editor__hint">
+                Cada fecha de pago liquidas lo que se cortó: nunca pagas intereses. Una compra
+                después del corte se paga hasta el mes siguiente.
+              </span>
+            ) : null}
+          </label>
           <NumberField
             label="Saldo"
             value={draft.balance}
@@ -1046,12 +1189,14 @@ function KindFields({
             value={draft.minimumPayment}
             onChange={(minimumPayment) => patch({ minimumPayment })}
           />
-          <NumberField
-            label="Pago planeado"
-            optional
-            value={draft.paymentAmount}
-            onChange={(paymentAmount) => patch({ paymentAmount })}
-          />
+          {draft.paymentMode === "statement" ? null : (
+            <NumberField
+              label="Pago planeado"
+              optional
+              value={draft.paymentAmount}
+              onChange={(paymentAmount) => patch({ paymentAmount })}
+            />
+          )}
         </>
       );
     case "installment-plan":

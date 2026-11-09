@@ -14,16 +14,18 @@ import type {
 import { COLORS } from "../palette";
 import { addText, clearTextLayer, disposeTextLayer } from "../text-pool";
 import {
-  TOOLTIP_CHAR_WIDTH,
   TOOLTIP_HEIGHT,
   TOOLTIP_OFFSET_X,
   TOOLTIP_OFFSET_Y,
   TOOLTIP_PADDING_X,
 } from "./tooltip";
 
-const PILL_HEIGHT = 20;
-const PILL_GAP = 3;
-const ACCENT_WIDTH = 3;
+const PILL_HEIGHT = 24;
+const PILL_GAP = 4;
+const DOT_SPACE = 14;
+// Average advance of the 11px / 600 text: sentences are narrower per char
+// than the tooltip's dates (spaces, separators).
+const TEXT_CHAR_WIDTH = 6.05;
 
 export interface DragAnnotationParts {
   container: Container;
@@ -35,8 +37,12 @@ export interface DragAnnotationLayer {
   sync(
     presentation: PlaylistPresentation,
     annotation: PlaylistDragAnnotation | null,
+    // Height of the tooltip it hangs under (taller with a detail line).
+    tooltipHeight?: number,
   ): void;
   readonly stats: { repaints: number };
+  // Repaint on the next sync even with the same annotation (theme change).
+  invalidate(): void;
   dispose(): void;
 }
 
@@ -59,28 +65,36 @@ export function createDragAnnotationLayer(
     clearTextLayer(parts.textLayer);
     const color = toneColor(annotation.tone);
     const width =
-      Math.max(annotation.text.length, 1) * TOOLTIP_CHAR_WIDTH +
+      Math.max(annotation.text.length, 1) * TEXT_CHAR_WIDTH +
       TOOLTIP_PADDING_X * 2 +
-      ACCENT_WIDTH;
+      DOT_SPACE;
+    // Raised card: soft shadow (light theme), hairline in the tone, a tone
+    // dot and the text in the tone (all tones are AA on the surface).
+    if (COLORS.shadowAlpha > 0) {
+      parts.background
+        .roundRect(0, 2, width, PILL_HEIGHT, 8)
+        .fill({ color: 0x000000, alpha: COLORS.shadowAlpha * 1.6 });
+    }
     parts.background
-      .roundRect(0, 0, width, PILL_HEIGHT, 4)
-      .fill({ color: COLORS.panelStrong, alpha: 0.96 })
-      .stroke({ color, width: 1, alpha: 0.75 });
+      .roundRect(0, 0, width, PILL_HEIGHT, 8)
+      .fill({ color: COLORS.panelStrong })
+      .stroke({ color, width: 1, alpha: 0.45 });
     parts.background
-      .rect(1, 1, ACCENT_WIDTH, PILL_HEIGHT - 2)
+      .circle(TOOLTIP_PADDING_X + 3, PILL_HEIGHT / 2, 3.5)
       .fill({ color });
     addText(
       parts.textLayer,
       annotation.text,
-      ACCENT_WIDTH + TOOLTIP_PADDING_X,
-      4,
-      { color, size: 11, weight: "700" },
+      TOOLTIP_PADDING_X + DOT_SPACE,
+      5,
+      { color, size: 11, weight: "600" },
     );
   }
 
   function sync(
     presentation: PlaylistPresentation,
     annotation: PlaylistDragAnnotation | null,
+    tooltipHeight: number = TOOLTIP_HEIGHT,
   ): void {
     const tooltip = presentation.tooltipView;
     if (!tooltip || !annotation) {
@@ -89,7 +103,7 @@ export function createDragAnnotationLayer(
     }
     if (annotation !== painted) repaint(annotation);
     const tooltipY = Math.round(tooltip.y + TOOLTIP_OFFSET_Y);
-    let y = tooltipY + TOOLTIP_HEIGHT + PILL_GAP;
+    let y = tooltipY + tooltipHeight + PILL_GAP;
     // Near the bottom edge: sit above the tooltip instead.
     if (y + PILL_HEIGHT > presentation.state.viewport.height) {
       y = tooltipY - PILL_GAP - PILL_HEIGHT;
@@ -105,5 +119,9 @@ export function createDragAnnotationLayer(
     painted = null;
   }
 
-  return { sync, stats, dispose };
+  function invalidate(): void {
+    painted = null;
+  }
+
+  return { sync, stats, invalidate, dispose };
 }

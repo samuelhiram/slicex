@@ -8,7 +8,8 @@ import {
 } from "./events";
 import { isFutureInstallmentPlan, remainingInstallmentDebt } from "./items";
 import { positiveMoney, roundMoney } from "./money";
-import { countRecurrence } from "./recurrence";
+import { countRecurrence, sanitizeDayOfMonth } from "./recurrence";
+import { DayCursor } from "./schedule";
 import type {
   FinancialDocument,
   FinancialEvent,
@@ -43,7 +44,10 @@ function finiteRate(rate: number | undefined): number {
   return rate !== undefined && Number.isFinite(rate) && rate > 0 ? rate : 0;
 }
 
-/** Debt accounts of the enabled cards, loans and installment plans (document order). */
+/**
+ * Debt accounts of the enabled cards, loans and installment plans (document
+ * order). A card in "statement" payment mode carries `statementCutDay`.
+ */
 export function buildProjectionAccounts(
   doc: FinancialDocument,
   range: { from: ISODate; to: ISODate } = getProjectionRange(doc),
@@ -52,15 +56,18 @@ export function buildProjectionAccounts(
   for (const item of doc.items) {
     if (item.enabled === false) continue;
     switch (item.kind) {
-      case "credit-card":
-        accounts.push({
+      case "credit-card": {
+        const account: ProjectionAccount = {
           id: item.id,
           name: item.name,
           kind: "credit-card",
           openingDebt: positiveMoney(item.balance),
           annualRate: finiteRate(item.annualRate),
-        });
+        };
+        if (item.paymentMode === "statement") account.statementCutDay = sanitizeDayOfMonth(item.cutDay);
+        accounts.push(account);
         break;
+      }
       case "loan":
         accounts.push({
           id: item.id,
@@ -88,11 +95,16 @@ export function buildProjectionAccounts(
 
 interface AccountState {
   debt: number;
+  /** Rate the account accrues at (0 for a "statement" card, which never pays interest). */
   rate: number;
   /** Interest accrued since the last cut and not posted yet (unrounded). */
   pendingInterest: number;
   /** Day number up to which `pendingInterest` has been accrued. */
   accruedTo: number;
+  /** "statement" cards: the pending statement, paid by the next card payment. */
+  statement: number;
+  /** "statement" cards: the first cut not closed yet (see `closeStatements`); null for every other account. */
+  cuts: DayCursor | null;
   /** The entry of `FinancialProjection.accounts` for this id. */
   out: ProjectionAccount;
 }
@@ -111,12 +123,33 @@ function accrue(account: AccountState, day: number): void {
 }
 
 /**
+ * "statement" cards: closes every cut strictly before `day` (a cut closes
+ * once its day is over, after that day's events). Lazy: called before ANY
+ * event touches the account, so no event touched it between the last one
+ * (on or before the oldest open cut) and `day`; the debt at the end of every
+ * cut day passed is therefore the current debt. O(cuts passed), month steps.
+ */
+function closeStatements(account: AccountState, cuts: DayCursor, day: number): void {
+  if (cuts.day >= day) return;
+  account.statement = account.debt;
+  do cuts.advance();
+  while (cuts.day < day);
+}
+
+/**
  * Applies `events` in chronological order (date → type priority, stable)
  * from `initialCash`. Events outside [startDate, endDate] are ignored and
  * events whose applied amount is 0 produce no point. Purchases and debt
  * openings on an unknown account (or without `accountId`: booked on
  * `itemId`) auto-create a zero-rate account; payments to unknown loan /
  * installment accounts only move cash; card payments to unknown cards apply 0.
+ *
+ * Accounts with `statementCutDay` ("statement" cards, see CreditCardItem):
+ * the pending statement starts at the opening debt and becomes the account
+ * debt at every cut (cutDay each month from `startDate`, clamped to the
+ * month length, after that day's events); each "credit-card-payment" on the
+ * account pays min(statement, debt) — its event amount is ignored — and
+ * resets the statement to 0. No interest accrues on those accounts.
  */
 export function projectFinancialTimeline(input: TimelineInput): FinancialProjection {
   const events = isSortedByDateAndType(input.events)
@@ -149,6 +182,7 @@ function projectSortedTimeline(input: TimelineInput, events: readonly FinancialE
     if (existing) {
       existing.debt = roundMoney(existing.debt + opening);
       existing.out.openingDebt = existing.debt;
+      if (existing.cuts !== null) existing.statement = existing.debt;
     } else {
       const rate = finiteRate(account.annualRate);
       const out: ProjectionAccount = {
@@ -158,8 +192,23 @@ function projectSortedTimeline(input: TimelineInput, events: readonly FinancialE
         openingDebt: opening,
         annualRate: rate,
       };
+      let cuts: DayCursor | null = null;
+      if (account.statementCutDay !== undefined) {
+        const cutDay = sanitizeDayOfMonth(account.statementCutDay);
+        out.statementCutDay = cutDay;
+        // Open-ended: only cuts before an event of the range are ever reached.
+        cuts = new DayCursor().startMonthly(cutDay, { lo: startDay, hi: Number.POSITIVE_INFINITY });
+      }
       outAccounts.push(out);
-      accounts.set(account.id, { debt: opening, rate, pendingInterest: 0, accruedTo: startDay, out });
+      accounts.set(account.id, {
+        debt: opening,
+        rate: cuts === null ? rate : 0,
+        pendingInterest: 0,
+        accruedTo: startDay,
+        statement: opening,
+        cuts,
+        out,
+      });
     }
   }
 
@@ -186,6 +235,7 @@ function projectSortedTimeline(input: TimelineInput, events: readonly FinancialE
     // Purchases / openings without an accountId are booked on the item itself.
     const accountId = event.accountId ?? (opensDebt ? event.itemId : undefined);
     let account = accountId !== undefined ? accounts.get(accountId) : undefined;
+    if (account !== undefined && account.cuts !== null) closeStatements(account, account.cuts, day);
 
     let cashDelta = 0;
     let debtDelta = 0;
@@ -222,7 +272,15 @@ function projectSortedTimeline(input: TimelineInput, events: readonly FinancialE
       }
       case "credit-card-payment": {
         if (!account) break;
-        const applied = Math.min(positiveMoney(event.amount), Math.max(0, account.debt));
+        let planned: number;
+        if (account.cuts !== null) {
+          // "statement" card: pays the statement closed at the last cut, then owes none.
+          planned = account.statement;
+          account.statement = 0;
+        } else {
+          planned = positiveMoney(event.amount);
+        }
+        const applied = Math.min(planned, Math.max(0, account.debt));
         cashDelta = -applied;
         debtDelta = -applied;
         break;
@@ -244,7 +302,7 @@ function projectSortedTimeline(input: TimelineInput, events: readonly FinancialE
           annualRate: 0,
         };
         outAccounts.push(out);
-        account = { debt: 0, rate: 0, pendingInterest: 0, accruedTo: day, out };
+        account = { debt: 0, rate: 0, pendingInterest: 0, accruedTo: day, statement: 0, cuts: null, out };
         accounts.set(accountId, account);
       }
       if (account) {

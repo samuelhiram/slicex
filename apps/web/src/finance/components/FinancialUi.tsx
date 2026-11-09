@@ -59,10 +59,10 @@ export function jumpPlayheadToDate(
   const beat = Math.max(0, bridge.beatAtDate(date));
   core.setPlayPosition(beat);
   const { viewport } = core.getState();
+  // The core's own metrics (the finance shell widens the header column).
+  const metrics = core.metrics ?? DEFAULT_PLAYLIST_METRICS;
   const laneWidth =
-    viewport.width -
-    DEFAULT_PLAYLIST_METRICS.trackHeaderWidth -
-    DEFAULT_PLAYLIST_METRICS.scrollbarSize;
+    viewport.width - metrics.trackHeaderWidth - metrics.scrollbarSize;
   if (laneWidth <= 0 || viewport.pxPerBeat <= 0) return;
   const x = beat * viewport.pxPerBeat;
   if (x < viewport.scrollX || x > viewport.scrollX + laneWidth) {

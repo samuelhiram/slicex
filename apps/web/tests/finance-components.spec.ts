@@ -138,6 +138,24 @@ function createFakeBridge(initial: FinancialDocument, options: FakeOptions = {})
     getOverviewData: () => null,
     getDragAnnotation: () => null,
     getTrackMeta: () => null,
+    isHighlighted: () => false,
+    canExtend: () => true,
+    getDayDetail: () => null,
+    getTrackLayout: () => ({ tracks: [], placement: {} }),
+    levelDrag: () => null,
+    valleyAt: () => null,
+    applyValleyFix: vi.fn(() => false),
+    setHighlight: vi.fn(),
+    setPreview: vi.fn(),
+    getPreview: () => null,
+    getPreviewEffect: () => null,
+    setComparison: vi.fn(),
+    getComparison: () => null,
+    animateFrom: vi.fn(),
+    isAnimating: () => false,
+    exportSession: () => ({ session: { history: null }, doc }),
+    importSession: vi.fn(),
+    loadDocument: vi.fn((next: FinancialDocument) => commit(next)),
     destroy: () => listeners.clear(),
   } satisfies FinancialBridgeApi;
   return { bridge, locked, fakeCore };
@@ -431,13 +449,17 @@ describe("react-3: converting a card never picks itself / a dead card blocks not
 
 // --- react-4 -----------------------------------------------------------------
 
-describe("react-4: '+ Ingreso' creates nothing until Guardar", () => {
-  it("summary bar '+ Ingreso' hands a draft to the shell and adds nothing", () => {
+describe("react-4: 'Nuevo → Ingreso' creates nothing until Guardar", () => {
+  it("summary bar 'Nuevo → Ingreso' hands a draft to the shell and adds nothing", () => {
     const { bridge } = createFakeBridge(createDemoFinancialDocument(START));
     const before = bridge.getDocument().items.length;
     const onCreateDraft = vi.fn();
     mount(h(FinancialSummaryBar, { bridge, onCreateDraft }));
-    click(mustButton(document, "+ Ingreso"));
+    click(document.querySelector(".fin-new__trigger") as HTMLElement);
+    const menu = document.querySelector('[role="menu"][aria-label="Nuevo objeto"]');
+    expect(menu?.querySelectorAll(".fin-new__item").length).toBe(6);
+    click(document.querySelector('.fin-new__item[data-kind="income"]') as HTMLElement);
+    expect(document.querySelector(".fin-new__menu")).toBeNull();
     expect(bridge.createDraftItem).toHaveBeenCalledWith("income");
     expect(onCreateDraft).toHaveBeenCalledTimes(1);
     expect(onCreateDraft.mock.calls[0]![0]).toBe(
@@ -710,15 +732,16 @@ describe("editor dates: es-MX text fields, never the native date picker", () => 
     expect(document.querySelector('.fin-editor input[type="date"]')).toBeNull();
     expect(field("Fecha").type).toBe("text");
     expect(field("Fecha").value).toBe("20/11/2026");
-    expect(datePreview("Fecha").textContent).toBe("vie 20 NOV 2026");
-    expect(field("Fecha final").value).toBe("20/05/2027");
-    expect(datePreview("Fecha final").textContent).toBe("jue 20 MAY 2027");
+    expect(datePreview("Fecha").textContent).toBe("vie 20 nov 2026");
+    // A recurring end is a number of payments: 20 nov … 20 may = 7.
+    expect(field("Pagos").value).toBe("7");
+    expect(datePreview("Pagos").textContent).toBe("Último: jue 20 may 2027");
   });
 
   it("typing '15 dic' saves 2026-12-15 (year from today) and the preview follows", () => {
     const bridge = open();
     typeInto(field("Fecha"), "15 dic");
-    expect(datePreview("Fecha").textContent).toBe("mar 15 DIC 2026");
+    expect(datePreview("Fecha").textContent).toBe("mar 15 dic 2026");
     expect(field("Fecha").getAttribute("aria-invalid")).toBe("false");
     blur(field("Fecha"));
     expect(field("Fecha").value).toBe("15/12/2026");
@@ -729,7 +752,7 @@ describe("editor dates: es-MX text fields, never the native date picker", () => 
     expect(saved.recurrence.anchorDate).toBe("2026-12-15");
   });
 
-  it.each(["15/12/2026", "15-12-2026", "2026-12-15", "15 dic 2026", "mar 15 DIC 2026"])(
+  it.each(["15/12/2026", "15-12-2026", "2026-12-15", "15 dic 2026", "mar 15 dic 2026"])(
     "accepts %s",
     (raw) => {
       const bridge = open();
@@ -753,7 +776,7 @@ describe("editor dates: es-MX text fields, never the native date picker", () => 
     // Fixing the text clears it.
     typeInto(field("Fecha"), "31/12/2026");
     expect(errorText()).toBe("");
-    expect(datePreview("Fecha").textContent).toBe("jue 31 DIC 2026");
+    expect(datePreview("Fecha").textContent).toBe("jue 31 dic 2026");
   });
 
   it("↑ / ↓ move the date ±1 day (Shift: ±7)", () => {
@@ -763,38 +786,147 @@ describe("editor dates: es-MX text fields, never the native date picker", () => 
     expect(field("Fecha").value).toBe("21/11/2026");
     pressKey(field("Fecha"), "ArrowDown", { shiftKey: true });
     expect(field("Fecha").value).toBe("14/11/2026");
-    expect(datePreview("Fecha").textContent).toBe("sáb 14 NOV 2026");
+    expect(datePreview("Fecha").textContent).toBe("sáb 14 nov 2026");
     click(mustButton(document, "Guardar"));
     expect(bridge.replaceItem.mock.calls[0]![0].recurrence.startDate).toBe("2026-11-14");
   });
 
-  it("'Fecha final': year relative to the start, ↓ never goes below it", () => {
+  it("'Pagos': the end is the n-th payment", () => {
     const bridge = open();
-    // 15 NOV is before the 20 NOV 2026 start: it means 15 NOV 2027.
-    typeInto(field("Fecha final"), "15 nov");
-    expect(datePreview("Fecha final").textContent).toBe("lun 15 NOV 2027");
-    typeInto(field("Fecha final"), "21/11/2026");
-    pressKey(field("Fecha final"), "ArrowDown");
-    pressKey(field("Fecha final"), "ArrowDown");
-    pressKey(field("Fecha final"), "ArrowDown");
-    expect(field("Fecha final").value).toBe("20/11/2026");
+    typeInto(field("Pagos"), "3");
+    expect(datePreview("Pagos").textContent).toBe("Último: mié 20 ene 2027");
     click(mustButton(document, "Guardar"));
-    expect(bridge.replaceItem.mock.calls[0]![0].recurrence.endDate).toBe("2026-11-20");
+    expect(bridge.replaceItem.mock.calls[0]![0].recurrence.endDate).toBe("2027-01-20");
   });
 
-  it("'Indefinido' disables the end date; unticking restores a valid one", () => {
+  it("'Día de pago': any day 1–30 or the last day of the month, keeping the payments", () => {
+    const bridge = open();
+    expect(field<HTMLSelectElement>("Día de pago").value).toBe("20");
+    expect(datePreview("Día de pago").textContent).toBe("El día 20 de cada mes");
+    choose(field<HTMLSelectElement>("Día de pago"), "31");
+    expect(datePreview("Día de pago").textContent).toBe("El último día de cada mes");
+    expect(field("Fecha").value).toBe("30/11/2026");
+    expect(field("Pagos").value).toBe("7");
+    // 30 nov, 31 dic, 31 ene, 28 feb, 31 mar, 30 abr, 31 may.
+    expect(datePreview("Pagos").textContent).toBe("Último: lun 31 may 2027");
+    click(mustButton(document, "Guardar"));
+    const saved = bridge.replaceItem.mock.calls[0]![0].recurrence;
+    expect(saved.startDate).toBe("2026-11-30");
+    expect(saved.anchorDate!.endsWith("-31")).toBe(true);
+    expect(saved.endDate).toBe("2027-05-31");
+  });
+
+  it("an end between paydays (start 16, end 15) is saved on its last payment", () => {
+    const loan: FinancialItem = {
+      id: "fin-prestamo",
+      kind: "loan",
+      name: "Préstamo",
+      paymentAmount: 9000,
+      recurrence: { frequency: "monthly", startDate: "2026-11-16", endDate: "2027-05-15" },
+    };
+    const bridge = open(loan);
+    expect(field("Pagos").value).toBe("6");
+    expect(datePreview("Pagos").textContent).toBe("Último: vie 16 abr 2027");
+    click(mustButton(document, "Guardar"));
+    expect(bridge.replaceItem.mock.calls[0]![0].recurrence.endDate).toBe("2027-04-16");
+  });
+
+  it("'Indefinido' disables the payments; unticking restores about a year", () => {
     open();
     const indefinite = document.querySelector<HTMLInputElement>(
       '.fin-editor__check input[type="checkbox"]',
     )!;
     click(indefinite);
-    expect(field("Fecha final").disabled).toBe(true);
-    expect(field("Fecha final").value).toBe("");
-    expect(datePreview("Fecha final").textContent).toBe("");
+    expect(field("Pagos").disabled).toBe(true);
+    expect(field("Pagos").value).toBe("");
+    expect(datePreview("Pagos").textContent).toBe("Sin final: sigue hasta el horizonte");
     click(indefinite);
-    expect(field("Fecha final").disabled).toBe(false);
-    // addMonths(start, 12)
-    expect(field("Fecha final").value).toBe("20/11/2027");
+    expect(field("Pagos").disabled).toBe(false);
+    expect(field("Pagos").value).toBe("12");
+    expect(datePreview("Pagos").textContent).toBe("Último: mié 20 oct 2027");
     expect(errorText()).toBe("");
+  });
+});
+
+// --- Header menus (review fixes) ---------------------------------------------
+
+describe("header menus: ARIA menu button, portal, outside close", () => {
+  function key(target: Element, k: string) {
+    act(() => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+    });
+  }
+
+  function mountBar(inert = false) {
+    const { bridge } = createFakeBridge(createDemoFinancialDocument(START));
+    const onCreateDraft = vi.fn();
+    mount(h(FinancialSummaryBar, { bridge, onCreateDraft, inert }));
+    return { bridge, onCreateDraft };
+  }
+
+  const trigger = () => document.querySelector<HTMLButtonElement>(".fin-new__trigger")!;
+  const menu = () => document.querySelector<HTMLElement>(".fin-new__menu");
+
+  it("opening focuses the first item; arrows / Home / End move; Escape returns focus", () => {
+    mountBar();
+    click(trigger());
+    const items = [...document.querySelectorAll<HTMLElement>(".fin-new__item")];
+    expect(document.activeElement).toBe(items[0]);
+    key(items[0]!, "ArrowDown");
+    expect(document.activeElement).toBe(items[1]);
+    key(items[1]!, "ArrowUp");
+    key(items[0]!, "ArrowUp");
+    expect(document.activeElement).toBe(items[items.length - 1]);
+    key(items[items.length - 1]!, "Home");
+    expect(document.activeElement).toBe(items[0]);
+    key(items[0]!, "Escape");
+    expect(menu()).toBeNull();
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  it("Tab closes the menu and puts focus back on the trigger", () => {
+    mountBar();
+    click(trigger());
+    key(document.activeElement!, "Tab");
+    expect(menu()).toBeNull();
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  it("a pointerdown anywhere outside closes it (capture: the canvas can't swallow it)", () => {
+    mountBar();
+    click(trigger());
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    outside.addEventListener("pointerdown", (event) => event.stopPropagation());
+    act(() => {
+      outside.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    expect(menu()).toBeNull();
+  });
+
+  it("closes when the bar becomes inert (an editor opened)", () => {
+    const { bridge } = createFakeBridge(createDemoFinancialDocument(START));
+    const onCreateDraft = vi.fn();
+    mount(h(FinancialSummaryBar, { bridge, onCreateDraft, inert: false }));
+    click(trigger());
+    expect(menu()).not.toBeNull();
+    act(() => root!.render(h(FinancialSummaryBar, { bridge, onCreateDraft, inert: true })));
+    expect(menu()).toBeNull();
+  });
+
+  it("popovers render in document.body, outside the masked metrics row", () => {
+    mountBar();
+    const chip = document.querySelector<HTMLButtonElement>("button.fin-summary__chip");
+    expect(chip).not.toBeNull();
+    // The alerts live in the fixed action group, never in the scroller.
+    expect(chip!.closest(".fin-summary__actions")).not.toBeNull();
+    expect(chip!.closest(".fin-summary__metrics")).toBeNull();
+    click(chip!);
+    const popover = document.querySelector<HTMLElement>('[aria-label="Alertas de liquidez"]');
+    expect(popover).not.toBeNull();
+    expect(popover!.parentElement).toBe(document.body);
+    expect(popover!.closest(".fin-summary")).toBeNull();
+    click(trigger());
+    expect(menu()!.parentElement).toBe(document.body);
   });
 });

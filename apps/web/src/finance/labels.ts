@@ -12,13 +12,16 @@ export const KIND_LABELS: Readonly<Record<FinancialItemKind, string>> = {
   "installment-plan": "MSI",
 };
 
+// Mid-luminance hues that read on both the light and the dark theme: the
+// canvas tints clip cards with them and uses them at full strength for the
+// accent bar, the content and the track dot.
 export const KIND_COLORS: Readonly<Record<FinancialItemKind, string>> = {
-  income: "#3fb37f",
-  expense: "#e0645c",
-  loan: "#b07ad9",
-  "credit-card": "#4f8fe0",
-  "card-purchase": "#e39b3d",
-  "installment-plan": "#43b5c4",
+  income: "#1f9d55",
+  expense: "#e5484d",
+  loan: "#8e4ec6",
+  "credit-card": "#3e63dd",
+  "card-purchase": "#f76b15",
+  "installment-plan": "#0d9b8a",
 };
 
 export const KIND_ORDER: ReadonlyArray<FinancialItemKind> = [
