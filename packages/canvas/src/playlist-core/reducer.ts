@@ -62,7 +62,9 @@ function dragPreviewsEqual(
         a.primaryClipId !== other.primaryClipId ||
         a.previewTrackIndex !== other.previewTrackIndex ||
         a.previewStart !== other.previewStart ||
-        a.allMoves.length !== other.allMoves.length
+        a.allMoves.length !== other.allMoves.length ||
+        (a.freeLane?.trackIndex ?? -1) !== (other.freeLane?.trackIndex ?? -1) ||
+        (a.freeLane?.lane ?? -1) !== (other.freeLane?.lane ?? -1)
       ) {
         return false;
       }
@@ -72,7 +74,8 @@ function dragPreviewsEqual(
         if (
           left.id !== right.id ||
           left.start !== right.start ||
-          left.trackIndex !== right.trackIndex
+          left.trackIndex !== right.trackIndex ||
+          left.lane !== right.lane
         ) {
           return false;
         }
@@ -92,6 +95,15 @@ function dragPreviewsEqual(
     case "marker": {
       const other = b as Extract<PlaylistDragPreview, { kind: "marker" }>;
       return a.markerId === other.markerId && a.previewTime === other.previewTime;
+    }
+    case "clip-create": {
+      const other = b as Extract<PlaylistDragPreview, { kind: "clip-create" }>;
+      return (
+        a.trackIndex === other.trackIndex &&
+        a.lane === other.lane &&
+        a.previewStart === other.previewStart &&
+        a.previewDuration === other.previewDuration
+      );
     }
     default: {
       const exhaustive: never = a;
@@ -544,7 +556,7 @@ export function playlistReducer(
 // The clips array is only copied from the first clip that really moves.
 function moveClips(
   state: PlaylistState,
-  updates: { id: string; start: number; trackIndex: number }[],
+  updates: { id: string; start: number; trackIndex: number; lane?: number }[],
 ): PlaylistState {
   const byId = new Map(updates.map((update) => [update.id, update]));
   const maxTrackIndex = updates.reduce(
@@ -560,9 +572,20 @@ function moveClips(
     if (update) {
       const start = Math.max(0, update.start);
       const trackId = getTrackIdByIndex(materialized, update.trackIndex);
-      if (start !== clip.start || trackId !== clip.trackId) {
+      // Lane: the one asked for; else kept in the same track, and dropped
+      // on another track (the lane layout then picks the first free one).
+      const lane =
+        update.lane !== undefined
+          ? Math.max(0, Math.floor(update.lane))
+          : trackId === clip.trackId
+            ? (clip.lane ?? 0)
+            : 0;
+      if (start !== clip.start || trackId !== clip.trackId || lane !== (clip.lane ?? 0)) {
         clips ??= source.slice(0, index);
-        clips.push({ ...clip, start, trackId });
+        const moved: PlaylistClip = { ...clip, start, trackId };
+        if (lane > 0) moved.lane = lane;
+        else delete moved.lane;
+        clips.push(moved);
         continue;
       }
     }

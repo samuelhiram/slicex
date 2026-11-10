@@ -88,6 +88,7 @@ export const selectTool: PlaylistTool = {
             id: clip.id,
             start: clip.start,
             trackIndex: getTrackIndexById(newState, clip.trackId),
+            lane: clip.lane ?? 0,
           })),
         };
       }
@@ -117,6 +118,7 @@ export const selectTool: PlaylistTool = {
           id: clip.id,
           start: clip.start,
           trackIndex: getTrackIndexById(state, clip.trackId),
+          lane: clip.lane ?? 0,
         })),
       };
     }

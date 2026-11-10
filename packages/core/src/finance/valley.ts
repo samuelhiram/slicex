@@ -338,7 +338,13 @@ function candidateFor(
 
   // A monthly expense or loan payment: move its day of month so the
   // occurrence inside the valley lands on the next payday.
-  if (rec.frequency === "monthly" && (item.kind === "expense" || item.kind === "loan")) {
+  // (Plain monthly only: with "cada N meses" the anchor also carries the
+  // month phase, which a move to the next payday would shift.)
+  if (
+    rec.frequency === "monthly" &&
+    (rec.interval ?? 1) === 1 &&
+    (item.kind === "expense" || item.kind === "loan")
+  ) {
     if (nextInflow === null || shift <= 0 || shift > MAX_MONTHLY_SHIFT) return null;
     const moved = moveMonthlyDay(rec, cause.date, nextInflow.date, doc.startDate);
     if (moved === null) return null;

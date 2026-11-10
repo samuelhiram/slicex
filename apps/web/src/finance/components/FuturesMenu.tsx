@@ -9,7 +9,7 @@ import { useDismiss } from "../../ui/use-dismiss";
 import { createPortal } from "react-dom";
 import type { FinancialBridgeApi } from "../bridge-api";
 import { formatDateShort } from "../format";
-import type { Futures } from "../futures";
+import { MAIN_BRANCH_ID, type Futures } from "../futures";
 import { usePlayheadDay } from "./FinancialUi";
 
 export interface FuturesMenuProps {
@@ -72,6 +72,9 @@ export function FuturesMenu({ bridge, futures, inert = false }: FuturesMenuProps
         ref={triggerRef}
         type="button"
         className="fin-futures__trigger"
+        // Alone on the main plan, the name says nothing new: narrower
+        // windows may show just the icon (the name stays its label).
+        data-quiet={branches.length === 1 && active.id === MAIN_BRANCH_ID ? "true" : undefined}
         aria-haspopup="menu"
         aria-expanded={open}
         title="Futuros: versiones alternativas de tu año"

@@ -445,7 +445,8 @@ export function screenXToTime(
   );
 }
 
-export function getTrackHeight(
+// Height of ONE lane of the track (what the user resizes; clamped).
+export function getTrackLaneHeight(
   track: PlaylistTrack,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): number {
@@ -454,6 +455,19 @@ export function getTrackHeight(
     metrics.trackMinHeight,
     Math.min(metrics.trackMaxHeight, raw),
   );
+}
+
+// Stacked lanes of the track (≥ 1; see lanes.ts).
+export function getTrackLaneCount(track: PlaylistTrack): number {
+  return Math.max(1, Math.floor(track.lanes ?? 1));
+}
+
+// Whole row: its lanes, each one lane-height tall.
+export function getTrackHeight(
+  track: PlaylistTrack,
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  return getTrackLaneHeight(track, metrics) * getTrackLaneCount(track);
 }
 
 // Top of the track row in scene coordinates (without ruler offset and without
@@ -536,13 +550,14 @@ export function getClipRect(
 ): PlaylistRect {
   const trackIndex = getTrackIndexById(state, clip.trackId);
   const rowTop = trackIndexToScreenY(state, trackIndex, metrics);
-  const rowHeight = getTrackHeightByIndex(state, trackIndex, metrics);
+  const track = state.tracks[trackIndex];
+  const laneHeight = track ? getTrackLaneHeight(track, metrics) : metrics.trackHeight;
 
   return {
     x: timeToScreenX(state, clip.start, metrics),
-    y: rowTop + metrics.clipPaddingY,
+    y: rowTop + (clip.lane ?? 0) * laneHeight + metrics.clipPaddingY,
     width: clip.duration * state.viewport.pxPerBeat,
-    height: rowHeight - metrics.clipPaddingY * 2,
+    height: laneHeight - metrics.clipPaddingY * 2,
   };
 }
 

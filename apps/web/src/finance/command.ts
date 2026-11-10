@@ -160,6 +160,14 @@ const SEMIMONTHLY_ADJ = new Set(["quincenal", "quincenales", "quincenalmente"]);
 const MONTHLY_ADJ = new Set(["mensual", "mensuales", "mensualmente", "mensualidad", "mensualidades"]);
 const WEEKLY_ADJ = new Set(["semanal", "semanales", "semanalmente"]);
 const BIWEEKLY_ADJ = new Set(["catorcenal", "catorcenales", "catorcenalmente", "bisemanal", "bisemanales"]);
+// "Cada N meses" in one word.
+const MONTHS_ADJ: ReadonlyMap<string, number> = new Map([
+  ["bimestral", 2], ["bimestrales", 2],
+  ["trimestral", 3], ["trimestrales", 3],
+  ["cuatrimestral", 4], ["cuatrimestrales", 4],
+  ["semestral", 6], ["semestrales", 6],
+  ["anual", 12], ["anuales", 12], ["anualmente", 12],
+]);
 const PER_PREFIXES = new Set(["cada", "por", "x", "al", "a"]);
 
 const PAYMENT_UNITS = new Set([
@@ -566,9 +574,18 @@ function resolveEndBound(expr: DateExpr, start: ISODate): ISODate {
   }
 }
 
-function recurrenceOf(frequency: RecurrenceFrequency, startDate: ISODate, anchor: ISODate | undefined): FinancialRecurrence {
+function recurrenceOf(
+  frequency: RecurrenceFrequency,
+  startDate: ISODate,
+  anchor: ISODate | undefined,
+  interval?: number,
+): FinancialRecurrence {
   const rule: FinancialRecurrence = { frequency, startDate };
   if (anchor !== undefined) rule.anchorDate = anchor;
+  // "Cada N días / meses" (the editor's same model: schedule-ui.ts).
+  if (interval !== undefined && interval > 1 && (frequency === "daily" || frequency === "monthly")) {
+    rule.interval = interval;
+  }
   return rule;
 }
 
@@ -916,8 +933,11 @@ function parseCommandUnsafe(text: string, ctx: CommandContext): ParsedCommand | 
     }
   }
 
-  // 4a. "cada N días|semanas|meses".
+  // 4a. "cada N días|semanas|meses" — any N, like the editor's "Cada [N]
+  //     [días | meses]". Colloquial MX ones keep their meaning: "cada 8 días"
+  //     is weekly, "cada 15 días" the quincena, "cada 30 días" monthly.
   let freq: RecurrenceFrequency | null = null;
+  let freqInterval: number | undefined;
   let unsupportedPeriod = false;
   for (let i = 0; i < w.length; i += 1) {
     if (w.at(i) !== "cada") continue;
@@ -925,20 +945,28 @@ function parseCommandUnsafe(text: string, ctx: CommandContext): ParsedCommand | 
     if (n === null) continue;
     const unit = w.at(i + 2);
     let f: RecurrenceFrequency | null;
+    let every: number | undefined;
     if (unit === "dias" || unit === "dia") {
-      f = n === 7 || n === 8 ? "weekly" : n === 14 ? "biweekly" : n === 15 ? "semimonthly" : n >= 28 && n <= 31 ? "monthly" : null;
+      f = n === 7 || n === 8 ? "weekly" : n === 14 ? "biweekly" : n === 15 ? "semimonthly" : n >= 28 && n <= 31 ? "monthly" : n >= 1 ? "daily" : null;
+      if (f === "daily") every = n;
     } else if (unit === "semanas" || unit === "semana") {
-      f = n === 1 ? "weekly" : n === 2 ? "biweekly" : null;
+      f = n === 1 ? "weekly" : n === 2 ? "biweekly" : n >= 3 ? "daily" : null;
+      if (f === "daily") every = n * 7;
     } else if (unit === "meses" || unit === "mes") {
-      f = n === 1 ? "monthly" : null;
+      f = n >= 1 ? "monthly" : null;
+      if (n > 1) every = n;
     } else if (unit === "quincenas" || unit === "quincena") {
       f = n === 1 ? "semimonthly" : null;
     } else {
       continue;
     }
-    // Unsupported periods ("cada 3 meses") are consumed but leave the frequency to the defaults.
-    if (f !== null) freq ??= f;
-    else unsupportedPeriod = true;
+    // Unsupported periods ("cada 2 quincenas") are consumed but leave the frequency to the defaults.
+    if (f !== null) {
+      if (freq === null) {
+        freq = f;
+        freqInterval = every;
+      }
+    } else unsupportedPeriod = true;
     w.use(i, i + 3);
   }
 
@@ -1009,7 +1037,10 @@ function parseCommandUnsafe(text: string, ctx: CommandContext): ParsedCommand | 
       return PER_PREFIXES.has(prev) ? i - 1 : i;
     };
     if (SEMIMONTHLY_ADJ.has(t)) f = "semimonthly";
-    else if (MONTHLY_ADJ.has(t)) f = "monthly";
+    else if (MONTHS_ADJ.has(t)) {
+      f = "monthly";
+      if (freq === null) freqInterval = MONTHS_ADJ.get(t);
+    } else if (MONTHLY_ADJ.has(t)) f = "monthly";
     else if (WEEKLY_ADJ.has(t)) f = "weekly";
     else if (BIWEEKLY_ADJ.has(t)) f = "biweekly";
     else if (t === "quincena" || t === "catorcena") {
@@ -1187,8 +1218,12 @@ function parseCommandUnsafe(text: string, ctx: CommandContext): ParsedCommand | 
   if (said === "" && !kindNamed) assume("nombre");
 
   let frequency: RecurrenceFrequency;
+  let interval: number | undefined;
   if (kind === "credit-card" || kind === "installment-plan") frequency = "monthly";
-  else if (freq !== null) frequency = freq;
+  else if (freq !== null) {
+    frequency = freq;
+    interval = freqInterval;
+  }
   else if (durationFreq !== null) frequency = durationFreq;
   else if (weekdayFreq) frequency = "weekly";
   else if (kind === "loan") {
@@ -1231,7 +1266,7 @@ function parseCommandUnsafe(text: string, ctx: CommandContext): ParsedCommand | 
   // End date.
   let endDate: ISODate | undefined;
   if (kind !== "credit-card" && kind !== "installment-plan") {
-    const rule = recurrenceOf(frequency, startDate, anchor);
+    const rule = recurrenceOf(frequency, startDate, anchor, interval);
     if (frequency === "once") {
       endDate = startDate;
     } else if (duration !== null) {
@@ -1244,7 +1279,7 @@ function parseCommandUnsafe(text: string, ctx: CommandContext): ParsedCommand | 
       assume("plazo");
     }
   }
-  const recurrence = recurrenceOf(frequency, startDate, anchor);
+  const recurrence = recurrenceOf(frequency, startDate, anchor, interval);
   if (endDate !== undefined) recurrence.endDate = endDate;
 
   // Item.
@@ -1316,9 +1351,13 @@ function scheduleParts(rule: FinancialRecurrence, today: ISODate): string[] {
   if (rule.frequency === "once") return [start === today ? "hoy" : `el ${displayDate(start, today)}`];
   const anchor = rule.anchorDate ?? start;
   const parts: string[] = [];
+  const every = rule.interval !== undefined && rule.interval > 1 ? rule.interval : 1;
   switch (rule.frequency) {
     case "monthly":
-      parts.push(`cada mes, día ${ymd(anchor)[2]}`);
+      parts.push(every > 1 ? `cada ${every} meses, día ${ymd(anchor)[2]}` : `cada mes, día ${ymd(anchor)[2]}`);
+      break;
+    case "daily":
+      parts.push(every > 1 ? `cada ${every} días` : "cada día");
       break;
     case "semimonthly":
       parts.push("cada quincena (15 y fin de mes)");
@@ -1386,6 +1425,7 @@ const VOCABULARY: ReadonlyArray<string> = [
   "mañana", "pasado mañana", "sueldo", "nómina", "renta", "préstamo", "tarjeta",
   "aguinaldo", "colegiatura", "gasolina", "súper", "supermercado", "semana",
   "meses", "pagos", "mensualidades", "desde", "hasta", "cada",
+  "bimestral", "trimestral", "semestral",
   "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
   "septiembre", "octubre", "noviembre", "diciembre",
   "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo",

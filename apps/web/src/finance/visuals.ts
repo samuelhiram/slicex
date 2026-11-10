@@ -29,7 +29,7 @@ import {
   formatMoneyWhole,
   formatSignedMoneyWhole,
 } from "./format";
-import { FREQUENCY_SHORT } from "./labels";
+import { autoRowName, frequencyShort } from "./labels";
 import { beatOf, horizonBeat } from "./mapping";
 
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
@@ -340,7 +340,7 @@ export function describeItemAt(
   date: ISODate,
   debtAt: ReadonlyMap<string, number>,
 ): string {
-  const freq = FREQUENCY_SHORT[item.recurrence.frequency];
+  const freq = frequencyShort(item.recurrence);
   // A one-time event is a narrow card: just the amount, whole pesos (the
   // editor shows the cents), so it fits instead of being cut.
   const once = item.recurrence.frequency === "once";
@@ -409,7 +409,7 @@ export function describeItemAt(
 // --- track header meta -----------------------------------------------------
 
 function sameMeta(a: PlaylistTrackMeta, b: PlaylistTrackMeta): boolean {
-  return a.subtitle === b.subtitle && a.meter === b.meter;
+  return a.title === b.title && a.subtitle === b.subtitle && a.meter === b.meter;
 }
 
 /** Signed cash impact of every item over the projection. */
@@ -428,6 +428,8 @@ export function buildTrackMeta(
   trackOfItem: ReadonlyMap<string, string>,
   payoffs: ReadonlyMap<string, DebtPayoffEstimate>,
   previous: ReadonlyMap<string, PlaylistTrackMeta>,
+  // Rows the person never named: their name follows what they hold.
+  autoRows: ReadonlySet<string> = new Set(),
 ): Map<string, PlaylistTrackMeta> {
   const impacts = itemImpacts(projection);
   const period = doc.horizonMonths === 12 ? "/año" : ` en ${doc.horizonMonths} meses`;
@@ -476,6 +478,9 @@ export function buildTrackMeta(
       subtitle = `${items.length} eventos · ${impact > 0 ? "+" : ""}${compactMoney(impact)}`;
     }
     const meta: PlaylistTrackMeta = { subtitle, meter };
+    // "Línea de eventos" once an unnamed row holds two or more (one or none:
+    // the renderer's label formatting already says "Línea de evento").
+    if (autoRows.has(trackId) && items.length >= 2) meta.title = autoRowName(items.length);
     const old = previous.get(trackId);
     metas.set(trackId, old && sameMeta(old, meta) ? old : meta);
   }

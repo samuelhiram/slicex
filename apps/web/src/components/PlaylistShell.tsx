@@ -6,6 +6,7 @@ import {
   createPlaylistRenderer,
   type PlaylistContextMenu,
   type PlaylistCore,
+  type PlaylistCreateRequest,
   type PlaylistMarkerKind,
   type PlaylistMetrics,
   type PlaylistSnapMode,
@@ -37,10 +38,13 @@ import { RecDialog } from "../finance/components/RecDialog";
 import { StatementDialog } from "../finance/components/StatementDialog";
 import { ValleyCard } from "../finance/components/ValleyCard";
 import { NavControls, NavHelp } from "../finance/components/NavControls";
+import { createFinancialPlaylistState } from "../finance/mapping";
+import { displayRowLabel, ROW_NAME_MANY, ROW_NAME_ONE } from "../finance/labels";
 import {
-  FINANCE_PLAYLIST_METRICS,
-  createFinancialPlaylistState,
-} from "../finance/mapping";
+  financeShellMetrics,
+  shellDensityFor,
+  shellLayoutStyle,
+} from "../finance/shell-metrics";
 import { createCalendarTimeAxis } from "../finance/time-axis";
 import { FinancialSummaryBar } from "../finance/components/FinancialSummaryBar";
 import { PlayheadReadout } from "../finance/components/PlayheadReadout";
@@ -54,22 +58,13 @@ import { useWheelScrollX } from "../ui/wheel-scroll-x";
 // Playback speed of the financial timeline: 1 beat = 1 day.
 const PLAYBACK_DAYS_PER_SECOND = 7;
 
-// The finance playlist draws the money waveform in an overview lane between
-// the ruler and the first track.
-const OVERVIEW_LANE_HEIGHT = 112;
-const SHELL_METRICS: PlaylistMetrics = {
-  ...FINANCE_PLAYLIST_METRICS,
-  overviewLaneHeight: OVERVIEW_LANE_HEIGHT,
-};
-
-// Canvas geometry the DOM overlays (side rail, inspector) align to, so they
-// open BELOW the ruler + money lane instead of covering the curve. A
-// module-level constant: React never re-applies an unchanged style object.
-const SHELL_LAYOUT_STYLE = {
-  "--pl-ruler-h": `${SHELL_METRICS.rulerHeight}px`,
-  "--pl-lane-h": `${SHELL_METRICS.overviewLaneHeight}px`,
-  "--pl-header-w": `${SHELL_METRICS.trackHeaderWidth}px`,
-} as React.CSSProperties;
+// The canvas geometry (money lane + row heights) is picked once, from the
+// window height, when the shell mounts (src/finance/shell-metrics.ts).
+function initialShellDensity() {
+  return shellDensityFor(
+    typeof window === "undefined" ? Number.POSITIVE_INFINITY : window.innerHeight,
+  );
+}
 
 const NAV_HINT_KEY = "slicex.navHint";
 
@@ -264,7 +259,8 @@ interface MenuActions {
 
 const DIVIDER: MenuItemDef = { label: "", onSelect: () => {}, divider: true };
 
-// Track (row) menu. Rows are permanent, like FL's playlist: they can be
+// Row menu. The engine's tracks are "líneas de evento" for the person
+// (slots in English). Rows are permanent, like FL's playlist: they can be
 // emptied, renamed, muted or locked, and new ones inserted, but never
 // removed — the endless empty rows below are always there anyway.
 function buildTrackMenuItems(
@@ -281,14 +277,14 @@ function buildTrackMenuItems(
   const day = Math.max(0, Math.floor(state.playPosition.time));
   return [
     {
-      label: "Nuevo ingreso en este track…",
+      label: "Nuevo ingreso en esta línea…",
       onSelect: () => {
         close();
         actions.newItem("income", day, trackIndex);
       },
     },
     {
-      label: "Nuevo gasto en este track…",
+      label: "Nuevo gasto en esta línea…",
       onSelect: () => {
         close();
         actions.newItem("expense", day, trackIndex);
@@ -296,21 +292,21 @@ function buildTrackMenuItems(
     },
     DIVIDER,
     {
-      label: track.muted ? "Reactivar track" : "Silenciar track",
+      label: track.muted ? "Reactivar línea de evento" : "Silenciar línea de evento",
       onSelect: () => {
         core.toggleTrackMute(trackIndex);
         close();
       },
     },
     {
-      label: track.soloed ? "Quitar solo" : "Solo este track",
+      label: track.soloed ? "Quitar solo" : "Solo esta línea de evento",
       onSelect: () => {
         core.toggleTrackSolo(trackIndex);
         close();
       },
     },
     {
-      label: track.locked ? "Desbloquear track" : "Bloquear track",
+      label: track.locked ? "Desbloquear línea de evento" : "Bloquear línea de evento",
       onSelect: () => {
         core.toggleTrackLock(trackIndex);
         close();
@@ -318,17 +314,26 @@ function buildTrackMenuItems(
     },
     DIVIDER,
     {
-      label: "Renombrar track…",
+      label: "Renombrar línea de evento…",
       onSelect: () => {
-        const next = window.prompt("Nombre del track", track.label ?? `Track ${trackIndex + 1}`);
-        if (next?.trim()) {
-          core.renameTrack(trackIndex, next.trim());
+        const next = window.prompt(
+          "Nombre de la línea de evento (vacío = automático)",
+          displayRowLabel(track.label ?? ""),
+        );
+        if (next !== null) {
+          // Empty, or the automatic name itself: back to automatic, so it
+          // keeps following what the row holds (evento / eventos).
+          const name = next.trim();
+          core.renameTrack(
+            trackIndex,
+            name === ROW_NAME_ONE || name === ROW_NAME_MANY ? "" : name,
+          );
         }
         close();
       },
     },
     {
-      label: "Color del track…",
+      label: "Color de la línea de evento…",
       onSelect: () => {
         pickColorThen(track.color ?? "#888888", (color) => core.recolorTrack(trackIndex, color));
         close();
@@ -336,21 +341,21 @@ function buildTrackMenuItems(
     },
     DIVIDER,
     {
-      label: "Insertar track arriba",
+      label: "Insertar línea de evento arriba",
       onSelect: () => {
         core.insertTrackBelow(trackIndex - 1);
         close();
       },
     },
     {
-      label: "Insertar track abajo",
+      label: "Insertar línea de evento abajo",
       onSelect: () => {
         core.insertTrackBelow(trackIndex);
         close();
       },
     },
     {
-      label: "Vaciar track",
+      label: "Vaciar línea de evento",
       disabled: !hasClips || track.locked === true,
       onSelect: () => {
         core.clearTrackClips(trackIndex);
@@ -404,6 +409,37 @@ function buildClipMenuItems(
       },
     },
   ];
+}
+
+// Draft for the pencil on empty space: the kind of the selected item (the
+// one FL's pencil would stamp), else of what already lives on that row
+// ("Sueldo" -> income), else an expense; dated on that day. A drag also
+// sets the end of a recurring draft.
+function draftForRow(
+  bridge: FinancialBridge,
+  core: PlaylistCore,
+  request: PlaylistCreateRequest,
+): FinancialItem {
+  const state = core.getState();
+  const rowId = state.tracks[request.trackIndex]?.id;
+  const neighbour = rowId ? state.clips.find((clip) => clip.trackId === rowId) : undefined;
+  const like =
+    (request.templateClipId ? bridge.getItem(request.templateClipId) : null) ??
+    (neighbour ? bridge.getItem(neighbour.id) : null);
+  const day = Math.max(0, Math.floor(request.start));
+  const draft = bridge.createDraftItem(like?.kind ?? "expense", day);
+  if (
+    request.duration !== null &&
+    request.duration >= 2 &&
+    draft.recurrence.frequency !== "once"
+  ) {
+    const lastDay = day + Math.round(request.duration) - 1;
+    return {
+      ...draft,
+      recurrence: { ...draft.recurrence, endDate: bridge.dateAtBeat(lastDay) },
+    } as FinancialItem;
+  }
+  return draft;
 }
 
 const MARKER_KIND_OPTIONS: ReadonlyArray<{
@@ -635,27 +671,34 @@ function PlaylistToolbar({ core }: ToolbarProps) {
         className="playlist-shell__snap"
         title="Ajustar a (Retroceso alterna Libre)"
       >
+        {/* The words hide on narrower windows (still the select's name);
+            the magnet inside the pill keeps it recognisable. */}
         <span className="playlist-shell__snap-label">Ajustar a</span>
-        <select
-          value={snapMode}
-          onChange={(event) =>
-            core?.setSnapMode(event.target.value as PlaylistSnapMode)
-          }
-          className="playlist-shell__snap-select"
-        >
-          {SNAP_VALUES.has(snapMode) ? null : (
-            // A mode set elsewhere (e.g. a keyboard shortcut) that the
-            // finance toolbar does not offer: shown, not selectable.
-            <option value={snapMode} disabled>
-              Otro
-            </option>
-          )}
-          {SNAP_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+        <span className="playlist-shell__snap-field">
+          <svg className="playlist-shell__snap-icon" viewBox="0 0 14 14" aria-hidden="true">
+            <path d="M3.5 2v4.5a3.5 3.5 0 0 0 7 0V2M2.4 4.2h2.2M9.4 4.2h2.2" />
+          </svg>
+          <select
+            value={snapMode}
+            onChange={(event) =>
+              core?.setSnapMode(event.target.value as PlaylistSnapMode)
+            }
+            className="playlist-shell__snap-select"
+          >
+            {SNAP_VALUES.has(snapMode) ? null : (
+              // A mode set elsewhere (e.g. a keyboard shortcut) that the
+              // finance toolbar does not offer: shown, not selectable.
+              <option value={snapMode} disabled>
+                Otro
+              </option>
+            )}
+            {SNAP_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </span>
       </label>
       {/* Only a multi-selection is worth a chip (how many will move). */}
       {selectedCount > 1 ? (
@@ -677,6 +720,13 @@ function PlaylistToolbar({ core }: ToolbarProps) {
 
 export function PlaylistShell() {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
+  // Fixed for the life of the playlist (the core's metrics are). The DOM
+  // overlays (side rail, inspector, readout) align to the same numbers
+  // through CSS variables, so they open BELOW the ruler + money lane. Both
+  // objects keep their identity: React never re-applies the style.
+  const [density] = React.useState(initialShellDensity);
+  const metrics = React.useMemo<PlaylistMetrics>(() => financeShellMetrics(density), [density]);
+  const layoutStyle = React.useMemo(() => shellLayoutStyle(metrics), [metrics]);
   // The tool bar scrolls sideways when it can't fit: the wheel moves it.
   const toolBarRef = useWheelScrollX();
   // Light / dark: the DOM follows the CSS tokens; the canvas palette is
@@ -795,7 +845,7 @@ export function PlaylistShell() {
       const plan = bootstrapPlan(today, loadPlan());
       const doc = plan.doc;
       instance = createPlaylistCore(createFinancialPlaylistState(doc, plan.layout), {
-        metrics: SHELL_METRICS,
+        metrics,
         timeAxis: createCalendarTimeAxis(doc.startDate),
         // Financial clips have no time-stretch meaning: a stretch would
         // rescale the schedule phase and shift every payday.
@@ -822,6 +872,20 @@ export function PlaylistShell() {
         clipExtendMinBeatsPerPx: 1 / 3,
         // Valleys explain themselves under the pointer.
         onOverviewHover: (beat) => setHoverDay(beat),
+        // The mouse wheel scrolls the rows, like any document; Shift (or
+        // the wheel over the ruler / money lane) moves time.
+        mouseWheel: "rows",
+        // The pencil never adds an item by itself (it used to stamp an
+        // unnamed $500 "Gasto" on a double-click): it opens the editor on a
+        // draft at that day and row; nothing is added until "Guardar".
+        onCreateRequest: (request) => {
+          if (!instance) return;
+          setEditor({
+            mode: "create",
+            draft: draftForRow(bridgeInstance, instance, request),
+            placement: { trackIndex: request.trackIndex },
+          });
+        },
       });
       setNavigator(interaction.navigator ?? null);
       renderer = createPlaylistRenderer(host, instance, {
@@ -839,6 +903,9 @@ export function PlaylistShell() {
         getOverviewData: () => bridgeInstance.getOverviewData(),
         getDragAnnotation: () => bridgeInstance.getDragAnnotation(),
         getTrackMeta: (trackId) => bridgeInstance.getTrackMeta(trackId),
+        // The engine names empty rows "Track N"; for the person they are
+        // "Línea de evento N".
+        formatTrackLabel: displayRowLabel,
         getClipHighlight: (clipId) => bridgeInstance.isHighlighted(clipId),
         // The cash that day + that day's movements under every date tooltip.
         getTooltipDetail: (beat) => bridgeInstance.getDayDetail(beat),
@@ -959,7 +1026,7 @@ export function PlaylistShell() {
       setFutures(null);
       setNavigator(null);
     };
-  }, [today]);
+  }, [today, metrics]);
 
   // Theme switch: one repaint of the cached canvas layers (never per frame).
   React.useEffect(() => {
@@ -1098,7 +1165,8 @@ export function PlaylistShell() {
     <section
       className="playlist-shell playlist-shell--finance"
       aria-label="Playlist"
-      style={SHELL_LAYOUT_STYLE}
+      data-density={density}
+      style={layoutStyle}
     >
       {bridge ? (
         <FinancialSummaryBar
@@ -1127,7 +1195,7 @@ export function PlaylistShell() {
           tabIndex={0}
           role="application"
           aria-roledescription="línea de tiempo"
-          aria-label="Línea de tiempo: arrastra para mover, rueda para avanzar en el tiempo"
+          aria-label="Línea de tiempo: arrastra para mover, rueda para subir y bajar, Shift+rueda para avanzar en el tiempo"
         />
         <PlaylistContextMenuOverlay core={core} actions={menuActions} />
         {/* Date · cash · debt at the playhead, in the money lane's header
@@ -1168,8 +1236,9 @@ export function PlaylistShell() {
                 </div>
               ) : (
                 <div className="fin-banner__text">
-                  <strong>Muévete libre:</strong> la rueda avanza en el tiempo, Shift+rueda
-                  cambia de fila, Ctrl+rueda o pellizca hace zoom y Espacio+arrastra es la mano.
+                  <strong>Muévete libre:</strong> la rueda sube y baja entre líneas de evento,
+                  Shift+rueda avanza en el tiempo, Ctrl+rueda o pellizca hace zoom y
+                  Espacio+arrastra es la mano.
                 </div>
               )}
               {navHint === "hint" ? (

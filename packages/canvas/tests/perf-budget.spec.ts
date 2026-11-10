@@ -458,9 +458,12 @@ describe("perf budget — UI dispatches keep clips/tracks identity", () => {
   it("a clip edit still yields a new, normalized clips array (tracks kept)", () => {
     const core = createPlaylistCore(stateWithManyClips(10));
     const { clips, tracks } = core.getState();
+    // To an empty row: nothing to stack on, so no track changes (dropping
+    // it on c-0 would stack it in a 2nd lane and resize track 0 —
+    // lanes.spec.ts covers that).
     core.dispatch({
       type: "MOVE_CLIPS",
-      updates: [{ id: "c-3", start: -5, trackIndex: 0 }],
+      updates: [{ id: "c-3", start: -5, trackIndex: 1 }],
     });
     const next = core.getState();
     expect(next.clips).not.toBe(clips);

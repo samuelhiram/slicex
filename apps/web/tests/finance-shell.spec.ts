@@ -16,6 +16,7 @@ import type { FinancialItem } from "@slicex/core";
 import type {
   PlaylistCore,
   PlaylistCoreOptions,
+  PlaylistInteractionOptions,
   PlaylistRendererCallbacks,
 } from "@slicex/canvas";
 import { FINANCE_PLAYLIST_METRICS } from "../src/finance/mapping";
@@ -44,6 +45,7 @@ const hoisted = vi.hoisted(() => ({
   rendererCallbacks: [] as Array<PlaylistRendererCallbacks | undefined>,
   coreOptions: [] as Array<PlaylistCoreOptions | undefined>,
   bridges: [] as ShellBridge[],
+  interactionOptions: [] as Array<PlaylistInteractionOptions | undefined>,
 }));
 
 vi.mock("@slicex/canvas", async (importOriginal) => {
@@ -56,7 +58,14 @@ vi.mock("@slicex/canvas", async (importOriginal) => {
       hoisted.coreOptions.push(args[1]);
       return actual.createPlaylistCore(...args);
     },
-    createPlaylistInteractionController: () => ({ destroy() {} }),
+    createPlaylistInteractionController: (
+      _host: HTMLElement,
+      _core: PlaylistCore,
+      options?: PlaylistInteractionOptions,
+    ) => {
+      hoisted.interactionOptions.push(options);
+      return { destroy() {} };
+    },
     createPlaylistRenderer: (
       _host: HTMLElement,
       _core: PlaylistCore,
@@ -275,6 +284,7 @@ beforeEach(() => {
   hoisted.rendererCallbacks.length = 0;
   hoisted.coreOptions.length = 0;
   hoisted.bridges.length = 0;
+  hoisted.interactionOptions.length = 0;
 });
 
 function loadGlobalsCss() {
@@ -284,10 +294,18 @@ function loadGlobalsCss() {
   document.head.appendChild(style);
 }
 
+// The shell picks its canvas density from the window height at mount.
+const JSDOM_INNER_HEIGHT = window.innerHeight;
+
+function withWindowHeight(height: number) {
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
+}
+
 afterEach(() => {
   if (root) unmountShell();
   document.head.innerHTML = "";
   document.body.innerHTML = "";
+  withWindowHeight(JSDOM_INNER_HEIGHT);
 });
 
 function buttonByText(text: string): HTMLButtonElement | null {
@@ -372,6 +390,33 @@ describe("react-4 (shell): 'Nuevo → X' opens a create-mode editor on a draft",
     expect(dialog()).toBeNull();
     expect(bridge.addItem).toHaveBeenCalledTimes(1);
     expect(bridge.getDocument().items.length).toBe(before + 1);
+  });
+
+  it("the pencil on empty space opens a draft for that row; nothing is added until Guardar", async () => {
+    const { bridge } = await mountShell();
+    const before = bridge.getDocument().items.length;
+    const options = hoisted.interactionOptions.at(-1)!;
+    expect(options.onCreateRequest).toBeTypeOf("function");
+    // The mouse wheel scrolls the rows (Shift + wheel: time).
+    expect(options.mouseWheel).toBe("rows");
+    // An endless empty row far below: no neighbour, no selection → expense.
+    act(() =>
+      options.onCreateRequest!({ trackIndex: 40, start: 12, duration: null, templateClipId: null }),
+    );
+    expect(dialog()?.dataset.mode).toBe("create");
+    expect(dialog()?.getAttribute("aria-label")).toBe("Nuevo Gasto");
+    expect(bridge.addItem).not.toHaveBeenCalled();
+    click(buttonByText("Cancelar"));
+    expect(bridge.getDocument().items.length).toBe(before);
+    expect(bridge.addItem).not.toHaveBeenCalled();
+    // Selected item as template (what FL's pencil would stamp): same kind.
+    act(() =>
+      options.onCreateRequest!({ trackIndex: 40, start: 12, duration: null, templateClipId: "fin-sueldo" }),
+    );
+    expect(dialog()?.getAttribute("aria-label")).toBe("Nuevo Ingreso");
+    click(buttonByText("Guardar"));
+    expect(bridge.addItem).toHaveBeenCalledTimes(1);
+    expect(bridge.addItem.mock.calls[0]![1]).toEqual({ trackIndex: 40 });
   });
 
   it("a double-clicked clip opens the editor in edit mode", async () => {
@@ -473,7 +518,8 @@ describe("Ola 1 wiring: providers, money lane, endless tracks", () => {
     expect(meta).toBe(bridge.getTrackMeta.mock.results.at(-1)!.value);
   });
 
-  it("creates the core with the 112px money lane and endless tracks", async () => {
+  it("creates the core with the 112px money lane and endless tracks (tall window)", async () => {
+    withWindowHeight(1000);
     const { bridge } = await mountShell();
     const options = hoisted.coreOptions[0]!;
     // Tracks are endless (FL): empty rows always wait below the items.
@@ -486,10 +532,26 @@ describe("Ola 1 wiring: providers, money lane, endless tracks", () => {
     expect(bridge.core.metrics.overviewLaneHeight).toBe(112);
     // DOM overlays align below ruler + lane through these two variables.
     const shell = document.querySelector<HTMLElement>(".playlist-shell")!;
+    expect(shell.dataset.density).toBe("comfortable");
     expect(shell.style.getPropertyValue("--pl-lane-h")).toBe("112px");
     expect(shell.style.getPropertyValue("--pl-ruler-h")).toBe(
       `${FINANCE_PLAYLIST_METRICS.rulerHeight}px`,
     );
+  });
+
+  it("a short (laptop) window gets a shorter lane and tighter rows, overlays aligned", async () => {
+    withWindowHeight(738);
+    const { bridge } = await mountShell();
+    const options = hoisted.coreOptions[0]!;
+    expect(options.metrics).toEqual({
+      ...FINANCE_PLAYLIST_METRICS,
+      trackHeight: 60,
+      overviewLaneHeight: 96,
+    });
+    expect(bridge.core.metrics.trackHeight).toBe(60);
+    const shell = document.querySelector<HTMLElement>(".playlist-shell")!;
+    expect(shell.dataset.density).toBe("compact");
+    expect(shell.style.getPropertyValue("--pl-lane-h")).toBe("96px");
   });
 });
 

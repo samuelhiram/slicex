@@ -5,6 +5,17 @@ export interface ClipDragOriginal {
   id: string;
   start: number;
   trackIndex: number;
+  // Lane inside its track at drag start (stacked lanes, lanes.ts).
+  lane: number;
+}
+
+// Per destination track, filled the first time the drag hovers it: whether
+// other (not dragged) clips live there — then the row opens a free lane —
+// and how many lanes it had when the gesture started (the free lane's
+// index). Clips outside the drag don't change during it, so it stays valid.
+export interface ClipDragTrackInfo {
+  hasOthers: boolean;
+  baseLanes: number;
 }
 
 export type ActiveGesture =
@@ -28,6 +39,8 @@ export type ActiveGesture =
       startPointerTime: number;
       startTrackIndex: number;
       originals: ClipDragOriginal[];
+      // Filled lazily by the controller (see ClipDragTrackInfo).
+      trackInfo?: Map<string, ClipDragTrackInfo>;
     }
   | {
       kind: "clip-resize";
@@ -185,6 +198,15 @@ export type ActiveGesture =
         label: string;
         color: string;
         sourceId?: string;
+      };
+      // The host creates through its own flow (onCreateRequest): the drag
+      // only previews the range (dragPreview "clip-create"); on release
+      // the host gets the request. Nothing is created here.
+      hostCreate?: {
+        templateClipId: string | null;
+        // Snapped end of the previewed range; null until the drag passes
+        // minClipDuration (a plain click requests nothing).
+        end: number | null;
       };
     };
 

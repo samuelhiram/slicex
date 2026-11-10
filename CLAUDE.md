@@ -4,7 +4,9 @@ Lee esto antes de tocar el repo. Para comportamiento del producto ver [docs/prod
 
 ## Qué es el producto
 
-Gestor financiero avanzado tipo **Excel-DAW**: timeline infinito con tracks y objetos financieros estirables (ingresos, egresos, deudas con tarjetas/MSI), múltiples timelines clonables para simular escenarios. Expectativa de UX: *Figma Experience pero mejor*. Detalles de mecánicas en [docs/product-spec.md](docs/product-spec.md).
+Gestor financiero avanzado tipo **Excel-DAW**: timeline infinito con líneas de evento y objetos financieros estirables (ingresos, egresos, deudas con tarjetas/MSI), múltiples timelines clonables para simular escenarios. Expectativa de UX: *Figma Experience pero mejor*. Detalles de mecánicas en [docs/product-spec.md](docs/product-spec.md).
+
+**Nombre de las filas:** en producto son **líneas de evento** (ES) / **slots** (EN), nunca "tracks" ni "filas" en textos visibles. El código del motor `@slicex/canvas` todavía dice `track`; renombrarlo es un cambio aparte que hay que confirmar.
 
 Target multi-plataforma: web → Android → iOS. Por eso la **separación motor gráfico / motor lógico no es estilo, es requisito**. `@slicex/core` debe poder portarse sin React ni Pixi.
 
@@ -30,6 +32,7 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 | Estado | Zustand 4 (store actual `editorStore.ts` está dormido — modelo financial, no playlist) |
 | Persistencia | Prisma 7 + `@prisma/adapter-pg` sobre Cloudflare Hyperdrive (Postgres) |
 | Validación | Zod en `@slicex/contracts` |
+| Formularios | Mantine Form 9.7.3 (solo estado/validación, sin componentes de Mantine) + esquemas Zod de `@slicex/contracts` (`finance.ts`); ver [docs/forms-audit.md](docs/forms-audit.md) |
 | Observabilidad | `@sentry/cloudflare` (Worker) + `@sentry/react` (browser) + JSON `console` → Workers Logpush |
 | Tests | Vitest (1026 unit) + Playwright (1 spec: `apps/web/tests/*.pw.ts`) |
 | Deploy | `wrangler deploy` o Workers Builds (push a `master` → build+deploy) |

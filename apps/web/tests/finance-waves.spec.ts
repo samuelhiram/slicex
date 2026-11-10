@@ -13,6 +13,7 @@ import {
   type FinancialDocument,
 } from "@slicex/core";
 import { createPlaylistCore } from "@slicex/canvas";
+import { isAutoRowLabel } from "../src/finance/labels";
 import { FinancialBridge, levelValue, niceAmount } from "../src/finance/financial-bridge";
 import {
   FINANCE_PLAYLIST_METRICS,
@@ -344,7 +345,8 @@ describe("adding items with the app's playlist options", () => {
     const clip = core.getState().clips.find((c) => c.id === id);
     expect(clip).toBeDefined();
     expect(core.getState().tracks.length).toBe(tracks + 1);
-    expect(core.getState().tracks.at(-1)!.label).toBe("Renta");
+    // Not named after the item: an unnamed row ("Línea de evento").
+    expect(isAutoRowLabel(core.getState().tracks.at(-1)!.label)).toBe(true);
     expect(bridge.getItem(id)?.name).toBe("Renta");
     core.undo();
     expect(core.getState().clips.some((c) => c.id === id)).toBe(false);

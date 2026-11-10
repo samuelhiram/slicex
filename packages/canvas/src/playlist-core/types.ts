@@ -43,8 +43,13 @@ export interface PlaylistTrack {
   muted?: boolean;
   soloed?: boolean;
   locked?: boolean;
-  // Per-track height in px. Falls back to metrics.trackHeight when unset.
+  // Height of ONE lane in px (user-resizable). Falls back to
+  // metrics.trackHeight when unset. The row is `lanes` times this tall.
   height?: number;
+  // Stacked lanes the row needs so none of its clips overlap another
+  // (absent = 1). Derived: the core's lane layout (lanes.ts) keeps it in
+  // sync with the clips' `lane` — never set it by hand.
+  lanes?: number;
 }
 
 export interface PlaylistAutomationPoint {
@@ -83,6 +88,11 @@ interface PlaylistClipBase {
   // Copy / paste / clone / duplicate keep it (they spread the clip). Toggled
   // with core.setClipNoSlice (undoable). Absent / false = sliceable.
   noSlice?: boolean;
+  // Lane inside its track (0 = top; absent = 0). Clips that overlap in
+  // time stack in different lanes instead of covering each other. Set by
+  // the core's lane layout (lanes.ts): a drag drops a clip on the lane under
+  // the pointer, everything else keeps its lane when it still fits.
+  lane?: number;
 }
 
 export interface PlaylistRegularClip extends PlaylistClipBase {
@@ -222,7 +232,22 @@ export type PlaylistDragPreview =
         id: string;
         start: number;
         trackIndex: number;
+        lane?: number;
       }>;
+      // The extra empty lane the row under the pointer opens while a clip
+      // is dragged over it (only when other clips live there): drop on it
+      // to stack at the same time as another clip. Drawn dashed.
+      freeLane?: { trackIndex: number; lane: number } | null;
+    }
+  | {
+      // Draw tool on empty space with a host that creates through its own
+      // flow (onCreateRequest): the range a new clip would take, nothing
+      // created yet.
+      kind: "clip-create";
+      trackIndex: number;
+      lane: number;
+      previewStart: number;
+      previewDuration: number;
     }
   | {
       kind: "clip-resize";
@@ -505,6 +530,9 @@ export interface PlaylistDragAnnotation {
 
 /** Extra header info for a track (e.g. its yearly impact). */
 export interface PlaylistTrackMeta {
+  // Name shown instead of the track's label (e.g. an automatic name that
+  // depends on what the row holds). Absent: the label.
+  title?: string;
   subtitle?: string;
   /** In [-1, 1]: a thin meter bar, right/positive or left/negative. */
   meter?: number;

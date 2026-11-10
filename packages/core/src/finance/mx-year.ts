@@ -3,7 +3,8 @@
 // ready to add to the plan. Pure: the dates come from the document range.
 import { dayNumberFromParts, formatISODate, isISODate, parseISODate } from "./dates";
 import { getProjectionRange } from "./events";
-import type { FinancialDocument, FinancialItem, ISODate, RecurrenceFrequency } from "./types";
+import { recurrenceInterval } from "./recurrence";
+import type { FinancialDocument, FinancialItem, ISODate } from "./types";
 
 export interface YearSuggestion {
   /** Stable: `sug-<slug>-<year>`, e.g. `sug-aguinaldo-2026`. Also the draft item id. */
@@ -17,13 +18,23 @@ export interface YearSuggestion {
   item: FinancialItem;
 }
 
-/** Monthly-equivalent factor per recurring frequency ("once" is not a salary). */
-const MONTHLY_FACTOR: Partial<Record<RecurrenceFrequency, number>> = {
-  weekly: 52 / 12,
-  biweekly: 26 / 12,
-  semimonthly: 2,
-  monthly: 1,
-};
+/** Monthly-equivalent factor of a recurring rule ("once" is not a salary). */
+function monthlyFactor(rule: FinancialItem["recurrence"]): number | undefined {
+  switch (rule.frequency) {
+    case "daily":
+      return 365.25 / 12 / recurrenceInterval(rule);
+    case "weekly":
+      return 52 / 12;
+    case "biweekly":
+      return 26 / 12;
+    case "semimonthly":
+      return 2;
+    case "monthly":
+      return 1 / recurrenceInterval(rule);
+    default:
+      return undefined;
+  }
+}
 
 /**
  * Monthly-equivalent amount of the main salary: the enabled recurring income
@@ -35,7 +46,7 @@ function mainMonthlySalary(doc: FinancialDocument): number {
   let best = 0;
   for (const item of doc.items) {
     if (item.kind !== "income" || item.enabled === false) continue;
-    const factor = MONTHLY_FACTOR[item.recurrence.frequency];
+    const factor = monthlyFactor(item.recurrence);
     if (factor === undefined) continue;
     const end = item.recurrence.endDate;
     if (end !== undefined && end < doc.startDate) continue;

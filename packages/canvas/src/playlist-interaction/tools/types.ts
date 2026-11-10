@@ -17,6 +17,20 @@ export interface ToolEnvironment {
   // report 0 in PointerEvent.detail, so tools must read this instead.
   // Optional for direct tool calls in tests; falls back to event.detail.
   clickCount?: number;
+  // Host-owned creation (PlaylistInteractionOptions.onCreateRequest): when
+  // set, tools never create clips on empty space themselves — Draw asks the
+  // host instead (double-click now, drag on release).
+  onCreateRequest?: (request: PlaylistCreateRequest) => void;
+}
+
+// What the Draw tool asks a host that creates through its own flow: the
+// row, the snapped start and, for a drag, the length (null = default).
+// `templateClipId`: the selected clip Draw would have stamped (FL), if any.
+export interface PlaylistCreateRequest {
+  trackIndex: number;
+  start: number;
+  duration: number | null;
+  templateClipId: string | null;
 }
 
 export interface PlaylistTool {

@@ -24,6 +24,7 @@ import {
   undoHistory,
   type History,
 } from "./history";
+import { provisionalLanes, settleLanes } from "./lanes";
 import { playlistReducer } from "./reducer";
 import {
   DEFAULT_PLAYLIST_METRICS,
@@ -141,6 +142,14 @@ export class PlaylistCore {
   // of pushing a new undo entry. A counter so nested amend() calls are safe.
   private amendDepth = 0;
   private gestureOpenedInAmend = false;
+  // Clips a drag dropped on an explicit lane during the open gesture: they
+  // keep it when the gesture ends and the lanes settle (lanes.ts).
+  private readonly gesturePinned = new Set<string>();
+  // The (settled) present when the outermost gesture opened: the lanes no
+  // row may lose while it is open. Not gestureBase — that one is taken at
+  // the first UNDOABLE dispatch, and a drag preview (not undoable) may
+  // already have opened a free lane by then.
+  private laneBase: PlaylistState | null = null;
 
   readonly metrics: PlaylistMetrics;
 
@@ -164,7 +173,7 @@ export class PlaylistCore {
       !this.stretchEnabled && initialState.stretchMode
         ? { ...initialState, stretchMode: false }
         : initialState;
-    this.history = createHistory(normalizeState(initial, this.metrics));
+    this.history = createHistory(settleLanes(normalizeState(initial, this.metrics)));
   }
 
   // Lifecycle and derived presentation.
@@ -267,7 +276,11 @@ export class PlaylistCore {
     // Passing `previous` lets normalizeState hand back previous.clips /
     // previous.tracks untouched when the reducer did not replace them, so a
     // hover / playhead / viewport dispatch keeps their identity (SYNC-15).
-    const next = normalizeState(reduced, this.metrics, previous);
+    const next = this.layoutLanes(
+      normalizeState(reduced, this.metrics, previous),
+      previous,
+      action,
+    );
     if (isUndoableAction(action) && this.amendDepth === 0) {
       if (this.gestureDepth === 0) {
         this.history = pushHistory(this.history, next);
@@ -281,6 +294,37 @@ export class PlaylistCore {
       this.history = replacePresent(this.history, next);
     }
     this.notify();
+  }
+
+  // Stacked lanes (lanes.ts). Outside a gesture a clip change settles them
+  // at once (a MOVE_CLIPS with explicit lanes pins those clips). Inside a
+  // pointer gesture they stay provisional — the dragged clips on the lane
+  // under the pointer, no track losing lanes, the free lane of the row
+  // under the drag open — and settle once in endGesture. Same state (O(1))
+  // when neither the clips, the tracks nor the drag preview changed.
+  private layoutLanes(
+    next: PlaylistState,
+    previous: PlaylistState,
+    action: PlaylistAction,
+  ): PlaylistState {
+    const contentChanged = next.clips !== previous.clips || next.tracks !== previous.tracks;
+    if (this.gestureDepth > 0) {
+      if (action.type === "MOVE_CLIPS") {
+        for (const update of action.updates) {
+          if (update.lane !== undefined) this.gesturePinned.add(update.id);
+        }
+      }
+      if (!contentChanged && next.dragPreview === previous.dragPreview) return next;
+      return provisionalLanes(next, this.laneBase ?? previous);
+    }
+    if (!contentChanged) return next;
+    let pinned: Set<string> | undefined;
+    if (action.type === "MOVE_CLIPS") {
+      for (const update of action.updates) {
+        if (update.lane !== undefined) (pinned ??= new Set()).add(update.id);
+      }
+    }
+    return settleLanes(next, { pinned, previous });
   }
 
   // Run `mutate` so that every dispatch it makes REPLACES the current undo
@@ -312,6 +356,7 @@ export class PlaylistCore {
     if (this.gestureDepth === 0) {
       this.gestureBase = null;
       this.gestureOpenedInAmend = this.amendDepth > 0;
+      this.laneBase = this.history.present;
     }
     this.gestureDepth += 1;
   }
@@ -328,15 +373,26 @@ export class PlaylistCore {
     const openedInAmend = this.gestureOpenedInAmend;
     this.gestureBase = null;
     this.gestureOpenedInAmend = false;
+    // The lanes stayed provisional during the gesture: settle them now
+    // (dropped clips keep the lane they were dropped on; the free lane
+    // closes; empty lanes go). Part of the gesture's own undo entry.
+    const pinned = this.gesturePinned.size > 0 ? new Set(this.gesturePinned) : undefined;
+    this.gesturePinned.clear();
+    this.laneBase = null;
+    const present = this.history.present;
+    const settled = settleLanes(present, { pinned, previous: base ?? present });
     // Opened inside amend(): its dispatches already replaced the present
     // entry (and notified), so there is no new undo step to record.
-    if (base === null || base === this.history.present || openedInAmend) {
+    if (base === null || base === present || openedInAmend) {
+      if (settled !== present) {
+        this.history = replacePresent(this.history, settled);
+        this.notify();
+      }
       return;
     }
-    this.history = pushHistory(
-      { ...this.history, present: base },
-      this.history.present,
-    );
+    // The undo target too: a free lane opened before the first undoable
+    // dispatch is in it — settling closes it (same object when none was).
+    this.history = pushHistory({ ...this.history, present: settleLanes(base) }, settled);
     this.notify();
   }
 
@@ -364,6 +420,8 @@ export class PlaylistCore {
     this.gestureDepth = 0;
     this.gestureBase = null;
     this.gestureOpenedInAmend = false;
+    this.gesturePinned.clear();
+    this.laneBase = null;
     if (isPlaylistSession(source)) {
       this.history = source.history as History<PlaylistState>;
     } else {
@@ -371,7 +429,7 @@ export class PlaylistCore {
         !this.stretchEnabled && source.stretchMode
           ? { ...source, stretchMode: false }
           : source;
-      this.history = createHistory(normalizeState(initial, this.metrics));
+      this.history = createHistory(settleLanes(normalizeState(initial, this.metrics)));
     }
     this.notify();
   }
@@ -401,6 +459,8 @@ export class PlaylistCore {
     this.gestureDepth = 0;
     this.gestureBase = null;
     this.gestureOpenedInAmend = false;
+    this.gesturePinned.clear();
+    this.laneBase = null;
   }
 
   canUndo(): boolean {

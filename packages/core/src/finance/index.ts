@@ -11,7 +11,7 @@ export {
   isISODate,
   toDayNumber,
 } from "./dates";
-export { expandRecurrence } from "./recurrence";
+export { expandRecurrence, MAX_RECURRENCE_INTERVAL, recurrenceInterval } from "./recurrence";
 export { expandFinancialEvents, getProjectionRange } from "./events";
 export {
   buildProjectionAccounts,

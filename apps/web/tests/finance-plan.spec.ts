@@ -12,6 +12,7 @@ import {
 import { createPlaylistCore } from "@slicex/canvas";
 import { FinancialBridge } from "../src/finance/financial-bridge";
 import { FINANCE_PLAYLIST_METRICS, createFinancialPlaylistState } from "../src/finance/mapping";
+import { autoRowName, displayRowLabel, isAutoRowLabel } from "../src/finance/labels";
 import {
   PLAN_STORAGE_KEY,
   loadPlan,
@@ -309,15 +310,16 @@ describe("tracks are a place (endless rows, never removed by themselves)", () =>
     const state = core.getState();
     const clip = state.clips.find((c) => c.id === id)!;
     expect(state.tracks.findIndex((track) => track.id === clip.trackId)).toBe(rows + 2);
-    expect(state.tracks[rows + 2]!.label).toBe("Renta");
+    // Rows are never named after an item: it stays an unnamed row.
+    expect(isAutoRowLabel(state.tracks[rows + 2]!.label)).toBe(true);
     // The endless rows in between materialised as plain "Track N".
     expect(state.tracks[rows]!.label).toMatch(/^Track \d+$/);
     expect(bridge.getItem(id)?.name).toBe("Renta");
 
-    // That empty "Track N" row takes the next item's name.
+    // That empty "Track N" row takes the next item (and keeps no item name).
     const id2 = bridge.addItem({ ...renta, name: "Gym", amount: 500 }, { trackIndex: rows });
     expect(core.getState().clips.find((c) => c.id === id2)!.trackId).toBe(core.getState().tracks[rows]!.id);
-    expect(core.getState().tracks[rows]!.label).toBe("Gym");
+    expect(isAutoRowLabel(core.getState().tracks[rows]!.label)).toBe(true);
 
     // One undo entry per item.
     core.undo();
@@ -325,14 +327,37 @@ describe("tracks are a place (endless rows, never removed by themselves)", () =>
     expect(bridge.getItem(id)).not.toBeNull();
   });
 
-  it("a picked row that is busy at those dates falls back to a new lane", () => {
+  it("a picked row that is busy at those dates stacks the item in a new lane of that row", () => {
     const doc = createDemoFinancialDocument(TODAY);
     const { core, bridge } = setup(doc);
     const busy = core.getState().clips.find((clip) => clip.duration > 60)!;
     const busyIndex = core.getState().tracks.findIndex((track) => track.id === busy.trackId);
+    const rows = core.getState().tracks.length;
     const id = bridge.addItem({ ...renta }, { trackIndex: busyIndex });
-    const clip = core.getState().clips.find((c) => c.id === id)!;
-    expect(clip.trackId).not.toBe(busy.trackId);
+    const state = core.getState();
+    const clip = state.clips.find((c) => c.id === id)!;
+    // Same row, its own lane: nothing covers anything, no extra row.
+    expect(clip.trackId).toBe(busy.trackId);
+    expect(clip.lane ?? 0).not.toBe(state.clips.find((c) => c.id === busy.id)!.lane ?? 0);
+    expect(state.tracks[busyIndex]!.lanes).toBe(2);
+    expect(state.tracks.length).toBe(rows);
+  });
+
+  it("one-time events of a kind share ONE row, stacked where they meet (no '… 2' rows)", () => {
+    const doc = createDemoFinancialDocument(TODAY);
+    const pointRows = (state: ReturnType<typeof createFinancialPlaylistState>) =>
+      state.tracks.filter((track) => track.id.startsWith("trk-once-expense"));
+    const { core } = setup(doc);
+    expect(pointRows(core.getState()).map((track) => track.id)).toEqual(["trk-once-expense"]);
+    const row = pointRows(core.getState())[0]!;
+    const onRow = core.getState().clips.filter((clip) => clip.trackId === row.id);
+    // Every one-off expense sits on it; any two that meet are in different lanes.
+    for (const a of onRow) {
+      for (const b of onRow) {
+        if (a === b || (a.lane ?? 0) !== (b.lane ?? 0)) continue;
+        expect(a.start + a.duration <= b.start || b.start + b.duration <= a.start).toBe(true);
+      }
+    }
   });
 
   it("a draft can be dated on a given day", () => {
@@ -414,5 +439,106 @@ describe("an end 'hasta 1 sep' includes the payment of the 1st", () => {
     core.resizeClip("beca", "right", sep2 - 1); // "hasta 31 ago": the 1st is out
     await Promise.resolve();
     expect(bridge.snapshotAt("2027-09-01").cash - bridge.snapshotAt("2027-08-31").cash).toBe(0);
+  });
+});
+
+describe("row names: 'Línea de evento' by default, '… de eventos' with 2+, renamable", () => {
+  it("the vocabulary", () => {
+    expect(displayRowLabel("")).toBe("Línea de evento");
+    expect(displayRowLabel("Track 12")).toBe("Línea de evento");
+    expect(displayRowLabel("Ahorro")).toBe("Ahorro");
+    expect(autoRowName(0)).toBe("Línea de evento");
+    expect(autoRowName(1)).toBe("Línea de evento");
+    expect(autoRowName(2)).toBe("Línea de eventos");
+  });
+
+  it("a first visit names no row after an item; a row with 2+ events says so", () => {
+    const doc = createDemoFinancialDocument(TODAY);
+    const { core, bridge } = setup(doc);
+    const state = core.getState();
+    expect(state.tracks.every((track) => isAutoRowLabel(track.label))).toBe(true);
+    for (const track of state.tracks) {
+      const count = state.clips.filter((clip) => clip.trackId === track.id).length;
+      const meta = bridge.getTrackMeta(track.id);
+      // 2+ events: the header's name is the plural one; else the label's.
+      expect(meta?.title).toBe(count >= 2 ? "Línea de eventos" : undefined);
+    }
+  });
+
+  it("a name the person gives is kept and wins; clearing it brings the automatic one back", () => {
+    const doc = createDemoFinancialDocument(TODAY);
+    const { core, bridge } = setup(doc);
+    const busy = core
+      .getState()
+      .tracks.findIndex((track) => core.getState().clips.filter((c) => c.trackId === track.id).length >= 2);
+    expect(busy).toBeGreaterThanOrEqual(0);
+    const trackId = core.getState().tracks[busy]!.id;
+    core.renameTrack(busy, "Imprevistos");
+    expect(bridge.getTrackMeta(trackId)?.title).toBeUndefined();
+    const reloaded = createFinancialPlaylistState(bridge.getDocument(), bridge.getTrackLayout());
+    expect(reloaded.tracks.find((track) => track.id === trackId)!.label).toBe("Imprevistos");
+    core.renameTrack(busy, "");
+    expect(bridge.getTrackMeta(trackId)?.title).toBe("Línea de eventos");
+  });
+
+  it("rows the app named in a saved plan become automatic; the person's names stay", () => {
+    const doc = createDemoFinancialDocument(TODAY);
+    const item = doc.items[0]!;
+    const layout = {
+      tracks: [
+        { id: "trk-once-expense", label: "Gastos únicos", color: "#e5484d" },
+        { id: "trk-once-expense-2", label: "Gastos únicos 2", color: "#e5484d" },
+        { id: `trk-${item.id}`, label: item.name, color: "#1f9d55" },
+        { id: "trk-gone", label: "Ya no existe", color: "#888888" },
+        { id: "track-9", label: "Gasto (único)", color: "#888888" },
+        { id: "track-10", label: "Ahorro", color: "#888888" },
+      ],
+      placement: {},
+    };
+    const state = createFinancialPlaylistState(doc, layout);
+    const label = (id: string) => state.tracks.find((track) => track.id === id)!.label;
+    expect(label("trk-once-expense")).toBe("");
+    expect(label("trk-once-expense-2")).toBe("");
+    expect(label(`trk-${item.id}`)).toBe("");
+    expect(label("trk-gone")).toBe(""); // its item is gone: nothing to tell it apart
+    expect(label("track-9")).toBe("");
+    expect(label("track-10")).toBe("Ahorro");
+  });
+});
+
+describe("storage is validated with the shared schema (@slicex/contracts)", () => {
+  it("a corrupted item is dropped alone; the rest of the plan survives", () => {
+    const plan = savedPlan(createDemoFinancialDocument(SAVED_ON));
+    const branch = plan.branches[0]!;
+    const good = branch.doc.items.length;
+    const raw = {
+      ...plan,
+      branches: [
+        {
+          ...branch,
+          doc: {
+            ...branch.doc,
+            items: [
+              ...branch.doc.items,
+              { id: "bad-1", kind: "expense", name: "Negativo", amount: -500, recurrence: { frequency: "monthly", startDate: SAVED_ON } },
+              { id: "bad-2", kind: "income", name: "Sin fecha", amount: 10, recurrence: { frequency: "monthly", startDate: "31/12/2026" } },
+              { id: "bad-3", kind: "nope" },
+              "not even an object",
+            ],
+          },
+        },
+      ],
+    };
+    const parsed = parsePlan(JSON.stringify(raw))!;
+    const ids = parsed.branches[0]!.doc.items.map((item) => item.id);
+    expect(ids).toHaveLength(good);
+    expect(ids).not.toContain("bad-1");
+    expect(ids).not.toContain("bad-2");
+  });
+
+  it("a document that is not valid is dropped", () => {
+    const plan = savedPlan(createDemoFinancialDocument(SAVED_ON));
+    const raw = { ...plan, branches: [{ ...plan.branches[0]!, doc: { ...plan.branches[0]!.doc, startDate: "ayer" } }] };
+    expect(parsePlan(JSON.stringify(raw))).toBeNull();
   });
 });

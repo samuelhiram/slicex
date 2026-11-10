@@ -33,7 +33,7 @@ import {
   type PlaylistState,
   type PlaylistTrack,
 } from "@slicex/canvas";
-import { KIND_COLORS, KIND_ORDER } from "./labels";
+import { isAutoRowLabel, KIND_COLORS, KIND_LABELS, KIND_ORDER } from "./labels";
 
 // Weeks as "bars", zoom out far enough to see a whole year.
 export const FINANCE_PLAYLIST_METRICS: PlaylistMetrics = {
@@ -267,6 +267,7 @@ export function deriveRecurrence(
     return rule;
   }
   const next: FinancialRecurrence = { frequency: rule.frequency, startDate };
+  if (rule.interval !== undefined) next.interval = rule.interval;
   if (endDate !== undefined) next.endDate = endDate;
   if (nextAnchor !== undefined) next.anchorDate = nextAnchor;
   return next;
@@ -289,6 +290,38 @@ export function pointTrackId(kind: FinancialItemKind, lane = 0): string {
 export function isPointTrackOf(trackId: string, kind: FinancialItemKind): boolean {
   const base = pointTrackId(kind);
   return trackId === base || trackId.startsWith(`${base}-`);
+}
+
+/**
+ * Whether a saved row's label was given by the app, not by the person: the
+ * app used to name rows after their first item ("Sueldo", "Nu") or kind
+ * ("Gastos únicos", "Gastos únicos 2"). Such rows now take the automatic
+ * name ("Línea de evento" / "… de eventos"); a name the person typed stays.
+ * - shared one-time rows: their kind's default name (± a number);
+ * - a row made for one item (`trk-<itemId>`): that item's name, or the
+ *   item is gone (nothing left to tell it apart);
+ * - any other row named exactly like one of the plan's items.
+ */
+function appGivenRowLabel(
+  track: PlaylistTrack,
+  doc: FinancialDocument,
+  itemNames: ReadonlySet<string>,
+): boolean {
+  if (isAutoRowLabel(track.label)) return true;
+  // Rows a one-time item opened when its kind had none ("Gasto (único)").
+  for (const kind of KIND_ORDER) {
+    if (track.label === `${KIND_LABELS[kind]} (único)`) return true;
+  }
+  for (const kind of KIND_ORDER) {
+    if (!isPointTrackOf(track.id, kind)) continue;
+    const base = POINT_TRACK_LABELS[kind];
+    return track.label === base || new RegExp(`^${base} \\d+$`).test(track.label);
+  }
+  if (track.id.startsWith("trk-")) {
+    const item = doc.items.find((candidate) => `trk-${candidate.id}` === track.id);
+    if (!item || item.name === track.label) return true;
+  }
+  return itemNames.has(track.label);
 }
 
 export function itemTrackId(item: FinancialItem): string {
@@ -342,13 +375,17 @@ export function createFinancialPlaylistState(
   layout: FinancialTrackLayout | null = null,
 ): PlaylistState {
   const base = createDemoPlaylistState();
-  const tracks: PlaylistTrack[] = layout ? layout.tracks.map((track) => ({ ...track })) : [];
+  // Lanes are the engine's business (it stacks clips that meet in time and
+  // sizes each row to its lanes): never trust a stored count. Names the app
+  // gave become automatic again (see appGivenRowLabel).
+  const itemNames = new Set(doc.items.map((item) => item.name));
+  const tracks: PlaylistTrack[] = layout
+    ? layout.tracks.map(({ lanes: _lanes, ...track }) =>
+        appGivenRowLabel(track, doc, itemNames) ? { ...track, label: "" } : { ...track },
+      )
+    : [];
   const trackIds = new Set(tracks.map((track) => track.id));
   const clips: PlaylistClip[] = [];
-  const isFree = (trackId: string, start: number, end: number): boolean =>
-    !clips.some(
-      (clip) => clip.trackId === trackId && clip.start < end && clip.start + clip.duration > start,
-    );
   const uniqueId = (id: string): string => {
     let candidate = id;
     for (let n = 2; trackIds.has(candidate); n += 1) candidate = `${id}-${n}`;
@@ -359,18 +396,17 @@ export function createFinancialPlaylistState(
   for (const item of doc.items) {
     const trackId = layout?.placement[item.id];
     if (trackId !== undefined && trackIds.has(trackId)) {
-      const clip = itemToClip(doc, item, trackId);
-      if (isFree(trackId, clip.start, clip.start + clip.duration)) {
-        clips.push(clip);
-        continue;
-      }
+      // Back on its row even if it meets another item there: they stack.
+      clips.push(itemToClip(doc, item, trackId));
+      continue;
     }
     pending.push(item);
   }
 
   for (const kind of KIND_ORDER) {
-    // One-time events share lanes: the first lane of their kind free at
-    // that date, else a new one (greedy interval packing by start).
+    // One-time events share ONE row per kind ("Gastos únicos"): those that
+    // meet in time stack in lanes of that row instead of spilling into
+    // "Gastos únicos 2", "… 3" rows.
     const pointClips: PlaylistClip[] = [];
     for (const item of pending) {
       if (item.kind !== kind) continue;
@@ -380,22 +416,21 @@ export function createFinancialPlaylistState(
       }
       const trackId = uniqueId(itemTrackId(item));
       trackIds.add(trackId);
-      tracks.push({ id: trackId, label: item.name, color: KIND_COLORS[kind] });
+      // Unnamed: "Línea de evento" until the person names it (labels.ts).
+      tracks.push({ id: trackId, label: "", color: KIND_COLORS[kind] });
       clips.push(itemToClip(doc, item, trackId));
     }
     pointClips.sort((a, b) => a.start - b.start);
     for (const clip of pointClips) {
-      const end = clip.start + clip.duration;
       let track = tracks.find(
-        (candidate) =>
-          isPointTrackOf(candidate.id, kind) && !candidate.locked && isFree(candidate.id, clip.start, end),
+        (candidate) => isPointTrackOf(candidate.id, kind) && !candidate.locked,
       );
       if (!track) {
         let lane = 0;
         while (trackIds.has(pointTrackId(kind, lane))) lane += 1;
         track = {
           id: pointTrackId(kind, lane),
-          label: lane === 0 ? POINT_TRACK_LABELS[kind] : `${POINT_TRACK_LABELS[kind]} ${lane + 1}`,
+          label: "",
           color: KIND_COLORS[kind],
         };
         trackIds.add(track.id);
@@ -407,7 +442,7 @@ export function createFinancialPlaylistState(
 
   return {
     ...base,
-    tracks: tracks.length > 0 ? tracks : [{ id: "trk-empty", label: "Track 1", color: "#888888" }],
+    tracks: tracks.length > 0 ? tracks : [{ id: "trk-empty", label: "", color: "#888888" }],
     clips,
     // "Today" is drawn by the calendar axis (a pill on the ruler).
     markers: [],
@@ -417,8 +452,6 @@ export function createFinancialPlaylistState(
     playPosition: { time: 0, isRunning: false },
   };
 }
-
-const AUTO_ROW_LABEL = /^Track \d+$/;
 
 /** The layout of a playlist state (see FinancialTrackLayout). */
 export function trackLayoutOf(
@@ -440,7 +473,7 @@ export function trackLayoutOf(
     const pristine =
       !used.has(track.id) &&
       track.id.startsWith("track-") &&
-      AUTO_ROW_LABEL.test(track.label) &&
+      isAutoRowLabel(track.label) &&
       track.muted !== true &&
       track.locked !== true &&
       track.height === undefined;
@@ -448,8 +481,11 @@ export function trackLayoutOf(
     end -= 1;
   }
   return {
-    // Solo is a listening mode, not part of the plan.
-    tracks: state.tracks.slice(0, end).map(({ soloed: _soloed, ...track }) => track),
+    // Solo is a listening mode, not part of the plan; lanes are derived by
+    // the engine from the clips (rebuilt on load).
+    tracks: state.tracks
+      .slice(0, end)
+      .map(({ soloed: _soloed, lanes: _lanes, ...track }) => track),
     placement,
   };
 }

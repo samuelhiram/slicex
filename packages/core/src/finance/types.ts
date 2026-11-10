@@ -12,10 +12,13 @@ export type ISODate = string;
 
 export type RecurrenceFrequency =
   | "once"
+  // Every `interval` days (FinancialRecurrence.interval, default 1).
+  | "daily"
   | "weekly"
   | "biweekly"
   // "Quincenal" (MX payroll): the 15th and the last day of every month.
   | "semimonthly"
+  // Every `interval` months (default 1) on the anchor's day of month.
   | "monthly";
 
 export interface FinancialRecurrence {
@@ -28,12 +31,20 @@ export interface FinancialRecurrence {
    */
   endDate?: ISODate;
   /**
+   * "Cada N": every `interval` days ("daily") or months ("monthly"); an
+   * integer >= 1, absent = 1. Ignored by the other frequencies (weekly and
+   * biweekly are every 7 / 14 days by definition).
+   */
+  interval?: number;
+  /**
    * Phase anchor of the schedule. Defaults to `startDate`.
    * - once:        the single occurrence date (still clipped by the window).
+   * - daily:       anchor + k*interval days, k any integer.
    * - weekly:      anchor + k*7 days, k any integer (anchor may be in the past).
    * - biweekly:    anchor + k*14 days.
-   * - monthly:     the anchor's day-of-month every month, clamped to the
-   *                month length (31 → 30/28) without drifting (Mar 31 again).
+   * - monthly:     the anchor's day-of-month every `interval` months counted
+   *                from the anchor's month, clamped to the month length
+   *                (31 → 30/28) without drifting (Mar 31 again).
    * - semimonthly: ignored — always the 15th and the last day of the month.
    * Moving an item shifts anchor + window together; cropping the window
    * (resizing an edge) leaves the anchor alone so paydays don't move.

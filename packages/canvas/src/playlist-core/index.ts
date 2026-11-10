@@ -6,6 +6,8 @@ export * from "./presentation";
 export * from "./actions";
 export * from "./history";
 export { playlistReducer } from "./reducer";
+// Stacked lanes inside a track (see lanes.ts).
+export { assignLanes, laneCountOf, laneOf, settleLanes, type LaneRequest } from "./lanes";
 // Envelope maths. Public because slicing, future curve editing and any
 // "value under the cursor" readout all need the same interpolation.
 export { automationValueAtTime, splitAutomationPoints } from "./state-utils";

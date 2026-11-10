@@ -26,27 +26,43 @@ export interface TrackMetaSource {
   cache: Map<string, { meta: PlaylistTrackMeta; subtitle: string }>;
 }
 
+// Host-provided display name of a row, cached per source label (bounded
+// by the number of distinct labels): a steady frame is a Map hit.
+export function createTrackLabelFormatter(
+  format: (label: string) => string,
+): (label: string) => string {
+  const cache = new Map<string, string>();
+  return (label) => {
+    let shown = cache.get(label);
+    if (shown === undefined) {
+      shown = format(label);
+      cache.set(label, shown);
+    }
+    return shown;
+  };
+}
+
 export function createTrackMetaSource(
   get: (trackId: string) => PlaylistTrackMeta | null,
 ): TrackMetaSource {
   return { get, cache: new Map() };
 }
 
+// Vertical layout comes from the presentation (row.headerLayout /
+// row.titleY: "full" / "compact" / "mini" by row height), shared with the
+// hit-test so the toggles are drawn where they are clicked.
 const NAME_X = 30;
-const NAME_Y = 9;
 const NAME_SIZE = 13;
 const NAME_CHAR_PX = 7.6;
 const DOT_X = 17;
-const DOT_Y = 17;
 const DOT_RADIUS = 4;
 const SUBTITLE_Y = 28;
 const SUBTITLE_SIZE = 11;
 const SUBTITLE_CHAR_PX = 6.2;
-// Row heights below which the subtitle / meter would collide with the
-// toggle row (which sits at height - 22).
-const SUBTITLE_MIN_ROW_HEIGHT = 58;
 const METER_HEIGHT = 3;
-const METER_MIN_ROW_HEIGHT = 58;
+// Compact rows: the meter under the subtitle, when the row has room.
+const COMPACT_METER_Y = 46;
+const COMPACT_METER_MIN_ROW_HEIGHT = 52;
 
 function truncateText(text: string, maxChars: number): string {
   if (maxChars <= 0) return "";
@@ -55,16 +71,24 @@ function truncateText(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars - 1)}…`;
 }
 
-// Truncated track names, keyed by source label + width budget. Bounded by
-// the number of distinct labels; a steady frame is a Map hit (no alloc).
-const nameCache = new Map<string, { maxChars: number; display: string }>();
+// Truncated track names, keyed by width budget, then source label. Two
+// budgets coexist in a frame (a compact row with its toggles showing gets a
+// shorter one), so each keeps its own map: a steady frame is a Map hit
+// (no alloc). Bounded by budgets x distinct labels.
+const nameCache = new Map<number, Map<string, string>>();
 
 function displayName(label: string, maxChars: number): string {
   if (label.length <= maxChars) return label;
-  const cached = nameCache.get(label);
-  if (cached && cached.maxChars === maxChars) return cached.display;
-  const display = truncateText(label, maxChars);
-  nameCache.set(label, { maxChars, display });
+  let byLabel = nameCache.get(maxChars);
+  if (!byLabel) {
+    byLabel = new Map();
+    nameCache.set(maxChars, byLabel);
+  }
+  let display = byLabel.get(label);
+  if (display === undefined) {
+    display = truncateText(label, maxChars);
+    byLabel.set(label, display);
+  }
   return display;
 }
 
@@ -102,7 +126,9 @@ function drawTrackMeta(
 ): void {
   const top = row.rowRect.y;
   const height = row.rowRect.height;
-  if (subtitle.length > 0 && height >= SUBTITLE_MIN_ROW_HEIGHT) {
+  // Mini rows: the name alone.
+  if (row.headerLayout === "mini") return;
+  if (subtitle.length > 0) {
     addText(textLayer, subtitle, NAME_X, top + SUBTITLE_Y, {
       color: COLORS.textMuted,
       size: SUBTITLE_SIZE,
@@ -110,23 +136,28 @@ function drawTrackMeta(
     });
   }
   const meter = meta.meter;
-  if (
-    meter === undefined ||
-    !Number.isFinite(meter) ||
-    height < METER_MIN_ROW_HEIGHT
-  ) {
-    return;
-  }
-  // Thin centred meter on the toggle row, between the toggles and the grip.
+  if (meter === undefined || !Number.isFinite(meter)) return;
   const value = meter < -1 ? -1 : meter > 1 ? 1 : meter;
-  const lock = row.buttons.lock;
-  const x0 = lock.x + lock.width + 12;
-  const x1 = row.reorderHandleRect.x - 10;
+  let x0: number;
+  let x1: number;
+  let y: number;
+  if (row.headerLayout === "full") {
+    // Thin centred meter on the toggle row, between the toggles and the grip.
+    const lock = row.buttons.lock;
+    x0 = lock.x + lock.width + 12;
+    x1 = row.reorderHandleRect.x - 10;
+    y = Math.round(lock.y + lock.height / 2 - METER_HEIGHT / 2);
+  } else {
+    // Compact: under the subtitle (the toggles moved up to the name).
+    if (height < COMPACT_METER_MIN_ROW_HEIGHT) return;
+    x0 = NAME_X;
+    x1 = row.headerRect.x + row.headerRect.width - 16;
+    y = top + COMPACT_METER_Y;
+  }
   const width = x1 - x0;
   if (width <= 8) return;
   const half = width / 2;
   const center = x0 + half;
-  const y = Math.round(lock.y + lock.height / 2 - METER_HEIGHT / 2);
   graphics
     .roundRect(x0, y, width, METER_HEIGHT, METER_HEIGHT / 2)
     .fill({ color: COLORS.rowLine });
@@ -221,6 +252,7 @@ export function drawTrackRows(
   textLayer: Container,
   presentation: PlaylistPresentation,
   metaSource: TrackMetaSource | null = null,
+  trackLabel: ((label: string) => string) | null = null,
 ): void {
   const { metrics } = presentation;
   const tracksTop = getTracksTop(metrics);
@@ -269,13 +301,35 @@ export function drawTrackRows(
       .stroke({ color: COLORS.rowLine, width: 1 });
 
     graphics
-      .circle(DOT_X, row.rowRect.y + DOT_Y, DOT_RADIUS)
+      .circle(DOT_X, row.rowRect.y + row.titleY + 8, DOT_RADIUS)
       .fill({ color, alpha: muted ? 0.35 : 1 });
+    // Controls appear where they act: on the hovered / selected row, or
+    // when their state is on (a muted row keeps its eye so you see why).
+    // The hit areas stay put, so hovering reveals them before the click.
+    const showControls = row.track.id === hoveredTrackId || row.hasSelectedClips;
+    // Compact / mini rows carry the toggles on the name's line: the name
+    // stops before them while any of them shows.
+    const togglesOnNameLine =
+      row.headerLayout !== "full" && (showControls || muted || soloed || locked);
+    const rowNameChars = togglesOnNameLine
+      ? Math.max(1, Math.floor((row.buttons.mute.x - 8 - NAME_X) / NAME_CHAR_PX))
+      : nameChars;
+    // Host header extras: only real rows actually on screen. Resolved
+    // before the name: the host may name the row (meta.title).
+    const entry =
+      metaSource !== null &&
+      !row.isVirtual &&
+      row.rowRect.y + row.rowRect.height > tracksTop &&
+      row.rowRect.y < viewportBottom
+        ? resolveTrackMeta(metaSource, row.track.id, row.headerRect.width)
+        : null;
+    const label =
+      entry?.meta.title ?? (trackLabel ? trackLabel(row.track.label) : row.track.label);
     addText(
       textLayer,
-      displayName(row.track.label, nameChars),
+      displayName(label, rowNameChars),
       NAME_X,
-      row.rowRect.y + NAME_Y,
+      row.rowRect.y + row.titleY,
       {
         color: muted ? COLORS.textMuted : COLORS.text,
         size: NAME_SIZE,
@@ -283,37 +337,13 @@ export function drawTrackRows(
       },
     );
 
-    // Controls appear where they act: on the hovered / selected row, or
-    // when their state is on (a muted row keeps its eye so you see why).
-    // The hit areas stay put, so hovering reveals them before the click.
-    const showControls = row.track.id === hoveredTrackId || row.hasSelectedClips;
     if (showControls || muted) drawMuteIcon(graphics, row.buttons.mute, muted);
     if (showControls || soloed) drawSoloIcon(graphics, row.buttons.solo, soloed);
     if (showControls || locked) drawLockIcon(graphics, row.buttons.lock, locked);
     if (showControls) drawReorderHandle(graphics, row.reorderHandleRect);
 
-    // Host header extras: only real rows actually on screen.
-    if (
-      metaSource !== null &&
-      !row.isVirtual &&
-      row.rowRect.y + row.rowRect.height > tracksTop &&
-      row.rowRect.y < viewportBottom
-    ) {
-      const entry = resolveTrackMeta(
-        metaSource,
-        row.track.id,
-        row.headerRect.width,
-      );
-      if (entry) {
-        drawTrackMeta(
-          graphics,
-          textLayer,
-          row,
-          entry.meta,
-          entry.subtitle,
-          muted,
-        );
-      }
+    if (entry) {
+      drawTrackMeta(graphics, textLayer, row, entry.meta, entry.subtitle, muted);
     }
   }
 }

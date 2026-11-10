@@ -69,7 +69,7 @@ import type {
   ValleyInsight,
 } from "./bridge-api";
 import { formatDateShort, formatMoney, formatMoneyWhole } from "./format";
-import { FREQUENCY_SHORT, KIND_COLORS, KIND_LABELS } from "./labels";
+import { frequencyShort, isAutoRowLabel, KIND_COLORS, KIND_LABELS } from "./labels";
 import {
   beatOf,
   canonicalItem,
@@ -179,7 +179,7 @@ export function niceAmount(raw: number): number {
 }
 
 export function levelText(item: FinancialItem, value: number, doc: FinancialDocument): string {
-  const freq = FREQUENCY_SHORT[item.recurrence.frequency];
+  const freq = frequencyShort(item.recurrence);
   const once = item.recurrence.frequency === "once";
   switch (item.kind) {
     case "income":
@@ -223,7 +223,7 @@ export function describeItem(
   item: FinancialItem,
   doc: FinancialDocument,
 ): string {
-  const freq = FREQUENCY_SHORT[item.recurrence.frequency];
+  const freq = frequencyShort(item.recurrence);
   switch (item.kind) {
     case "income":
       return `+${formatMoney(item.amount)} ${freq}`;
@@ -531,12 +531,17 @@ export class FinancialBridge implements FinancialBridgeApi {
     if (!this.trackMetaIndex) {
       const trackOfItem = new Map<string, string>();
       for (const [id, observed] of this.observed) trackOfItem.set(id, observed.trackId);
+      const autoRows = new Set<string>();
+      for (const track of this.core.getState().tracks) {
+        if (isAutoRowLabel(track.label)) autoRows.add(track.id);
+      }
       this.trackMetaIndex = buildTrackMeta(
         this.doc,
         this.projection,
         trackOfItem,
         this.payoffs(),
         this.previousTrackMeta,
+        autoRows,
       );
     }
     return this.trackMetaIndex.get(trackId) ?? null;
@@ -845,56 +850,39 @@ export class FinancialBridge implements FinancialBridgeApi {
     const geometry = itemClipGeometry(this.doc, item);
     const excluded = this.excludedTracks(state);
 
-    // One-time events go to the first shared lane of their kind that is
-    // writable, audible and free at that date; anything else (and a full
-    // lane set) gets a new track at the bottom.
+    // Overlaps are fine: clips that meet in time stack in lanes of their row
+    // (the engine's lane layout). One-time events go to the first shared row
+    // of their kind that is writable and audible; anything else gets a new
+    // row at the bottom.
     let trackIndex = -1;
-    // A row the person picked (e.g. right-click on it): used when writable
-    // and free at the item's dates — the endless empty rows below always are.
+    // A row the person picked (e.g. right-click on it, or the pencil): used
+    // when writable — busy at those dates it just gains a lane.
     let picked = false;
     if (placement) {
       const wanted = Math.max(0, Math.floor(placement.trackIndex));
       const track = state.tracks[wanted];
-      const end = geometry.start + geometry.duration;
-      if (
-        !track ||
-        (!track.locked &&
-          !state.clips.some(
-            (clip) =>
-              clip.trackId === track.id &&
-              clip.start < end &&
-              clip.start + clip.duration > geometry.start,
-          ))
-      ) {
+      if (!track || !track.locked) {
         trackIndex = wanted;
         picked = true;
       }
     }
     if (!picked && isPointItem(item)) {
-      const end = geometry.start + geometry.duration;
       trackIndex = state.tracks.findIndex(
         (track) =>
-          !track.locked &&
-          !excluded.has(track.id) &&
-          isPointTrackOf(track.id, item.kind) &&
-          !state.clips.some(
-            (clip) =>
-              clip.trackId === track.id &&
-              clip.start < end &&
-              clip.start + clip.duration > geometry.start,
-          ),
+          !track.locked && !excluded.has(track.id) && isPointTrackOf(track.id, item.kind),
       );
     }
     const newTrack = trackIndex < 0;
     if (newTrack) trackIndex = state.tracks.length;
-    // The row takes the item's name when it had none of its own: a new
-    // lane, an endless row materialised now, or an empty "Track N".
+    // Rows keep their automatic name ("Línea de evento" / "… de eventos",
+    // labels.ts) — they are never named after an item: a second item on the
+    // row would make that name a lie. A new row, an endless row materialised
+    // now or an empty unnamed one only takes the item's colour.
     const target = state.tracks[trackIndex];
-    const nameRow =
+    const colourRow =
       newTrack ||
       !target ||
-      (/^Track \d+$/.test(target.label) &&
-        !state.clips.some((clip) => clip.trackId === target.id));
+      (isAutoRowLabel(target.label) && !state.clips.some((clip) => clip.trackId === target.id));
 
     this.apply(() => {
       // A new lane goes right under the last track (createClip on a row
@@ -914,13 +902,7 @@ export class FinancialBridge implements FinancialBridgeApi {
       if (geometry.contentOffset !== 0) {
         this.core.setClipContentOffset(id, geometry.contentOffset);
       }
-      if (nameRow) {
-        this.core.renameTrack(
-          trackIndex,
-          isPointItem(item) ? `${KIND_LABELS[item.kind]} (único)` : item.name,
-        );
-        this.core.recolorTrack(trackIndex, KIND_COLORS[item.kind]);
-      }
+      if (colourRow) this.core.recolorTrack(trackIndex, KIND_COLORS[item.kind]);
       this.core.setClipSelection([id]);
     });
 
@@ -1190,7 +1172,7 @@ export class FinancialBridge implements FinancialBridgeApi {
     };
     const solution = solveDebtPayment(doc, base.id, target);
     if (!solution) return null;
-    const per = base.kind === "credit-card" ? "/mes" : FREQUENCY_SHORT[base.recurrence.frequency];
+    const per = base.kind === "credit-card" ? "/mes" : frequencyShort(base.recurrence);
     const payment = formatMoneyWhole(solution.paymentAmount);
     const when = solution.payoffDate ? formatMonthYear(solution.payoffDate) : "";
     if (!solution.feasible) {

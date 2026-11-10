@@ -12,15 +12,21 @@
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.1.1",
+    "@mantine/core": "9.7.3",
+    "@mantine/dates": "9.7.3",
+    "@mantine/form": "9.7.3",
+    "@mantine/hooks": "9.7.3",
     "@sentry/cloudflare": "^9.0.0",
     "@sentry/react": "^9.0.0",
     "@slicex/canvas": "workspace:^",
     "@slicex/contracts": "workspace:^",
     "@slicex/core": "workspace:^",
     "@slicex/db": "workspace:^",
+    "dayjs": "1.11.23",
     "hono": "^4.6.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "zod": "3.25.76",
     "zustand": "^4.0.0"
   },
   "devDependencies": {

@@ -40,7 +40,7 @@ import {
   drawTrackRowsBackground,
 } from "./layers/background";
 import { drawRulerChrome, drawTimelineGrid } from "./layers/ruler";
-import { createTrackMetaSource, drawTrackRows } from "./layers/track-rows";
+import { createTrackLabelFormatter, createTrackMetaSource, drawTrackRows } from "./layers/track-rows";
 import { createOverviewLaneLayer } from "./layers/overview-lane";
 import { createDragAnnotationLayer } from "./layers/drag-annotation";
 import { drawMarkers } from "./layers/markers";
@@ -101,6 +101,10 @@ export interface PlaylistRendererCallbacks {
   // Header extras per track (subtitle + meter). Called once per VISIBLE
   // real row per frame: O(1), same object while unchanged.
   getTrackMeta?: (trackId: string) => PlaylistTrackMeta | null;
+  // Name shown for a row (e.g. the host's own word for the engine's
+  // auto-named "Track N" rows). Called once per distinct label: the result
+  // is cached, so a steady frame allocates nothing.
+  formatTrackLabel?: (label: string) => string;
 }
 
 export interface PlaylistRenderer {
@@ -181,6 +185,9 @@ export function createPlaylistRenderer(
   const getOverviewData = callbacks.getOverviewData;
   const trackMetaSource = callbacks.getTrackMeta
     ? createTrackMetaSource(callbacks.getTrackMeta)
+    : null;
+  const trackLabel = callbacks.formatTrackLabel
+    ? createTrackLabelFormatter(callbacks.formatTrackLabel)
     : null;
   const overlayGraphics = new Graphics();
   // Extend grabber: one reusable handle (no per-frame allocation).
@@ -388,7 +395,7 @@ export function createPlaylistRenderer(
         .rect(0, tracksTop, viewport.width, Math.max(0, viewport.height - tracksTop))
         .fill({ color: 0xffffff });
     }
-    drawTrackRows(trackRowsGraphics, trackRowsTextLayer, presentation, trackMetaSource);
+    drawTrackRows(trackRowsGraphics, trackRowsTextLayer, presentation, trackMetaSource, trackLabel);
     drawLoopRegion(chromeGraphics, presentation);
     drawMarkers(chromeGraphics, chromeTextLayer, presentation);
     drawPlayPositionRulerMarker(chromeGraphics, presentation);

@@ -20,6 +20,7 @@ import type {
 import type { FinancialBridgeApi } from "../bridge-api";
 import { formatDateLong, formatDateShort, formatMoney, formatMoneyWhole } from "../format";
 import { KIND_COLORS, KIND_LABELS } from "../labels";
+import { useMetricHelp } from "./MetricHelp";
 import {
   InlineNumberInput,
   jumpPlayheadToDate,
@@ -97,6 +98,61 @@ export function FinancialSummaryBar({
         ? "low"
         : "ok";
 
+  // What each number means + what yours say now (hover / focus card).
+  const end = fmtDate(projection.endDate);
+  const minimum = projection.minimumCash;
+  const help = {
+    cash: useMetricHelp<HTMLDivElement>({
+      title: "Liquidez hoy",
+      body: "El dinero disponible que tienes hoy (efectivo y cuentas). Es el punto de partida de toda la proyección: la línea «Caja» arranca aquí.",
+      action: "Clic en la cifra para corregirla.",
+    }),
+    reserve: useMetricHelp<HTMLDivElement>({
+      title: "Reserva mínima",
+      body: "El colchón que no quieres tocar. Si tu caja proyectada baja de esta cifra, SliceX te avisa: línea punteada amarilla en «Caja» y el chip de alertas.",
+      detail:
+        warnings.length > 0
+          ? `En tu plan, tu caja baja de ella ${warnings.length === 1 ? "1 vez" : `${warnings.length} veces`} (ver alertas).`
+          : "En tu plan, tu caja nunca baja de ella.",
+      tone: warnings.length > 0 ? "low" : "ok",
+      action: "Clic en la cifra para cambiarla.",
+    }),
+    debt: useMetricHelp<HTMLDivElement>({
+      title: "Deuda hoy",
+      body: "Lo que debes hoy: los saldos de tus tarjetas más lo que te falta por pagar de tus préstamos.",
+      detail:
+        projection.finalDebt < projection.initialDebt
+          ? `Al ${end} deberás ${formatMoneyWhole(projection.finalDebt)}: bajará ${formatMoneyWhole(projection.initialDebt - projection.finalDebt)}.`
+          : `Al ${end} deberás ${formatMoneyWhole(projection.finalDebt)}.`,
+    }),
+    next: useMetricHelp<HTMLButtonElement>({
+      title: "Próximo pago",
+      body: "El siguiente dinero que sale de tu caja según tu plan: un gasto, una mensualidad o el pago de una tarjeta.",
+      detail: nextPayment
+        ? `${nextPayment.name}: ${formatMoneyWhole(nextPayment.amount)} el ${fmtDate(nextPayment.date)}.`
+        : `No hay pagos en tu plan hasta el ${end}.`,
+      action: nextPayment ? "Clic: llevar el cursor a esa fecha." : undefined,
+    }),
+    minimum: useMetricHelp<HTMLButtonElement>({
+      title: "Mínimo proyectado",
+      body: `El saldo más bajo que tendrá tu caja entre hoy y el ${end}, si todo pasa como en tu plan: tu momento más justo. Se muestra porque es donde se ve si te alcanza.`,
+      detail:
+        minimum.cash < 0
+          ? `El ${fmtDate(minimum.date)} te faltarían ${formatMoneyWhole(-minimum.cash)}: dinero que tendrías que conseguir o mover antes de esa fecha.`
+          : minimum.cash < reserve
+            ? `El ${fmtDate(minimum.date)} quedas ${formatMoneyWhole(reserve - minimum.cash)} por debajo de tu reserva mínima (${formatMoneyWhole(reserve)}).`
+            : `Ni en ese momento bajas de tu reserva: te sobran ${formatMoneyWhole(minimum.cash - reserve)}.`,
+      tone: minimum.cash < 0 ? "negative" : minimum.cash < reserve ? "low" : "ok",
+      action: "Clic: ir a ese día y ver qué lo causa.",
+    }),
+    horizon: useMetricHelp<HTMLDivElement>({
+      title: "Al horizonte",
+      body: `Lo que tendrás en caja al final de tu plan (${doc.horizonMonths} meses, el ${end}) si todo pasa como lo planeaste.`,
+      detail: `${projection.finalCash >= doc.initialCash ? "+" : "−"}${formatMoneyWhole(Math.abs(projection.finalCash - doc.initialCash))} frente a tu liquidez de hoy.`,
+      tone: finalState,
+    }),
+  };
+
   return (
     <div
       className="fin-summary"
@@ -108,8 +164,11 @@ export function FinancialSummaryBar({
         <span className="fin-summary__logo" />
         <span className="fin-summary__wordmark">SliceX</span>
       </div>
+      {/* Every label has a dotted underline: hover or focus explains it
+          (useMetricHelp). The descriptions sit beside the metrics, out of
+          their accessible names. */}
       <div className="fin-summary__metrics" ref={metricsRef}>
-        <div className="fin-summary__metric">
+        <div className="fin-summary__metric" {...help.cash.triggerProps}>
           <span className="fin-summary__label">Liquidez hoy</span>
           <InlineNumberInput
             className="fin-summary__input"
@@ -119,7 +178,8 @@ export function FinancialSummaryBar({
             onCommit={(amount) => bridge.setInitialCash(amount)}
           />
         </div>
-        <div className="fin-summary__metric">
+        {help.cash.tip}
+        <div className="fin-summary__metric" {...help.reserve.triggerProps}>
           <span className="fin-summary__label">Reserva mínima</span>
           <InlineNumberInput
             className="fin-summary__input"
@@ -130,60 +190,69 @@ export function FinancialSummaryBar({
             onCommit={(amount) => bridge.setMinimumCashReserve(amount)}
           />
         </div>
-        <div className="fin-summary__metric">
+        {help.reserve.tip}
+        <div className="fin-summary__metric" tabIndex={0} {...help.debt.triggerProps}>
           <span className="fin-summary__label">Deuda hoy</span>
           <span className="fin-summary__value">
             {formatMoneyWhole(projection.initialDebt)}
           </span>
         </div>
-        {nextPayment ? (
-          <button
-            type="button"
-            className="fin-summary__metric fin-summary__metric--action"
-            title={`Ir al ${fmtDate(nextPayment.date)}`}
-            onClick={() => jumpPlayheadToDate(bridge, nextPayment.date)}
-          >
-            <span className="fin-summary__label">
-              Próximo pago{" "}
-              <span className="fin-summary__date">{fmtDate(nextPayment.date)}</span>
-            </span>
-            <span className="fin-summary__value">
-              {formatMoneyWhole(nextPayment.amount)}{" "}
-              <span className="fin-summary__name">{nextPayment.name}</span>
-            </span>
-          </button>
-        ) : (
-          <div className="fin-summary__metric">
-            <span className="fin-summary__label">Próximo pago</span>
-            <span className="fin-summary__value fin-summary__value--muted">—</span>
-          </div>
-        )}
+        {help.debt.tip}
+        {/* Dated metrics: the date sits next to the label on wide windows
+            and next to the value on narrower ones (the label then sets a
+            much narrower column) — CSS grid areas, one DOM order. */}
         <button
           type="button"
-          className="fin-summary__metric fin-summary__metric--action"
-          data-state={minimumState}
-          title={`Ir al ${fmtDate(projection.minimumCash.date)}`}
-          onClick={() => jumpPlayheadToDate(bridge, projection.minimumCash.date)}
+          className="fin-summary__metric fin-summary__metric--action fin-summary__metric--dated"
+          aria-disabled={nextPayment ? undefined : true}
+          {...help.next.triggerProps}
+          onClick={() => {
+            help.next.triggerProps.onClick();
+            if (nextPayment) jumpPlayheadToDate(bridge, nextPayment.date);
+          }}
         >
-          <span className="fin-summary__label">
-            Mínimo proyectado{" "}
-            <span className="fin-summary__date">
-              {fmtDate(projection.minimumCash.date)}
-            </span>
-          </span>
-          <span className="fin-summary__value">
-            {formatMoneyWhole(projection.minimumCash.cash)}
-          </span>
+          <span className="fin-summary__label">Próximo pago</span>
+          {nextPayment ? (
+            <>
+              <span className="fin-summary__date">{fmtDate(nextPayment.date)}</span>
+              <span className="fin-summary__value">
+                {formatMoneyWhole(nextPayment.amount)}{" "}
+                <span className="fin-summary__name">{nextPayment.name}</span>
+              </span>
+            </>
+          ) : (
+            <span className="fin-summary__value fin-summary__value--muted">—</span>
+          )}
         </button>
-        <div className="fin-summary__metric" data-state={finalState}>
-          <span className="fin-summary__label">
-            Al horizonte{" "}
-            <span className="fin-summary__date">{fmtDate(projection.endDate)}</span>
-          </span>
+        {help.next.tip}
+        <button
+          type="button"
+          className="fin-summary__metric fin-summary__metric--action fin-summary__metric--dated"
+          data-state={minimumState}
+          {...help.minimum.triggerProps}
+          onClick={() => {
+            help.minimum.triggerProps.onClick();
+            jumpPlayheadToDate(bridge, minimum.date);
+          }}
+        >
+          <span className="fin-summary__label">Mínimo proyectado</span>
+          <span className="fin-summary__date">{fmtDate(minimum.date)}</span>
+          <span className="fin-summary__value">{formatMoneyWhole(minimum.cash)}</span>
+        </button>
+        {help.minimum.tip}
+        <div
+          className="fin-summary__metric fin-summary__metric--dated"
+          data-state={finalState}
+          tabIndex={0}
+          {...help.horizon.triggerProps}
+        >
+          <span className="fin-summary__label">Al horizonte</span>
+          <span className="fin-summary__date">{end}</span>
           <span className="fin-summary__value">
             {formatMoneyWhole(projection.finalCash)}
           </span>
         </div>
+        {help.horizon.tip}
       </div>
       {tools}
       <div className="fin-summary__spacer" />
@@ -193,6 +262,7 @@ export function FinancialSummaryBar({
           warnings={warnings}
           formatDate={fmtDate}
           inert={inert}
+          reserve={reserve}
         />
         {onToggleTheme ? (
           <ThemeToggle theme={theme ?? "light"} onToggle={onToggleTheme} />
@@ -428,11 +498,13 @@ function WarningsChip({
   warnings,
   formatDate,
   inert,
+  reserve,
 }: {
   bridge: FinancialBridgeApi;
   warnings: LiquidityWarning[];
   formatDate: (iso: string) => string;
   inert: boolean;
+  reserve: number;
 }) {
   const menu = useMenuButton(inert);
   const count = warnings.length;
@@ -442,13 +514,15 @@ function WarningsChip({
     if (count === 0 && open) close(false);
   }, [count, open, close]);
 
+  // The words collapse on narrower windows (icon + count stay; the words
+  // stay in the accessible name).
   if (count === 0) {
     return (
-      <span className="fin-summary__chip" data-state="ok" role="status">
+      <span className="fin-summary__chip" data-state="ok" role="status" title="Sin alertas">
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
         </svg>
-        Sin alertas
+        <span className="fin-summary__chip-words">Sin alertas</span>
       </span>
     );
   }
@@ -471,7 +545,8 @@ function WarningsChip({
           <path d="M8 2.5 14.5 13.5h-13z" />
           <path d="M8 6.5v3.2M8 11.6v.1" />
         </svg>
-        {count} {count === 1 ? "alerta" : "alertas"}
+        {count}
+        <span className="fin-summary__chip-words"> {count === 1 ? "alerta" : "alertas"}</span>
       </button>
       {menu.anchor
         ? createPortal(
@@ -483,6 +558,10 @@ function WarningsChip({
               style={{ right: menu.anchor.right, top: menu.anchor.top }}
               onKeyDown={menu.onMenuKeyDown}
             >
+              <p className="fin-popover__note">
+                Cuándo tu caja proyectada baja de tu reserva mínima (
+                {formatMoneyWhole(reserve)}) o de cero. Clic en una para ir a esa fecha.
+              </p>
               {warnings.map((warning) => (
                 <button
                   key={`${warning.startDate}:${warning.eventId}`}

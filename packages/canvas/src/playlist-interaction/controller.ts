@@ -7,6 +7,8 @@ import {
   getTrackHeightByIndex,
   getHorizontalContentExtent,
   getTrackIdByIndex,
+  getTrackLaneCount,
+  getTrackLaneHeight,
   getTracksTop,
   getVerticalScrollableRange,
   getVerticalScrollbarRect,
@@ -24,7 +26,10 @@ import type {
   PlaylistToolId,
   PlaylistTrackMenuAction,
 } from "../playlist-core";
-import type { ActiveGesture } from "./gesture-types";
+import type { ActiveGesture, ClipDragTrackInfo } from "./gesture-types";
+import type { PlaylistCreateRequest } from "./tools/types";
+
+export type { PlaylistCreateRequest } from "./tools/types";
 import {
   createViewportNavigator,
   createWheelClassifier,
@@ -71,6 +76,18 @@ export interface PlaylistInteractionOptions {
   // The pointer moved over the overview lane: the beat under it (floored),
   // or null when it left the lane. Called only when that value changes.
   onOverviewHover?: (beat: number | null) => void;
+  // A host that creates objects through its own flow (e.g. an editor that
+  // adds only on "Save"). With this set the Draw tool never creates a clip
+  // on empty space: a double-click asks at once; a drag previews the range
+  // (dashed, on the lane it would take) and asks on release; a plain click
+  // does nothing. Nothing is added unless the host adds it.
+  onCreateRequest?: (request: PlaylistCreateRequest) => void;
+  // What a plain (notched) mouse wheel scrolls. "time" (default, FL
+  // parity): the timeline, Shift / the track headers scroll the rows.
+  // "rows": the rows, like any document (Shift, a tilt wheel or the wheel
+  // over the ruler / overview lane move time). Zoom and trackpad pan are
+  // the same in both.
+  mouseWheel?: "time" | "rows";
 }
 
 type PlaylistInteractionHost = HTMLElement & {
@@ -506,6 +523,71 @@ export function createPlaylistInteractionController(
   let activeGesture: ActiveGesture | null = null;
   const onClipLevelDrag = options.onClipLevelDrag;
   const onOverviewHover = options.onOverviewHover;
+  const onCreateRequest = options.onCreateRequest;
+  const wheelScrollsRows = options.mouseWheel === "rows";
+
+  // Lane of row `trackIndex` under screen `y` for a dragged clip, and the
+  // free lane that row opens (stacked lanes, lanes.ts). A row with other
+  // clips offers its lanes plus one empty lane below them (index = the
+  // lanes it had when the gesture started); an empty row, or one holding
+  // only the dragged clips, just its own lanes. Per-row facts are cached on
+  // the gesture (clips outside the drag don't change during it): O(n) once
+  // per row hovered, O(1) per move.
+  const dragLaneTarget = (
+    state: import("../playlist-core").PlaylistState,
+    gesture: Extract<ActiveGesture, { kind: "clip-drag" }>,
+    trackIndex: number,
+    y: number,
+  ): { lane: number; freeLane: { trackIndex: number; lane: number } | null } => {
+    const track = state.tracks[trackIndex];
+    if (!track) return { lane: 0, freeLane: null };
+    const cache = (gesture.trackInfo ??= new Map<string, ClipDragTrackInfo>());
+    let info = cache.get(track.id);
+    if (!info) {
+      const dragged = new Set(gesture.originals.map((clip) => clip.id));
+      const base = core.getGestureBase() ?? state;
+      const baseTrack = base.tracks.find((candidate) => candidate.id === track.id);
+      info = {
+        hasOthers: state.clips.some(
+          (clip) => clip.trackId === track.id && !dragged.has(clip.id),
+        ),
+        baseLanes: baseTrack ? getTrackLaneCount(baseTrack) : 1,
+      };
+      cache.set(track.id, info);
+    }
+    const laneHeight = getTrackLaneHeight(track, metrics);
+    const top = core.getPresentation().trackIndexToScreenY(trackIndex);
+    const lastLane = info.hasOthers ? info.baseLanes : getTrackLaneCount(track) - 1;
+    return {
+      lane: clamp(Math.floor((y - top) / laneHeight), 0, Math.max(0, lastLane)),
+      freeLane: info.hasOthers ? { trackIndex, lane: info.baseLanes } : null,
+    };
+  };
+
+  // Lane a new clip [start, end) would take in row `trackIndex`: the first
+  // one free at those times from the top, else a new one below (as the
+  // lane layout places a fresh clip).
+  const creationLane = (
+    state: import("../playlist-core").PlaylistState,
+    trackIndex: number,
+    start: number,
+    end: number,
+  ): number => {
+    const track = state.tracks[trackIndex];
+    if (!track) return 0;
+    const lanes = getTrackLaneCount(track);
+    for (let lane = 0; lane < lanes; lane += 1) {
+      const busy = state.clips.some(
+        (clip) =>
+          clip.trackId === track.id &&
+          (clip.lane ?? 0) === lane &&
+          clip.start < end &&
+          start < clip.start + clip.duration,
+      );
+      if (!busy) return lane;
+    }
+    return lanes;
+  };
   const extendMinBeatsPerPx = Math.max(0, options.clipExtendMinBeatsPerPx ?? 0);
   const hitOptions = {
     clipLevel: onClipLevelDrag !== undefined,
@@ -938,7 +1020,11 @@ export function createPlaylistInteractionController(
     }
 
     if (hit.kind === "track-resize-handle") {
-      const startHeight = getTrackHeightByIndex(state, hit.trackIndex, metrics);
+      // The row is lanes x one lane height: the handle sizes one lane.
+      const resized = state.tracks[hit.trackIndex];
+      const startHeight = resized
+        ? getTrackLaneHeight(resized, metrics)
+        : getTrackHeightByIndex(state, hit.trackIndex, metrics);
       activeGesture = {
         kind: "track-resize",
         pointerId: event.pointerId,
@@ -1107,6 +1193,7 @@ export function createPlaylistInteractionController(
         hit,
         event,
         clickCount,
+        onCreateRequest,
       });
     } finally {
       if (!gesture || !gestureMutatesDoc(gesture)) {
@@ -1316,23 +1403,26 @@ export function createPlaylistInteractionController(
       // +Infinity with virtual tracks; the last real track otherwise, so
       // the ghost never shows a drop on a row that is only background.
       const maxTrack = Math.max(0, core.maxTrackIndex());
+      const targetTrackIndex = clamp(gesture.startTrackIndex + trackDelta, 0, maxTrack);
+      // Stacked lanes (lanes.ts): the primary clip goes to the lane under
+      // the pointer; a row with other clips opens one extra, empty lane
+      // below its lanes (the free lane) to stack at the same time as them.
+      const target = dragLaneTarget(state, gesture, targetTrackIndex, point.y);
       const allMoves = gesture.originals.map((clip) => ({
         id: clip.id,
         start: clip.start + deltaTime,
         trackIndex: clamp(clip.trackIndex + trackDelta, 0, maxTrack),
+        lane: clip.id === gesture.primaryClipId ? target.lane : clip.lane,
       }));
 
       core.moveClips(allMoves);
       emitDragOverlays(core, state, point, event.altKey, {
         kind: "clip-move",
         primaryClipId: gesture.primaryClipId,
-        previewTrackIndex: clamp(
-          gesture.startTrackIndex + trackDelta,
-          0,
-          maxTrack,
-        ),
+        previewTrackIndex: targetTrackIndex,
         previewStart: primaryStart,
         allMoves,
+        freeLane: target.freeLane,
       });
       event.preventDefault();
       return;
@@ -1401,6 +1491,34 @@ export function createPlaylistInteractionController(
           handleX: point.x + gesture.grabOffsetX,
         },
         after.start + after.duration,
+      );
+      event.preventDefault();
+      return;
+    }
+
+    if (gesture.kind === "clip-create-drag" && gesture.hostCreate) {
+      const endTime = core.snapTime(screenXToTime(state, point.x, metrics), event.altKey, state);
+      const minEnd = gesture.startSnappedStart + metrics.minClipDuration;
+      if (endTime <= minEnd && gesture.hostCreate.end === null) {
+        event.preventDefault();
+        return;
+      }
+      const end = Math.max(endTime, minEnd);
+      gesture.hostCreate.end = end;
+      const duration = end - gesture.startSnappedStart;
+      emitDragOverlays(
+        core,
+        state,
+        point,
+        event.altKey,
+        {
+          kind: "clip-create",
+          trackIndex: gesture.startTrackIndex,
+          lane: creationLane(state, gesture.startTrackIndex, gesture.startSnappedStart, end),
+          previewStart: gesture.startSnappedStart,
+          previewDuration: duration,
+        },
+        end,
       );
       event.preventDefault();
       return;
@@ -1656,7 +1774,9 @@ export function createPlaylistInteractionController(
 
     if (gesture.kind === "track-resize") {
       const dy = point.y - gesture.startY;
-      core.setTrackHeight(gesture.trackIndex, gesture.startHeight + dy);
+      const resized = state.tracks[gesture.trackIndex];
+      const lanes = resized ? getTrackLaneCount(resized) : 1;
+      core.setTrackHeight(gesture.trackIndex, gesture.startHeight + dy / lanes);
       event.preventDefault();
       return;
     }
@@ -1705,6 +1825,20 @@ export function createPlaylistInteractionController(
     if (activeGesture.kind === "marquee") {
       core.setMarquee(null);
     }
+
+    // Host-owned creation: the previewed range becomes a request (the host
+    // decides what, if anything, is added). Asked after the overlays clear.
+    const createRequest: PlaylistCreateRequest | null =
+      activeGesture.kind === "clip-create-drag" &&
+      activeGesture.hostCreate &&
+      activeGesture.hostCreate.end !== null
+        ? {
+            trackIndex: activeGesture.startTrackIndex,
+            start: activeGesture.startSnappedStart,
+            duration: activeGesture.hostCreate.end - activeGesture.startSnappedStart,
+            templateClipId: activeGesture.hostCreate.templateClipId,
+          }
+        : null;
 
     if (activeGesture.kind === "clip-level") {
       const point = resolvePoint(host, event);
@@ -1758,6 +1892,7 @@ export function createPlaylistInteractionController(
     activeGesture = null;
     host.releasePointerCapture?.(event.pointerId);
     setCursor(host, hitAt(resolvePoint(host, event)), null, core.getState().tool);
+    if (createRequest) onCreateRequest?.(createRequest);
   };
 
   // Pointer wheel / trackpad.
@@ -1766,10 +1901,12 @@ export function createPlaylistInteractionController(
   //     notched wheel.
   //   - Trackpad two-finger swipe: free 2-D pan, 1:1 with the fingers;
   //     with no tracks to scroll, vertical swipes move time too.
-  //   - Mouse wheel: TIME (the main axis of an infinite timeline), smooth
-  //     and accelerating (notches accumulate on the glide target). Shift +
-  //     wheel, or the wheel over the track headers, scrolls the tracks.
-  //     A tilt wheel (deltaX) moves time.
+  //   - Mouse wheel (options.mouseWheel): "time" — TIME (the main axis of
+  //     an infinite timeline), smooth and accelerating (notches accumulate
+  //     on the glide target); Shift + wheel, or the wheel over the track
+  //     headers, scrolls the tracks. "rows" — the rows; Shift + wheel, or
+  //     the wheel over the ruler / overview lane (they don't scroll
+  //     vertically), moves time. A tilt wheel (deltaX) always moves time.
   const zoomImmediate = (factor: number, screenX: number): void => {
     const state = core.getState();
     const anchorTime = screenXToTime(state, screenX, metrics);
@@ -1825,7 +1962,15 @@ export function createPlaylistInteractionController(
     }
 
     const notch = dy !== 0 ? dy : dx;
-    if ((event.shiftKey || overHeaders) && room && dx === 0) {
+    if (wheelScrollsRows) {
+      // Shift arrives as deltaX on some platforms (Windows Chrome): either
+      // way it means time; so does a tilt wheel and the bands above rows.
+      const overRows = point.y > getTracksTop(metrics);
+      if (!event.shiftKey && dx === 0 && overRows && room) {
+        navigator.scrollBy(0, notch);
+        return;
+      }
+    } else if ((event.shiftKey || overHeaders) && room && dx === 0) {
       navigator.scrollBy(0, notch);
       return;
     }

@@ -5,7 +5,14 @@
 // actually visits. Each start jumps arithmetically to the first occurrence
 // inside the window (performance canon §1.5 / §2.4).
 import { isISODate, parseISODate, toDayNumber } from "./dates";
-import { intersectWindow, monthDayNumber, monthIndexOf, sanitizeDayOfMonth } from "./recurrence";
+import {
+  firstPhasedMonth,
+  intersectWindow,
+  monthDayNumber,
+  monthIndexOf,
+  recurrenceInterval,
+  sanitizeDayOfMonth,
+} from "./recurrence";
 import type { DayWindow } from "./recurrence";
 import type { FinancialRecurrence, ISODate } from "./types";
 
@@ -24,6 +31,8 @@ export class DayCursor {
   private month = 0;
   /** MONTHLY: sanitised day of month. */
   private dom = 1;
+  /** MONTHLY: months between occurrences ("cada N meses"). */
+  private monthStep = 1;
   /** SEMIMONTHLY: 0 = the 15th, 1 = the last day of the month. */
   private half = 0;
   /** Inclusive last day of the window. */
@@ -46,15 +55,32 @@ export class DayCursor {
     return this;
   }
 
-  /** `dayOfMonth` (clamped to each month's length) every month inside `window`; at most `limit` dates. */
-  startMonthly(dayOfMonth: number, window: DayWindow, limit = Number.POSITIVE_INFINITY): this {
+  /**
+   * `dayOfMonth` (clamped to each month's length) every `step` months in the
+   * phase of `anchorMonth` (step 1: every month) inside `window`; at most
+   * `limit` dates.
+   */
+  startMonthly(
+    dayOfMonth: number,
+    window: DayWindow,
+    limit = Number.POSITIVE_INFINITY,
+    step = 1,
+    anchorMonth = 0,
+  ): this {
     this.mode = MONTHLY;
     this.dom = sanitizeDayOfMonth(dayOfMonth);
+    this.monthStep = step > 1 ? step : 1;
     this.hi = window.hi;
     this.left = limit;
-    this.month = monthIndexOf(window.lo);
+    this.month =
+      this.monthStep > 1
+        ? firstPhasedMonth(anchorMonth, this.monthStep, monthIndexOf(window.lo))
+        : monthIndexOf(window.lo);
     let day = monthDayNumber(this.month, this.dom);
-    if (day < window.lo) day = monthDayNumber(++this.month, this.dom);
+    if (day < window.lo) {
+      this.month += this.monthStep;
+      day = monthDayNumber(this.month, this.dom);
+    }
     this.set(day);
     return this;
   }
@@ -86,12 +112,20 @@ export class DayCursor {
     switch (rule.frequency) {
       case "once":
         return this.startFixedStep(toDayNumber(anchor), 0, window, 1);
+      case "daily":
+        return this.startFixedStep(toDayNumber(anchor), recurrenceInterval(rule), window);
       case "weekly":
         return this.startFixedStep(toDayNumber(anchor), 7, window);
       case "biweekly":
         return this.startFixedStep(toDayNumber(anchor), 14, window);
       case "monthly":
-        return this.startMonthly(parseISODate(anchor)[2], window);
+        return this.startMonthly(
+          parseISODate(anchor)[2],
+          window,
+          Number.POSITIVE_INFINITY,
+          recurrenceInterval(rule),
+          monthIndexOf(toDayNumber(anchor)),
+        );
       case "semimonthly":
         return this.startSemimonthly(window);
       default:
@@ -108,7 +142,8 @@ export class DayCursor {
         this.set(this.step > 0 ? this.day + this.step : Number.POSITIVE_INFINITY);
         break;
       case MONTHLY:
-        this.set(monthDayNumber(++this.month, this.dom));
+        this.month += this.monthStep;
+        this.set(monthDayNumber(this.month, this.dom));
         break;
       default:
         if (this.half === 0) {

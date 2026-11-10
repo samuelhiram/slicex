@@ -271,6 +271,7 @@ interface ItemExpansion {
   id: string;
   name: string;
   frequency: unknown;
+  interval: unknown;
   startDate: unknown;
   endDate: unknown;
   anchorDate: unknown;
@@ -361,6 +362,7 @@ function entryMatches(e: ItemExpansion, item: FinancialItem, range: Range, docSt
     e.id === item.id &&
     e.name === item.name &&
     e.frequency === rec?.frequency &&
+    e.interval === rec?.interval &&
     e.startDate === rec?.startDate &&
     e.endDate === rec?.endDate &&
     e.anchorDate === rec?.anchorDate &&
@@ -420,6 +422,7 @@ function buildEntry(
     id: item.id,
     name: item.name,
     frequency: rec?.frequency,
+    interval: rec?.interval,
     startDate: rec?.startDate,
     endDate: rec?.endDate,
     anchorDate: rec?.anchorDate,

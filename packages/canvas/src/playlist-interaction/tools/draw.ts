@@ -67,6 +67,7 @@ export const drawTool: PlaylistTool = {
           id: clip.id,
           start: clip.start,
           trackIndex: getTrackIndexById(state, clip.trackId),
+          lane: clip.lane ?? 0,
         })),
       };
     }
@@ -88,7 +89,33 @@ export const drawTool: PlaylistTool = {
       color: "#7aa6d8",
       duration: DEFAULT_CLIP_DURATION_BEATS,
     });
-    if ((env.clickCount ?? (event as { detail?: number }).detail) === 2) {
+    const doubleClick = (env.clickCount ?? (event as { detail?: number }).detail) === 2;
+    // A host that creates through its own flow (e.g. an editor that only
+    // adds on "Save"): never create here — a double-click asks right away,
+    // a drag previews the range and asks on release, a click does nothing.
+    if (env.onCreateRequest) {
+      const templateClipId = state.selection.clipIds[0] ?? null;
+      if (doubleClick) {
+        env.onCreateRequest({ trackIndex, start, duration: null, templateClipId });
+        return null;
+      }
+      return {
+        kind: "clip-create-drag",
+        pointerId: event.pointerId,
+        createdClipId: null,
+        startPointerTime: rawTime,
+        startTrackIndex: trackIndex,
+        startSnappedStart: start,
+        template: {
+          type: template.type,
+          label: template.label,
+          color: template.color,
+          sourceId: template.sourceId,
+        },
+        hostCreate: { templateClipId, end: null },
+      };
+    }
+    if (doubleClick) {
       const id = core.createClip({
         trackIndex,
         start,

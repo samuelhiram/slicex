@@ -4,6 +4,8 @@
 // year — with the Mexican year's suggestions (aguinaldo, Buen Fin…) if
 // wanted. No foreign demo left behind.
 import * as React from "react";
+import { schemaResolver, useForm } from "@mantine/form";
+import { z } from "zod";
 import {
   addDays,
   daysInMonth,
@@ -14,7 +16,9 @@ import {
   type RecurrenceFrequency,
 } from "@slicex/core";
 import { formatDateWeekday, parseDateInput } from "../format";
+import { frequencyParts, withFrequencyParts, type FrequencyUnit } from "../schedule-ui";
 import { parseNumberInput } from "./FinancialUi";
+import { SchedulePicker } from "./SchedulePicker";
 
 export function WelcomeBanner({
   onStart,
@@ -46,12 +50,8 @@ export function WelcomeBanner({
   );
 }
 
-const PAY_OPTIONS: ReadonlyArray<{ value: RecurrenceFrequency; label: string }> = [
-  { value: "semimonthly", label: "Quincenal (el 15 y fin de mes)" },
-  { value: "monthly", label: "Mensual" },
-  { value: "biweekly", label: "Cada 14 días" },
-  { value: "weekly", label: "Semanal" },
-];
+// "¿Cada cuánto te pagan?" uses THE schedule control (SchedulePicker), like
+// the item editor's "Cuándo" — a pay is never "una vez".
 
 interface FixedRow {
   name: string;
@@ -85,6 +85,8 @@ export function nextDayOfMonth(today: ISODate, day: number): ISODate {
 export interface OnboardingAnswers {
   cash: number;
   frequency: RecurrenceFrequency;
+  /** "Cada N" of a daily / monthly pay (absent = 1). */
+  interval?: number;
   pay: number;
   nextPay: ISODate;
   reserve: number;
@@ -108,6 +110,9 @@ export function buildYear(today: ISODate, answers: OnboardingAnswers): Financial
               frequency: answers.frequency,
               startDate: today,
               anchorDate: answers.nextPay,
+              ...(answers.interval !== undefined && answers.interval > 1
+                ? { interval: answers.interval }
+                : {}),
             },
     });
   }
@@ -137,6 +142,69 @@ export function buildYear(today: ISODate, answers: OnboardingAnswers): Financial
   return doc;
 }
 
+// The onboarding's form: Mantine Form in UNCONTROLLED mode (nothing here
+// derives from every keystroke but two previews, watched) validated with a
+// Zod schema of the TEXT as typed (es-MX amounts and dates) — errors land on
+// their field. The schedule (SchedulePicker) is a custom control: plain state.
+interface OnboardingValues {
+  cash: string;
+  pay: string;
+  nextPay: string;
+  reserve: string;
+  fixed: FixedRow[];
+  withSuggestions: boolean;
+}
+
+const amountText = (message: string, { required = false } = {}) =>
+  z.string().superRefine((text, ctx) => {
+    if (text.trim() === "") {
+      if (required) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+      return;
+    }
+    const value = parseNumberInput(text);
+    if (value === null || !Number.isFinite(value) || value < 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+    }
+  });
+
+/** The onboarding's answers, as typed. Exported for tests. */
+export function onboardingSchema(today: ISODate) {
+  return z.object({
+    cash: z.string().superRefine((text, ctx) => {
+      const value = parseNumberInput(text);
+      if (text.trim() === "" || value === null || !Number.isFinite(value)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Escribe cuánto dinero tienes hoy (puede ser 0)" });
+      }
+    }),
+    pay: amountText("Escribe cuánto te pagan cada vez", { required: true }),
+    nextPay: z.string().refine(
+      (text) => text.trim() === "" || parseDateInput(text, today) !== null,
+      "No reconocida · ej. 15/11/2026",
+    ),
+    reserve: amountText("Escribe un monto (o déjalo vacío)"),
+    fixed: z.array(
+      z.object({
+        name: z.string(),
+        amount: amountText("Escribe un monto"),
+        day: z.string().refine((text) => {
+          if (text.trim() === "") return true;
+          const day = Number(text);
+          return Number.isInteger(day) && day >= 1 && day <= 31;
+        }, "Día entre 1 y 31"),
+      }),
+    ),
+    withSuggestions: z.boolean(),
+  });
+}
+
+function FieldError({ id, message }: { id: string; message: React.ReactNode }) {
+  return message ? (
+    <span id={id} className="fin-editor__field-error">
+      {message}
+    </span>
+  ) : null;
+}
+
 export function OnboardingDialog({
   today,
   onCreate,
@@ -146,14 +214,29 @@ export function OnboardingDialog({
   onCreate: (doc: FinancialDocument) => void;
   onClose: () => void;
 }) {
-  const [cash, setCash] = React.useState("");
-  const [frequency, setFrequency] = React.useState<RecurrenceFrequency>("semimonthly");
-  const [pay, setPay] = React.useState("");
-  const [nextPay, setNextPay] = React.useState("");
-  const [reserve, setReserve] = React.useState("");
-  const [rows, setRows] = React.useState<FixedRow[]>(EMPTY_ROWS);
-  const [withSuggestions, setWithSuggestions] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
+  const form = useForm<OnboardingValues>({
+    mode: "uncontrolled",
+    initialValues: {
+      cash: "",
+      pay: "",
+      nextPay: "",
+      reserve: "",
+      fixed: EMPTY_ROWS,
+      withSuggestions: true,
+    },
+    validate: schemaResolver(onboardingSchema(today), { sync: true }),
+  });
+  // How often you get paid: a unit + "cada N" (default: la quincena).
+  const [payUnit, setPayUnit] = React.useState<FrequencyUnit>("semimonthly");
+  const [payEvery, setPayEvery] = React.useState(1);
+  const payRule = withFrequencyParts({ frequency: "monthly", startDate: today }, payUnit, payEvery);
+  const frequency = payRule.frequency;
+  // The two previews that follow the typing (uncontrolled: watched).
+  const [nextPayText, setNextPayText] = React.useState("");
+  const [payText, setPayText] = React.useState("");
+  form.watch("nextPay", ({ value }) => setNextPayText(value));
+  form.watch("pay", ({ value }) => setPayText(value));
+  const parsedNextPay = nextPayText.trim() ? parseDateInput(nextPayText, today) : null;
   const firstRef = React.useRef<HTMLInputElement | null>(null);
 
   React.useEffect(() => {
@@ -165,22 +248,28 @@ export function OnboardingDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const parsedNextPay = nextPay.trim() ? parseDateInput(nextPay, today) : null;
+  // A text input bound to the form: uncontrolled (key + defaultValue), its
+  // error under it and tied to it.
+  const text = (path: string, describe = true) => {
+    const { error, ...input } = form.getInputProps(path);
+    const errorId = `fin-onboarding-${path.replace(/\./g, "-")}-error`;
+    return {
+      key: form.key(path),
+      input: {
+        ...input,
+        "aria-invalid": error ? true : undefined,
+        "aria-describedby": error && describe ? errorId : undefined,
+      },
+      error: <FieldError id={errorId} message={error} />,
+    };
+  };
 
-  const submit = (event: React.FormEvent) => {
-    event.preventDefault();
-    const cashValue = parseNumberInput(cash);
-    const payValue = parseNumberInput(pay);
-    if (cashValue === null || !Number.isFinite(cashValue)) {
-      setError("Escribe cuánto dinero tienes hoy (puede ser 0).");
-      return;
-    }
-    if (payValue === null || !Number.isFinite(payValue) || payValue < 0) {
-      setError("Escribe cuánto te pagan cada vez.");
-      return;
-    }
-    const reserveValue = reserve.trim() ? parseNumberInput(reserve) : payValue;
-    const fixed = rows
+  const submit = form.onSubmit((values) => {
+    const cashValue = parseNumberInput(values.cash) ?? 0;
+    const payValue = parseNumberInput(values.pay) ?? 0;
+    const reserveValue = values.reserve.trim() ? parseNumberInput(values.reserve) : payValue;
+    const nextPay = values.nextPay.trim() ? parseDateInput(values.nextPay, today) : null;
+    const fixed = values.fixed
       .map((row) => ({
         name: row.name,
         amount: parseNumberInput(row.amount) ?? 0,
@@ -191,14 +280,27 @@ export function OnboardingDialog({
       buildYear(today, {
         cash: cashValue,
         frequency,
+        interval: payRule.interval,
         pay: payValue,
-        nextPay: parsedNextPay ?? addDays(today, frequency === "weekly" ? 7 : 14),
+        nextPay:
+          nextPay ??
+          addDays(
+            today,
+            frequencyParts(payRule).unit === "days" ? frequencyParts(payRule).every : 14,
+          ),
         reserve: reserveValue !== null && Number.isFinite(reserveValue) ? reserveValue : payValue,
         fixed,
-        withSuggestions,
+        withSuggestions: values.withSuggestions,
       }),
     );
-  };
+  });
+
+  // The summary line: the first field error, in form order.
+  const firstError = Object.values(form.errors).find((message) => message) ?? "";
+  const cash = text("cash");
+  const pay = text("pay");
+  const nextPayField = text("nextPay");
+  const reserve = text("reserve");
 
   return (
     <div className="playlist-shell__modal-overlay" role="presentation">
@@ -207,6 +309,7 @@ export function OnboardingDialog({
         role="dialog"
         aria-modal="true"
         aria-label="Tu año en 60 segundos"
+        noValidate
         onSubmit={submit}
       >
         <header className="playlist-shell__modal-header">
@@ -220,50 +323,45 @@ export function OnboardingDialog({
             <label className="fin-editor__field fin-editor__field--wide">
               <span className="fin-editor__label">¿Cuánto dinero tienes hoy?</span>
               <input
+                key={cash.key}
+                {...cash.input}
                 ref={firstRef}
                 type="text"
                 inputMode="decimal"
                 placeholder="$12,000"
-                value={cash}
-                onChange={(event) => setCash(event.target.value)}
               />
+              {cash.error}
             </label>
-            <label className="fin-editor__field">
-              <span className="fin-editor__label">¿Cómo te pagan?</span>
-              <select
-                value={frequency}
-                onChange={(event) => setFrequency(event.target.value as RecurrenceFrequency)}
-              >
-                {PAY_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="fin-editor__field fin-editor__field--wide">
+              <span className="fin-editor__label" id="fin-onboarding-pay-repeat">
+                ¿Cada cuánto te pagan?
+              </span>
+              <SchedulePicker
+                labelledBy="fin-onboarding-pay-repeat"
+                unit={payUnit}
+                every={payEvery}
+                allowOnce={false}
+                onChange={(unit, every) => {
+                  setPayUnit(unit);
+                  setPayEvery(every);
+                }}
+              />
+            </div>
             <label className="fin-editor__field">
               <span className="fin-editor__label">¿Cuánto cada vez?</span>
-              <input
-                type="text"
-                inputMode="decimal"
-                placeholder="$9,000"
-                value={pay}
-                onChange={(event) => setPay(event.target.value)}
-              />
+              <input key={pay.key}
+                {...pay.input} type="text" inputMode="decimal" placeholder="$9,000" />
+              {pay.error}
             </label>
             {frequency !== "semimonthly" ? (
               <label className="fin-editor__field fin-editor__field--wide">
                 <span className="fin-editor__label">¿Cuándo es tu próximo pago?</span>
-                <input
-                  type="text"
-                  placeholder="dd/mm/aaaa"
-                  value={nextPay}
-                  aria-invalid={nextPay.trim() !== "" && parsedNextPay === null}
-                  onChange={(event) => setNextPay(event.target.value)}
-                />
+                <input key={nextPayField.key}
+                {...nextPayField.input} type="text" placeholder="dd/mm/aaaa" />
                 <span className="fin-date__preview" data-state={parsedNextPay ? "ok" : undefined}>
                   {parsedNextPay ? formatDateWeekday(parsedNextPay) : ""}
                 </span>
+                {nextPayField.error}
               </label>
             ) : null}
             <label className="fin-editor__field fin-editor__field--wide">
@@ -272,12 +370,13 @@ export function OnboardingDialog({
                 <em className="fin-editor__optional">(si lo dejas vacío: un pago)</em>
               </span>
               <input
+                key={reserve.key}
+                {...reserve.input}
                 type="text"
                 inputMode="decimal"
-                placeholder={pay ? pay : "$5,000"}
-                value={reserve}
-                onChange={(event) => setReserve(event.target.value)}
+                placeholder={payText ? payText : "$5,000"}
               />
+              {reserve.error}
             </label>
           </div>
 
@@ -285,52 +384,53 @@ export function OnboardingDialog({
             Gastos fijos <em className="fin-editor__optional">(opcional)</em>
           </p>
           <div className="fin-onboarding__rows">
-            {rows.map((row, index) => (
-              <div key={index} className="fin-onboarding__row">
-                <input
-                  type="text"
-                  aria-label={`Gasto fijo ${index + 1}`}
-                  placeholder={index === 0 ? "Renta" : index === 1 ? "Internet" : "Colegiatura"}
-                  value={row.name}
-                  onChange={(event) =>
-                    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, name: event.target.value } : r)))
-                  }
-                />
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  aria-label={`Monto del gasto ${index + 1}`}
-                  placeholder="$0"
-                  value={row.amount}
-                  onChange={(event) =>
-                    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, amount: event.target.value } : r)))
-                  }
-                />
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  aria-label={`Día del mes del gasto ${index + 1}`}
-                  placeholder="día"
-                  value={row.day}
-                  onChange={(event) =>
-                    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, day: event.target.value } : r)))
-                  }
-                />
-              </div>
-            ))}
+            {EMPTY_ROWS.map((_, index) => {
+              const name = text(`fixed.${index}.name`);
+              const amount = text(`fixed.${index}.amount`);
+              const day = text(`fixed.${index}.day`);
+              return (
+                <div key={index} className="fin-onboarding__row">
+                  <input
+                    key={name.key}
+                {...name.input}
+                    type="text"
+                    aria-label={`Gasto fijo ${index + 1}`}
+                    placeholder={index === 0 ? "Renta" : index === 1 ? "Internet" : "Colegiatura"}
+                  />
+                  <input
+                    key={amount.key}
+                {...amount.input}
+                    type="text"
+                    inputMode="decimal"
+                    aria-label={`Monto del gasto ${index + 1}`}
+                    placeholder="$0"
+                  />
+                  <input
+                    key={day.key}
+                {...day.input}
+                    type="text"
+                    inputMode="numeric"
+                    aria-label={`Día del mes del gasto ${index + 1}`}
+                    placeholder="día"
+                  />
+                  {amount.error}
+                  {day.error}
+                </div>
+              );
+            })}
           </div>
 
           <label className="fin-editor__check fin-onboarding__check">
             <input
+              key={form.key("withSuggestions")}
+              {...form.getInputProps("withSuggestions", { type: "checkbox" })}
               type="checkbox"
-              checked={withSuggestions}
-              onChange={(event) => setWithSuggestions(event.target.checked)}
             />
             Agregar el año mexicano: aguinaldo, Buen Fin, predial, regreso a clases
           </label>
 
           <p className="fin-editor__error" role="alert">
-            {error ?? ""}
+            {firstError}
           </p>
           <div className="fin-editor__actions">
             <span className="fin-editor__actions-spacer" />

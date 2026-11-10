@@ -43,6 +43,25 @@ export function intersectWindow(
   return lo <= hi ? { lo, hi } : null;
 }
 
+/** Upper bound of a "cada N" interval (days or months): sanity, not policy. */
+export const MAX_RECURRENCE_INTERVAL = 3660;
+
+/** The rule's "cada N" (integer in 1..MAX_RECURRENCE_INTERVAL; absent / junk = 1). */
+export function recurrenceInterval(rule: Pick<FinancialRecurrence, "interval">): number {
+  const raw = rule.interval;
+  if (raw === undefined || !Number.isFinite(raw)) return 1;
+  const n = Math.round(raw);
+  return n < 1 ? 1 : n > MAX_RECURRENCE_INTERVAL ? MAX_RECURRENCE_INTERVAL : n;
+}
+
+/**
+ * Internal: first month index >= `fromMonth` in the phase of `anchorMonth`
+ * every `step` months (step 1: `fromMonth` itself).
+ */
+export function firstPhasedMonth(anchorMonth: number, step: number, fromMonth: number): number {
+  return anchorMonth + Math.ceil((fromMonth - anchorMonth) / step) * step;
+}
+
 /** Internal: sanitise a day-of-month to an integer in 1..31. */
 export function sanitizeDayOfMonth(day: number): number {
   if (!Number.isFinite(day)) return 1;
@@ -59,15 +78,19 @@ export function expandMonthlyOnDay(
   window: DayWindow,
   out: ISODate[],
   limit = Number.POSITIVE_INFINITY,
+  // Every `step` months in the phase of `anchorMonth` (step 1: every month).
+  step = 1,
+  anchorMonth = 0,
 ): ISODate[] {
   if (limit <= 0) return out;
   const dom = sanitizeDayOfMonth(dayOfMonth);
   const [ly, lm] = partsFromDayNumber(window.lo);
   const [hy, hm] = partsFromDayNumber(window.hi);
-  const firstMonth = ly * 12 + (lm - 1);
   const lastMonth = hy * 12 + (hm - 1);
+  const firstMonth = step > 1 ? firstPhasedMonth(anchorMonth, step, ly * 12 + (lm - 1)) : ly * 12 + (lm - 1);
+  const by = step > 1 ? step : 1;
   let emitted = 0;
-  for (let mi = firstMonth; mi <= lastMonth; mi++) {
+  for (let mi = firstMonth; mi <= lastMonth; mi += by) {
     const y = Math.floor(mi / 12);
     const m = mi - y * 12 + 1;
     const dim = daysInMonth(y, m);
@@ -101,15 +124,23 @@ export function monthIndexOf(dayNumber: number): number {
  * emit (no limit). O(1): month arithmetic, only the two edge months are
  * inspected.
  */
-export function countMonthlyOnDay(dayOfMonth: number, window: DayWindow): number {
+export function countMonthlyOnDay(
+  dayOfMonth: number,
+  window: DayWindow,
+  step = 1,
+  anchorMonth = 0,
+): number {
   if (window.lo > window.hi) return 0;
   const dom = sanitizeDayOfMonth(dayOfMonth);
-  const firstMonth = monthIndexOf(window.lo);
-  const lastMonth = monthIndexOf(window.hi);
-  let count = lastMonth - firstMonth + 1;
-  // Each month contributes exactly one date; only the edge months can fall outside.
+  const by = step > 1 ? step : 1;
+  const firstMonth = by > 1 ? firstPhasedMonth(anchorMonth, by, monthIndexOf(window.lo)) : monthIndexOf(window.lo);
+  const last = monthIndexOf(window.hi);
+  if (firstMonth > last) return 0;
+  const lastMonth = firstMonth + Math.floor((last - firstMonth) / by) * by;
+  let count = (lastMonth - firstMonth) / by + 1;
+  // Each phased month contributes exactly one date; only the edge ones can fall outside.
   if (monthDayNumber(firstMonth, dom) < window.lo) count--;
-  if (monthDayNumber(lastMonth, dom) > window.hi) count--;
+  if (count > 0 && monthDayNumber(lastMonth, dom) > window.hi) count--;
   return count > 0 ? count : 0;
 }
 
@@ -185,12 +216,21 @@ export function expandRecurrence(
       if (a >= window.lo && a <= window.hi) out.push(anchor);
       return out;
     }
+    case "daily":
+      return expandFixedStep(toDayNumber(anchor), recurrenceInterval(rule), window, out);
     case "weekly":
       return expandFixedStep(toDayNumber(anchor), 7, window, out);
     case "biweekly":
       return expandFixedStep(toDayNumber(anchor), 14, window, out);
     case "monthly":
-      return expandMonthlyOnDay(parseISODate(anchor)[2], window, out);
+      return expandMonthlyOnDay(
+        parseISODate(anchor)[2],
+        window,
+        out,
+        Number.POSITIVE_INFINITY,
+        recurrenceInterval(rule),
+        monthIndexOf(toDayNumber(anchor)),
+      );
     case "semimonthly":
       return expandSemimonthly(window, out);
     default:
@@ -216,12 +256,19 @@ export function countRecurrence(
       const a = toDayNumber(anchor);
       return a >= window.lo && a <= window.hi ? 1 : 0;
     }
+    case "daily":
+      return countFixedStep(toDayNumber(anchor), recurrenceInterval(rule), window);
     case "weekly":
       return countFixedStep(toDayNumber(anchor), 7, window);
     case "biweekly":
       return countFixedStep(toDayNumber(anchor), 14, window);
     case "monthly":
-      return countMonthlyOnDay(parseISODate(anchor)[2], window);
+      return countMonthlyOnDay(
+        parseISODate(anchor)[2],
+        window,
+        recurrenceInterval(rule),
+        monthIndexOf(toDayNumber(anchor)),
+      );
     case "semimonthly":
       return countSemimonthly(window);
     default:

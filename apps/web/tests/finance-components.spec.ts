@@ -30,6 +30,7 @@ import {
   switchKind,
 } from "../src/finance/components/FinancialEditorModal";
 import { FinancialSummaryBar } from "../src/finance/components/FinancialSummaryBar";
+import { OnboardingDialog } from "../src/finance/components/Onboarding";
 import { FinancialSidePanel } from "../src/finance/components/FinancialSidePanel";
 import { DebtStrategyPanel } from "../src/finance/components/DebtStrategyPanel";
 
@@ -203,9 +204,10 @@ function field<T extends HTMLElement = HTMLInputElement>(label: string): T {
   const span = [...document.querySelectorAll(".fin-editor__label")].find((s) =>
     s.textContent?.startsWith(label),
   );
-  const control = span
-    ?.closest(".fin-editor__field")
-    ?.querySelector("input, select");
+  // The control the label names (htmlFor), else the field's first one.
+  const named =
+    span instanceof HTMLLabelElement && span.htmlFor ? document.getElementById(span.htmlFor) : null;
+  const control = named ?? span?.closest(".fin-editor__field")?.querySelector("input, select");
   if (!control) throw new Error(`field "${label}" not found`);
   return control as T;
 }
@@ -268,6 +270,29 @@ function pressEscape() {
   });
 }
 
+/** A "Se repite" preset (one-click schedule) by its text. */
+function preset(text: string): HTMLButtonElement {
+  const button = [...document.querySelectorAll<HTMLButtonElement>(".fin-repeat__preset")].find(
+    (candidate) => candidate.textContent === text,
+  );
+  if (!button) throw new Error(`preset "${text}" not found`);
+  return button;
+}
+
+/** A "Termina" option's radio by its words ("Nunca", "El", "Después de"). */
+function endOption(text: string): HTMLInputElement {
+  const label = [...document.querySelectorAll<HTMLLabelElement>(".fin-ends label")].find(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
+  if (!label) throw new Error(`end option "${text}" not found`);
+  return label.querySelector<HTMLInputElement>('input[type="radio"]')!;
+}
+
+const endDateInput = () => document.querySelector<HTMLInputElement>('[aria-label="Fecha de fin"]')!;
+const readback = () => document.querySelector(".fin-readback__sentence")?.textContent ?? "";
+const upcomingDates = () =>
+  [...document.querySelectorAll(".fin-readback__date")].map((el) => el.textContent);
+
 function errorText(): string {
   return document.querySelector(".fin-editor__error")?.textContent ?? "";
 }
@@ -328,7 +353,7 @@ describe("react-1 / SYNC-8: a single occurrence is saved on the shown date", () 
     });
   });
 
-  it("Frecuencia → 'Una vez' on a left-cropped loan saves {once, Fecha}", () => {
+  it("Se repite → 'Una vez' on a left-cropped loan saves {once, Fecha}", () => {
     const loan: FinancialItem = {
       id: "fin-prestamo",
       kind: "loan",
@@ -344,8 +369,11 @@ describe("react-1 / SYNC-8: a single occurrence is saved on the shown date", () 
     const { bridge } = createFakeBridge(docWith([loan]));
     const onClose = vi.fn();
     mount(h(FinancialEditorModal, { bridge, itemId: loan.id, onClose }));
+    expect(field("Empieza").value).toBe("20/11/2026");
+    click(preset("Una vez"));
+    // Not repeating: the start is just "Fecha" and nothing "Termina".
     expect(field("Fecha").value).toBe("20/11/2026");
-    choose(field<HTMLSelectElement>("Frecuencia"), "once");
+    expect(document.querySelector("#fin-editor-end")).toBeNull();
     click(mustButton(document, "Guardar"));
     expect(bridge.replaceItem).toHaveBeenCalledTimes(1);
     const saved = bridge.replaceItem.mock.calls[0]![0];
@@ -712,7 +740,7 @@ describe("react-5: avalanche uses the debts still owed at the playhead day", () 
 
 // --- es-MX date fields ----------------------------------------------------------
 
-describe("editor dates: es-MX text fields, never the native date picker", () => {
+describe("editor 'Cuándo': es-MX dates, presets, Termina, plain-words readback", () => {
   const RENTA: FinancialItem = {
     id: "fin-renta",
     kind: "expense",
@@ -730,21 +758,25 @@ describe("editor dates: es-MX text fields, never the native date picker", () => 
   it("shows dd/mm/aaaa text with the weekday preview; no type=date inputs", () => {
     open();
     expect(document.querySelector('.fin-editor input[type="date"]')).toBeNull();
-    expect(field("Fecha").type).toBe("text");
-    expect(field("Fecha").value).toBe("20/11/2026");
-    expect(datePreview("Fecha").textContent).toBe("vie 20 nov 2026");
-    // A recurring end is a number of payments: 20 nov … 20 may = 7.
-    expect(field("Pagos").value).toBe("7");
-    expect(datePreview("Pagos").textContent).toBe("Último: jue 20 may 2027");
+    expect(field("Empieza").type).toBe("text");
+    expect(field("Empieza").value).toBe("20/11/2026");
+    expect(datePreview("Empieza").textContent).toBe("vie 20 nov 2026");
+    // Termina "El 20/05/2027": 20 nov … 20 may = 7 payments, said in words.
+    expect(endOption("El").checked).toBe(true);
+    expect(endDateInput().value).toBe("20/05/2027");
+    expect(readback()).toBe(
+      "Pagas $8,000 cada mes, el día 20, desde el vie 20 nov 2026, hasta el jue 20 may 2027: 7 pagos.",
+    );
+    expect(upcomingDates()).toEqual(["vie 20 nov 2026", "dom 20 dic 2026", "mié 20 ene 2027", "sáb 20 feb 2027"]);
   });
 
   it("typing '15 dic' saves 2026-12-15 (year from today) and the preview follows", () => {
     const bridge = open();
-    typeInto(field("Fecha"), "15 dic");
-    expect(datePreview("Fecha").textContent).toBe("mar 15 dic 2026");
-    expect(field("Fecha").getAttribute("aria-invalid")).toBe("false");
-    blur(field("Fecha"));
-    expect(field("Fecha").value).toBe("15/12/2026");
+    typeInto(field("Empieza"), "15 dic");
+    expect(datePreview("Empieza").textContent).toBe("mar 15 dic 2026");
+    expect(field("Empieza").getAttribute("aria-invalid")).toBe("false");
+    blur(field("Empieza"));
+    expect(field("Empieza").value).toBe("15/12/2026");
     click(mustButton(document, "Guardar"));
     const saved = bridge.replaceItem.mock.calls[0]![0];
     expect(saved.recurrence.startDate).toBe("2026-12-15");
@@ -756,7 +788,7 @@ describe("editor dates: es-MX text fields, never the native date picker", () => 
     "accepts %s",
     (raw) => {
       const bridge = open();
-      typeInto(field("Fecha"), raw);
+      typeInto(field("Empieza"), raw);
       click(mustButton(document, "Guardar"));
       expect(bridge.replaceItem.mock.calls[0]![0].recurrence.startDate).toBe("2026-12-15");
     },
@@ -764,56 +796,102 @@ describe("editor dates: es-MX text fields, never the native date picker", () => 
 
   it("an unrecognised date shows inline validation and blocks Guardar", () => {
     const bridge = open();
-    typeInto(field("Fecha"), "12/31/2026");
-    const preview = datePreview("Fecha");
+    typeInto(field("Empieza"), "12/31/2026");
+    const preview = datePreview("Empieza");
     expect(preview.dataset.state).toBe("invalid");
     expect(preview.textContent).toMatch(/no reconocida/i);
-    expect(field("Fecha").getAttribute("aria-invalid")).toBe("true");
-    expect(errorText()).toBe("Fecha: inválida.");
+    expect(field("Empieza").getAttribute("aria-invalid")).toBe("true");
+    expect(errorText()).toBe("Empieza: fecha inválida.");
     expect(mustButton(document, "Guardar").disabled).toBe(true);
     click(mustButton(document, "Guardar"));
     expect(bridge.replaceItem).not.toHaveBeenCalled();
-    // Fixing the text clears it.
-    typeInto(field("Fecha"), "31/12/2026");
+    typeInto(field("Empieza"), "31/12/2026");
     expect(errorText()).toBe("");
-    expect(datePreview("Fecha").textContent).toBe("jue 31 dic 2026");
+    expect(datePreview("Empieza").textContent).toBe("jue 31 dic 2026");
   });
 
   it("↑ / ↓ move the date ±1 day (Shift: ±7)", () => {
     const bridge = open();
-    const input = field("Fecha");
-    pressKey(input, "ArrowUp");
-    expect(field("Fecha").value).toBe("21/11/2026");
-    pressKey(field("Fecha"), "ArrowDown", { shiftKey: true });
-    expect(field("Fecha").value).toBe("14/11/2026");
-    expect(datePreview("Fecha").textContent).toBe("sáb 14 nov 2026");
+    pressKey(field("Empieza"), "ArrowUp");
+    expect(field("Empieza").value).toBe("21/11/2026");
+    pressKey(field("Empieza"), "ArrowDown", { shiftKey: true });
+    expect(field("Empieza").value).toBe("14/11/2026");
     click(mustButton(document, "Guardar"));
     expect(bridge.replaceItem.mock.calls[0]![0].recurrence.startDate).toBe("2026-11-14");
   });
 
-  it("'Pagos': the end is the n-th payment", () => {
+  it("Termina 'El [fecha]': the readback counts the payments; between paydays it saves on the last one", () => {
     const bridge = open();
-    typeInto(field("Pagos"), "3");
-    expect(datePreview("Pagos").textContent).toBe("Último: mié 20 ene 2027");
+    typeInto(endDateInput(), "5 feb 2027");
+    expect(readback()).toContain("hasta el mié 20 ene 2027: 3 pagos.");
     click(mustButton(document, "Guardar"));
     expect(bridge.replaceItem.mock.calls[0]![0].recurrence.endDate).toBe("2027-01-20");
   });
 
-  it("'Día de pago': any day 1–30 or the last day of the month, keeping the payments", () => {
+  it("Termina 'Nunca' (no end) and 'Después de [N] pagos'", () => {
     const bridge = open();
-    expect(field<HTMLSelectElement>("Día de pago").value).toBe("20");
-    expect(datePreview("Día de pago").textContent).toBe("El día 20 de cada mes");
-    choose(field<HTMLSelectElement>("Día de pago"), "31");
-    expect(datePreview("Día de pago").textContent).toBe("El último día de cada mes");
-    expect(field("Fecha").value).toBe("30/11/2026");
-    expect(field("Pagos").value).toBe("7");
-    // 30 nov, 31 dic, 31 ene, 28 feb, 31 mar, 30 abr, 31 may.
-    expect(datePreview("Pagos").textContent).toBe("Último: lun 31 may 2027");
+    click(endOption("Nunca"));
+    expect(endOption("Nunca").checked).toBe(true);
+    expect(readback()).toContain("sin fecha de fin.");
+    click(endOption("Después de"));
+    // Back to a finite end: about a year of payments, said as a count.
+    const count = document.querySelector<HTMLInputElement>('[aria-label="Número de pagos"]')!;
+    expect(count.value).toBe("12");
+    typeInto(count, "3");
+    expect(readback()).toContain("hasta el mié 20 ene 2027: 3 pagos.");
+    click(mustButton(document, "Guardar"));
+    expect(bridge.replaceItem.mock.calls[0]![0].recurrence.endDate).toBe("2027-01-20");
+  });
+
+  it("a typed end date picks 'El' by itself (no disabled field to unlock first)", () => {
+    open();
+    click(endOption("Nunca"));
+    expect(endDateInput().disabled).toBe(false);
+    typeInto(endDateInput(), "20/03/2027");
+    expect(endOption("El").checked).toBe(true);
+    expect(readback()).toContain("5 pagos.");
+  });
+
+  it("the payday is the start's day; a month-end start can be 'siempre el último día'", () => {
+    const bridge = open();
+    const lastDay = () =>
+      [...document.querySelectorAll<HTMLLabelElement>(".fin-editor__check")].find((label) =>
+        label.textContent?.includes("último día del mes"),
+      );
+    expect(lastDay()).toBeUndefined(); // the 20th is not a month's end
+    typeInto(field("Empieza"), "30/11/2026");
+    expect(lastDay()).toBeDefined();
+    click(lastDay()!.querySelector("input")!);
+    expect(readback()).toContain("cada mes, el último día del mes");
     click(mustButton(document, "Guardar"));
     const saved = bridge.replaceItem.mock.calls[0]![0].recurrence;
     expect(saved.startDate).toBe("2026-11-30");
     expect(saved.anchorDate!.endsWith("-31")).toBe(true);
-    expect(saved.endDate).toBe("2027-05-31");
+  });
+
+  it("presets are one click; 'Personalizado…' opens 'Cada [N] [días | meses]'", () => {
+    const bridge = open();
+    expect(preset("Cada mes").getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector(".fin-repeat__every")).toBeNull();
+    click(preset("Cada año"));
+    expect(readback()).toContain("cada año, el 20 de noviembre");
+    click(preset("Personalizado…"));
+    expect(preset("Personalizado…").getAttribute("aria-checked")).toBe("true");
+    const every = () => document.querySelector<HTMLInputElement>(".fin-repeat__every")!;
+    typeInto(every(), "6");
+    expect(readback()).toContain("cada 6 meses, el día 20");
+    expect(upcomingDates().slice(0, 2)).toEqual(["vie 20 nov 2026", "jue 20 may 2027"]);
+    choose(document.querySelector<HTMLSelectElement>(".fin-repeat__unit")!, "days");
+    typeInto(every(), "10");
+    expect(readback()).toContain("cada 10 días");
+    // Typing 1 keeps the custom fields open (no collapse into "Cada mes").
+    typeInto(every(), "1");
+    expect(document.querySelector(".fin-repeat__every")).not.toBeNull();
+    typeInto(every(), "10");
+    click(mustButton(document, "Guardar"));
+    const saved = bridge.replaceItem.mock.calls[0]![0].recurrence;
+    expect(saved.frequency).toBe("daily");
+    expect(saved.interval).toBe(10);
   });
 
   it("an end between paydays (start 16, end 15) is saved on its last payment", () => {
@@ -825,26 +903,10 @@ describe("editor dates: es-MX text fields, never the native date picker", () => 
       recurrence: { frequency: "monthly", startDate: "2026-11-16", endDate: "2027-05-15" },
     };
     const bridge = open(loan);
-    expect(field("Pagos").value).toBe("6");
-    expect(datePreview("Pagos").textContent).toBe("Último: vie 16 abr 2027");
+    expect(endDateInput().value).toBe("15/05/2027");
+    expect(readback()).toContain("hasta el vie 16 abr 2027: 6 pagos.");
     click(mustButton(document, "Guardar"));
     expect(bridge.replaceItem.mock.calls[0]![0].recurrence.endDate).toBe("2027-04-16");
-  });
-
-  it("'Indefinido' disables the payments; unticking restores about a year", () => {
-    open();
-    const indefinite = document.querySelector<HTMLInputElement>(
-      '.fin-editor__check input[type="checkbox"]',
-    )!;
-    click(indefinite);
-    expect(field("Pagos").disabled).toBe(true);
-    expect(field("Pagos").value).toBe("");
-    expect(datePreview("Pagos").textContent).toBe("Sin final: sigue hasta el horizonte");
-    click(indefinite);
-    expect(field("Pagos").disabled).toBe(false);
-    expect(field("Pagos").value).toBe("12");
-    expect(datePreview("Pagos").textContent).toBe("Último: mié 20 oct 2027");
-    expect(errorText()).toBe("");
   });
 });
 
@@ -928,5 +990,144 @@ describe("header menus: ARIA menu button, portal, outside close", () => {
     expect(popover!.closest(".fin-summary")).toBeNull();
     click(trigger());
     expect(menu()!.parentElement).toBe(document.body);
+  });
+});
+
+describe("header metrics explain themselves (MetricHelp)", () => {
+  function mountBar() {
+    const { bridge } = createFakeBridge(createDemoFinancialDocument(START));
+    mount(h(FinancialSummaryBar, { bridge, onCreateDraft: vi.fn() }));
+    return { bridge };
+  }
+  const metric = (label: string) =>
+    [...document.querySelectorAll<HTMLElement>(".fin-summary__metric")].find(
+      (el) => el.querySelector(".fin-summary__label")?.textContent === label,
+    )!;
+  const tip = () => document.querySelector<HTMLElement>('[role="tooltip"].fin-help');
+
+  it("focus shows what the number is and what yours say; Escape / blur close it", () => {
+    const { bridge } = mountBar();
+    const minimum = metric("Mínimo proyectado");
+    act(() => minimum.focus());
+    expect(tip()).not.toBeNull();
+    expect(tip()!.parentElement).toBe(document.body);
+    expect(minimum.getAttribute("aria-describedby")).toBe(tip()!.id);
+    expect(tip()!.textContent).toContain("El saldo más bajo que tendrá tu caja");
+    const projection = bridge.getProjection();
+    const reserve = bridge.getDocument().minimumCashReserve;
+    const detail = tip()!.querySelector<HTMLElement>(".fin-help__detail")!;
+    if (projection.minimumCash.cash < 0) {
+      expect(detail.dataset.tone).toBe("negative");
+      expect(detail.textContent).toContain("te faltarían");
+    } else if (projection.minimumCash.cash < reserve) {
+      expect(detail.dataset.tone).toBe("low");
+      expect(detail.textContent).toContain("por debajo de tu reserva mínima");
+    } else {
+      expect(detail.dataset.tone).toBe("ok");
+    }
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(tip()).toBeNull();
+    act(() => metric("Al horizonte").focus());
+    expect(tip()!.textContent).toContain("al final de tu plan");
+    act(() => metric("Al horizonte").blur());
+    expect(tip()).toBeNull();
+  });
+
+  it("closed, every metric still has its description for screen readers", () => {
+    mountBar();
+    for (const label of ["Liquidez hoy", "Reserva mínima", "Deuda hoy", "Próximo pago", "Mínimo proyectado", "Al horizonte"]) {
+      const el = metric(label);
+      const id = el.getAttribute("aria-describedby")!;
+      const description = document.getElementById(id)!;
+      expect(description.classList.contains("fin-sr-only")).toBe(true);
+      expect(description.textContent).toContain(label);
+      // Out of the metric itself: not part of its accessible name.
+      expect(el.contains(description)).toBe(false);
+    }
+  });
+});
+
+describe("editor field errors (Mantine Form + the shared Zod schema)", () => {
+  it("an invalid amount shows its error under the field, tied to the input", () => {
+    const item: FinancialItem = {
+      id: "fin-renta",
+      kind: "expense",
+      name: "Renta",
+      amount: 8000,
+      recurrence: { frequency: "monthly", startDate: "2026-11-20" },
+    };
+    const { bridge } = createFakeBridge(docWith([item]));
+    mount(h(FinancialEditorModal, { bridge, itemId: item.id, onClose: () => {} }));
+    const amount = field("Monto");
+    expect(amount.getAttribute("aria-invalid")).toBeNull();
+    typeInto(amount, "-5");
+    const describedBy = amount.getAttribute("aria-describedby")!;
+    expect(amount.getAttribute("aria-invalid")).toBe("true");
+    expect(document.getElementById(describedBy)!.textContent).toBe("No puede ser negativo");
+    // The summary names the field; Guardar waits for a valid form.
+    expect(errorText()).toBe("Monto: no puede ser negativo.");
+    expect(mustButton(document, "Guardar").disabled).toBe(true);
+    typeInto(amount, "7500");
+    expect(amount.getAttribute("aria-invalid")).toBeNull();
+    expect(errorText()).toBe("");
+  });
+
+  it("an empty name is an error of the name field", () => {
+    const { bridge } = createFakeBridge(docWith([]));
+    const draft = bridge.createDraftItem("income");
+    mount(h(FinancialEditorModal, { bridge, draft, onClose: () => {} }));
+    typeInto(field("Nombre"), "   ");
+    expect(errorText()).toBe("Nombre: ponle un nombre.");
+  });
+});
+
+describe("onboarding: Mantine Form (uncontrolled) + Zod, errors per field", () => {
+  const TODAY = "2026-11-09";
+  const input = (label: string) =>
+    [...document.querySelectorAll<HTMLInputElement>(".fin-onboarding input")].find(
+      (el) =>
+        el.getAttribute("aria-label") === label ||
+        el.closest("label")?.querySelector(".fin-editor__label")?.textContent?.startsWith(label),
+    )!;
+  const submit = () =>
+    act(() => {
+      document
+        .querySelector<HTMLFormElement>(".fin-onboarding")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+  it("an empty submit marks the required fields and creates nothing", () => {
+    const onCreate = vi.fn();
+    mount(h(OnboardingDialog, { today: TODAY, onCreate, onClose: () => {} }));
+    submit();
+    expect(onCreate).not.toHaveBeenCalled();
+    const cash = input("¿Cuánto dinero tienes hoy?");
+    expect(cash.getAttribute("aria-invalid")).toBe("true");
+    expect(document.getElementById(cash.getAttribute("aria-describedby")!)!.textContent).toBe(
+      "Escribe cuánto dinero tienes hoy (puede ser 0)",
+    );
+    expect(input("¿Cuánto cada vez?").getAttribute("aria-invalid")).toBe("true");
+    expect(errorText()).toBe("Escribe cuánto dinero tienes hoy (puede ser 0)");
+  });
+
+  it("valid answers build the year; a bad fixed-expense day is caught on its row", () => {
+    const onCreate = vi.fn();
+    mount(h(OnboardingDialog, { today: TODAY, onCreate, onClose: () => {} }));
+    typeInto(input("¿Cuánto dinero tienes hoy?"), "12,000");
+    typeInto(input("¿Cuánto cada vez?"), "9000");
+    typeInto(input("Monto del gasto 1"), "8000");
+    typeInto(input("Día del mes del gasto 1"), "40");
+    submit();
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(input("Día del mes del gasto 1").getAttribute("aria-invalid")).toBe("true");
+    typeInto(input("Día del mes del gasto 1"), "1");
+    submit();
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    const doc = onCreate.mock.calls[0]![0];
+    expect(doc.initialCash).toBe(12000);
+    expect(doc.items.find((item: FinancialItem) => item.name === "Sueldo")?.recurrence.frequency).toBe("semimonthly");
+    expect(doc.items.find((item: FinancialItem) => item.name === "Renta")).toMatchObject({ amount: 8000 });
   });
 });

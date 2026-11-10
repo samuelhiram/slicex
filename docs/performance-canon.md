@@ -469,6 +469,23 @@ const next = normalizeState(reduced, metrics);
 const next = normalizeState(reduced, metrics, previous);
 ```
 
+### 3.15 Carriles apilados (`playlist-core/lanes.ts`)
+
+Clips de una misma línea que se pisan en el tiempo van en carriles (`clip.lane`,
+`track.lanes`; `getTrackHeight = alto de carril × lanes`). El reparto corre en
+`PlaylistCore.dispatch` justo después de `normalizeState`:
+
+- **Fuera de un gesto** y sólo si cambiaron clips/tracks: `settleLanes`, O(n log n)
+  (búsqueda binaria por carril, sin O(k²)). Hover / playhead / viewport: 0 trabajo.
+- **Dentro de un gesto** (drag, resize…): `provisionalLanes`, O(n) por move — nada se
+  reacomoda, sólo se ajusta `track.lanes` (base al abrir el gesto + carril libre). El
+  asentado ocurre UNA vez en `endGesture`, dentro de la misma entrada de undo.
+- **Identidad (§3.13):** si ningún carril cambia se devuelven los MISMOS arrays; sólo
+  se copian los clips/tracks cuyo `lane`/`lanes` cambió. `lane` 0 y `lanes` 1 no se
+  guardan (ausentes), así los clips sin apilar no cambian de forma.
+- El controller cachea por línea (en el gesto) si hay otros clips y cuántos carriles tenía
+  al empezar: O(n) una vez por línea visitada, O(1) por move.
+
 ### 3.9 Batch dispatch para gestures que generan N mutaciones por move
 
 Si un gesture puede crear/borrar/modificar **N elementos en un solo

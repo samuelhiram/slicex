@@ -1,7 +1,8 @@
 // Timeline navigation controls, in the empty corner above the track names
 // (right next to the ruler they move): ‹ Hoy › (one screen back / today /
 // one screen forward), the visible range as a calendar span (Semana, Mes,
-// Trimestre, Año, Todo) and "Cómo moverte" — every gesture and shortcut.
+// 3 meses, Año, Todo — short labels: the select fits the 216 px corner
+// cell) and "Cómo moverte" — every gesture and shortcut.
 // All moves glide through the interaction controller's navigator (reduced
 // motion jumps). The visible range is announced to screen readers.
 import * as React from "react";
@@ -21,9 +22,9 @@ export interface NavControlsProps {
 
 const SPANS: ReadonlyArray<{ value: string; label: string; days: number | "all" }> = [
   { value: "week", label: "Semana", days: 8 },
-  { value: "2weeks", label: "2 semanas", days: 15 },
+  { value: "2weeks", label: "2 sem", days: 15 },
   { value: "month", label: "Mes", days: 32 },
-  { value: "quarter", label: "Trimestre", days: 92 },
+  { value: "quarter", label: "3 meses", days: 92 },
   { value: "year", label: "Año", days: 366 },
   { value: "all", label: "Todo", days: "all" },
 ];
@@ -133,7 +134,7 @@ export function NavControls({ core, navigator, bridge }: NavControlsProps) {
       >
         {current === "" ? (
           <option value="" disabled>
-            {span} días
+            {span} d
           </option>
         ) : null}
         {SPANS.map((option) => (
@@ -206,8 +207,8 @@ function LiveRange({
 }
 
 export const NAV_GESTURES: ReadonlyArray<{ keys: string; what: string }> = [
-  { keys: "Rueda", what: "Avanza o regresa en el tiempo (suave, acelera si giras rápido)" },
-  { keys: "Shift + rueda", what: "Sube y baja entre filas (también la rueda sobre los nombres)" },
+  { keys: "Rueda", what: "Sube y baja entre líneas de evento" },
+  { keys: "Shift + rueda", what: "Avanza o regresa en el tiempo (también la rueda sobre la regla o la Caja)" },
   { keys: "Ctrl + rueda · pellizca", what: "Zoom donde está el cursor" },
   { keys: "Trackpad", what: "Desliza en cualquier dirección" },
   { keys: "Espacio + arrastra · botón de la rueda", what: "La mano: suelta con impulso" },

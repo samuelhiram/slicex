@@ -4,7 +4,8 @@
 // person's year across reloads today.
 //
 // Never throws: a blocked / full / corrupted storage just means "no save".
-import type { FinancialDocument, ISODate, LedgerEntry } from "@slicex/core";
+import { FinancialDocumentSchema, FinancialItemSchemaStrict } from "@slicex/contracts";
+import type { FinancialDocument, FinancialItem, ISODate, LedgerEntry } from "@slicex/core";
 import { parseTrackLayout, type FinancialTrackLayout } from "./mapping";
 
 export const PLAN_STORAGE_KEY = "slicex.plan.v1";
@@ -37,16 +38,22 @@ function storage(): Storage | null {
   }
 }
 
-function isDocument(value: unknown): value is FinancialDocument {
-  if (!value || typeof value !== "object") return false;
-  const doc = value as Partial<FinancialDocument>;
-  return (
-    typeof doc.startDate === "string" &&
-    typeof doc.initialCash === "number" &&
-    typeof doc.minimumCashReserve === "number" &&
-    typeof doc.horizonMonths === "number" &&
-    Array.isArray(doc.items)
-  );
+/**
+ * The document read back from storage, validated with the shared schema of
+ * @slicex/contracts — the same one the editor uses. Storage is outside the
+ * app's control (old versions, hand edits, a corrupted write): a document
+ * that is not valid is dropped; an ITEM that is not valid is dropped alone
+ * (the rest of the plan survives), never fed to the projection as is.
+ */
+function parseDocument(value: unknown): FinancialDocument | null {
+  const doc = FinancialDocumentSchema.safeParse(value);
+  if (!doc.success) return null;
+  const items: FinancialItem[] = [];
+  for (const raw of doc.data.items) {
+    const item = FinancialItemSchemaStrict.safeParse(raw);
+    if (item.success) items.push(item.data as FinancialItem);
+  }
+  return { ...doc.data, items };
 }
 
 export function parsePlan(raw: string | null): SavedPlan | null {
@@ -56,13 +63,12 @@ export function parsePlan(raw: string | null): SavedPlan | null {
     if (value.v !== 1 || !Array.isArray(value.branches) || value.branches.length === 0) {
       return null;
     }
-    const branches = value.branches.filter(
-      (branch): branch is SavedBranch =>
-        !!branch &&
-        typeof branch.id === "string" &&
-        typeof branch.name === "string" &&
-        isDocument(branch.doc),
-    );
+    const branches: SavedBranch[] = [];
+    for (const branch of value.branches) {
+      if (!branch || typeof branch.id !== "string" || typeof branch.name !== "string") continue;
+      const doc = parseDocument(branch.doc);
+      if (doc) branches.push({ ...branch, doc });
+    }
     if (branches.length === 0) return null;
     const activeId = branches.some((branch) => branch.id === value.activeId)
       ? (value.activeId as string)

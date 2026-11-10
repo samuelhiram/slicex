@@ -103,8 +103,24 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
   - **Cartas sobre página gris:** `--page-bg` gris suave; el contenido vive en tarjetas
     flotantes (`--radius-card`, `--shadow-card`, separadas `--gap-card`). Nada de franjas a
     todo lo ancho separadas por líneas finas. El header es UNA tarjeta (métricas + herramientas
-    + acciones): un renglón en ventanas anchas (≥1800 px), dos en el resto (métricas arriba;
-    herramientas a la izquierda y acciones a la derecha abajo), tres en teléfono.
+    + acciones): **un renglón de 56 px desde 1200 px** (laptops incluidas: dos renglones
+    dejaban ~2/3 del ancho vacío y le quitaban ~45 px al canvas), dos en tablet (métricas
+    arriba; herramientas a la izquierda y acciones a la derecha abajo), tres en teléfono. En
+    el renglón único ceden espacio por orden, sin perder nombre accesible: bajo 1800 la fecha
+    de cada métrica pasa junto al valor ("−$1,292 27 nov") y "Ajustar a" queda como imán;
+    bajo 1700 se oculta el beneficiario del próximo pago; bajo 1600 el wordmark y las palabras
+    del chip de alertas (ícono + número); bajo 1440 el nombre del futuro si es el único (plan
+    principal). Si aun así no caben, las métricas se desplazan de lado con desvanecido.
+    **Cada cifra se explica sola** (`apps/web/src/finance/components/MetricHelp.tsx`): etiqueta
+    con subrayado punteado; al pasar el cursor (350 ms) o al enfocarla aparece una tarjeta con
+    qué es, qué dicen los números de la persona ahora (con tono ok/bajo/negativo) y qué hace el
+    clic. Letra: etiquetas 11 px, valores 14 px (15 px desde 1800).
+  - **Densidad del canvas según el alto de la ventana** (`apps/web/src/finance/shell-metrics.ts`,
+    se decide una vez al montar porque las métricas del core son fijas): ≥860 px "cómoda"
+    (carril de caja 112 px, filas 72 px); 720–859 "compacta" (96 / 60); <720 "ajustada"
+    (88 / 60). 60 px es el mínimo que conserva nombre + subtítulo + medidor del header de
+    track. "Análisis" vive en la fila del título "Caja" para que la celda del carril quepa en
+    88 px. Las capas DOM se alinean con `--pl-ruler-h` / `--pl-lane-h` / `--pl-header-w`.
   - **Controles secundarios = rellenos suaves** (`--surface-2`) sin contorno; una sola acción
     primaria rellena (`--ink`) por superficie. Radios `--radius-s/m/l` = 8/12/18 px.
   - **Controles donde y cuando actúan:** los íconos de cada track (ojo / enfoque / candado /
@@ -115,7 +131,8 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     "/") pasa por `apps/web/src/ui/fit-in-viewport.ts` (se recorre / se limita / hace scroll
     dentro de la ventana); las barras se desplazan de lado en vez de encimarse. Auditado en
     1920 / 1366 / 1024 / 768 / 390 px (ningún control fuera de pantalla, tapado, sin nombre
-    accesible ni menor a 24 px).
+    accesible ni menor a 24 px); el renglón único y la densidad, en 1920×1000, 1536×738,
+    1366×768, 1280×680, 1200×700 y 1024×700 (2026-11-09).
   - **Cierre de lo flotante, una sola regla** (`apps/web/src/ui/use-dismiss.ts`): un menú se
     cierra con un clic FUERA (de su botón y de su popover), un scroll FUERA, un resize o Escape;
     nunca con un clic o la rueda DENTRO (texto, bordes, separadores, items deshabilitados). Nada
@@ -124,13 +141,66 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     del encabezado, barra de herramientas) usan `apps/web/src/ui/wheel-scroll-x.ts` (rueda
     vertical → lateral). El clic derecho abre menú en cualquier punto del canvas: la línea entre
     filas y los botones del track no se lo tragan (`trackChrome: false` en el hit-test).
+  - **En el canvas la rueda es vertical** (2026-11-09; `mouseWheel: "rows"` del controller):
+    sube y baja entre líneas de evento como cualquier documento; Shift + rueda, la rueda
+    inclinable o la rueda sobre la regla / el carril de Caja mueven el tiempo; Ctrl + rueda o
+    pellizco hacen zoom; el trackpad desplaza libre en 2-D. El motor conserva `"time"` (paridad
+    FL) como valor por defecto.
 - **Tracks infinitos y permanentes (como FL)**: el shell usa `virtualTracks` por defecto
   (filas "Track N" vacías siempre debajo). Las filas no se borran solas: el acomodo
   (`FinancialTrackLayout` en `apps/web/src/finance/mapping.ts`: filas, incluso vacías, y
   item → fila) se guarda por futuro en `slicex.plan.v1` y `createFinancialPlaylistState(doc, layout)`
   lo restaura; las filas vacías auto-nombradas al final no se guardan (son idénticas a las
   infinitas). Menús contextuales en español: "Nuevo … aquí" crea en esa fila y fecha
-  (`bridge.addItem(item, { trackIndex })`); el menú de track no tiene "borrar track".
+  (`bridge.addItem(item, { trackIndex })`); el menú de la línea no tiene "borrar".
+- **Nombre en producto: "línea de evento" (ES) / "slot" (EN)**, nunca "track" ni "fila" en
+  textos visibles (2026-11-09). El motor sigue diciendo `track` en código (renombrarlo es un
+  cambio aparte). **Nombre automático:** una línea que la persona no nombró se llama "Línea de
+  evento" (vacía o con un evento) y "Línea de eventos" con dos o más; la app nunca bautiza
+  líneas con el nombre de un ítem o de un tipo ("Sueldo", "Gastos únicos": quedaban mal en
+  cuanto se apilaba otra cosa). "Renombrar…" pone un nombre propio que gana siempre; vacío (o
+  el automático) lo devuelve a automático. En el modelo, automático = etiqueta vacía o el
+  "Track N" del motor (`isAutoRowLabel`, `apps/web/src/finance/labels.ts`); el renderer lo
+  muestra con `formatTrackLabel` y el plural llega por `PlaylistTrackMeta.title`. Al cargar un
+  plan guardado, las etiquetas que puso la app se vuelven automáticas (`appGivenRowLabel` en
+  `mapping.ts`).
+- **Carriles apilados dentro de una línea** (`packages/canvas/src/playlist-core/lanes.ts`, port
+  del schedule de postalhub-dashboard `ShiftPlanner/shiftCalendarLayout.ts`): clips que se pisan
+  en el tiempo nunca se tapan; cada uno tiene `clip.lane` y la línea `track.lanes`, y mide
+  `lanes × alto de carril` (`track.height` es el alto de UN carril; el redimensionado lo
+  reparte). Reglas: lo soltado se queda en el carril donde se soltó; lo demás conserva su
+  carril y, si le cae encima, pasa al carril que el soltado dejó (intercambio) o al libre más
+  cercano; lo nuevo va al primer carril libre; los carriles vacíos se eliminan. Mientras dura
+  un gesto los carriles son provisionales (nada se reacomoda, ninguna línea pierde carriles) y
+  la línea bajo el arrastre abre un **carril libre punteado** para apilar a la misma fecha; al
+  soltar se asientan dentro de la misma entrada de undo. Los carriles no se persisten: al
+  recargar vuelve el reparto automático. Los eventos únicos de un tipo comparten UNA línea
+  en vez de abrir una segunda; las líneas guardadas así se respetan.
+- **Una sola forma de decir "cuándo"** (2026-11-09): cuándo pasa, se paga, entra dinero o
+  termina un evento se elige igual en todas partes, con el patrón de un calendario ("Repetir").
+  En el editor es el bloque **"Cuándo"** (todas las clases):
+  - *Se repite* = `SchedulePicker` (`apps/web/src/finance/components/SchedulePicker.tsx`):
+    botones de un clic [Una vez] [Cada semana] [Cada quincena] [Cada mes] [Cada año] y
+    [Personalizado…] que abre "Cada [N] [días | meses]" (no se cierra solo si N coincide con
+    un preset);
+  - *Empieza* (o *Fecha* si no se repite): su día es el día de pago ("Siempre el último día del
+    mes" cuando cae en fin de mes); los días de corte / pago de una tarjeta van en el bloque;
+  - *Termina* ◉ Nunca ○ El [fecha] ○ Después de [N] pagos — sin campos deshabilitados:
+    escribir la fecha elige "El"; las dos formas guardan una fecha de fin (ajustada al último
+    pago);
+  - un **resumen en palabras** ("Cobras $1,000 cada 6 meses, el día 15, desde el …, hasta el
+    …: 5 pagos.") con las próximas fechas (`cadenceText` / `upcomingPayments`).
+  El onboarding ("¿Cada cuánto te pagan?") usa el mismo `SchedulePicker` y la barra "/"
+  entiende lo mismo ("cada 3 meses", "cada 10 días", bimestral / trimestral / semestral /
+  anual). Modelo: `interval` en `FinancialRecurrence` (`daily` / `monthly`; core
+  `recurrence.ts` / `schedule.ts`, fase desde el ancla); regla ↔ controles en `schedule-ui.ts`
+  (`frequencyParts` / `withFrequencyParts` / `SCHEDULE_PRESETS`): cada 7 / 14 días se guardan
+  como semanal / catorcenal.
+- **El lápiz no crea por su cuenta**: con `onCreateRequest` (opción del controller) el doble
+  clic o el arrastre en vacío solo pintan un fantasma punteado y abren el editor con un
+  borrador en esa fecha y línea (tipo: el del ítem seleccionado, si no el de la línea, si no
+  gasto); nada se agrega hasta "Guardar". Antes el doble clic dejaba un "Gasto" de $500 sin
+  nombre.
 - **Agarrador de longitud**: el clip seleccionado muestra una barra vertical en el centro de
   la pantalla, dentro del clip (`getClipExtendHandle` en `playlist-core/presentation.ts`,
   compartido por renderer y hit-test). Arrastrarla mueve el final derecho (izquierda acorta,

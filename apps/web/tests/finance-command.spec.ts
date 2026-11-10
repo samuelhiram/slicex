@@ -401,8 +401,27 @@ describe("parseCommand — more schedules", () => {
     expect(parse("aguinaldo 13500 en diciembre").item.recurrence.startDate).toBe("2026-12-01");
   });
 
-  it('an unsupported period ("cada 3 meses") falls back to the defaults and flags it', () => {
+  it('"cada N meses / días / semanas": the same "Cada [N] [unidad]" as the editor', () => {
     const { item, assumed } = parse("seguro 3000 cada 3 meses");
+    expect(item).toMatchObject({
+      name: "Seguro",
+      amount: 3000,
+      recurrence: { frequency: "monthly", interval: 3 },
+    });
+    expect(assumed).toEqual(["fecha"]);
+    expect(parse("agua 400 cada 10 días").item.recurrence).toMatchObject({ frequency: "daily", interval: 10 });
+    expect(parse("gym 300 cada 3 semanas").item.recurrence).toMatchObject({ frequency: "daily", interval: 21 });
+    expect(parse("predial 2000 anual").item.recurrence).toMatchObject({ frequency: "monthly", interval: 12 });
+    expect(parse("colegiatura 5000 bimestral").item.recurrence).toMatchObject({ frequency: "monthly", interval: 2 });
+    // Colloquial MX periods keep their meaning.
+    expect(parse("despensa 800 cada 8 días").item.recurrence.frequency).toBe("weekly");
+    expect(parse("sueldo 9000 cada 15 días").item.recurrence.frequency).toBe("semimonthly");
+    // Plain monthly carries no interval.
+    expect(parse("renta 8000 cada mes").item.recurrence.interval).toBeUndefined();
+  });
+
+  it("a period it cannot express (\"cada 2 quincenas\") falls back to the defaults and flags it", () => {
+    const { item, assumed } = parse("seguro 3000 cada 2 quincenas");
     expect(item).toMatchObject({ name: "Seguro", amount: 3000, recurrence: { frequency: "once" } });
     expect(assumed).toEqual(["frecuencia", "fecha"]);
   });

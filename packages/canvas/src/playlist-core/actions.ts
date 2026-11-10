@@ -19,6 +19,10 @@ export interface PlaylistClipMoveUpdate {
   id: string;
   start: number;
   trackIndex: number;
+  // Lane to drop on inside the destination track (a drag: the lane under
+  // the pointer). Absent: kept within the same track; a move to another
+  // track without one lets the lane layout pick the first free lane.
+  lane?: number;
 }
 
 export type PlaylistAction =

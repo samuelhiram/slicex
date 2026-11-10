@@ -7,6 +7,7 @@
 // Either way the form works on a local draft and nothing reaches the bridge
 // before "Guardar". Items on a locked track open read-only.
 import * as React from "react";
+import { useForm } from "@mantine/form";
 import {
   addMonths,
   compareISODate,
@@ -32,8 +33,15 @@ import {
   shiftISODate,
   type DateYearPreference,
 } from "../format";
-import { FREQUENCY_LABELS, KIND_COLORS, KIND_LABELS, KIND_ORDER } from "../labels";
+import { KIND_COLORS, KIND_LABELS, KIND_ORDER } from "../labels";
 import { parseNumberInput, useFinancialRevision } from "./FinancialUi";
+import { SchedulePicker } from "./SchedulePicker";
+import {
+  cleanItem,
+  firstFieldError,
+  itemFormErrors,
+  type ItemFormErrors,
+} from "../item-schema";
 import {
   LAST_DAY,
   lastPayment,
@@ -44,18 +52,14 @@ import {
   withMonthlyDay,
   withPaymentCount,
   withStartDate,
+  cadenceText,
+  defaultPaymentCount,
+  frequencyParts,
+  upcomingPayments,
+  withFrequencyParts,
+  type FrequencyUnit,
 } from "../schedule-ui";
 
-/** Payments a new end covers by default: about a year. */
-const DEFAULT_PAYMENTS: Readonly<Record<RecurrenceFrequency, number>> = {
-  once: 1,
-  weekly: 52,
-  biweekly: 26,
-  semimonthly: 24,
-  monthly: 12,
-};
-
-const MONTH_DAYS: ReadonlyArray<number> = Array.from({ length: 30 }, (_, i) => i + 1);
 
 interface FinancialEditorModalBaseProps {
   bridge: FinancialBridgeApi;
@@ -82,13 +86,28 @@ export type FinancialEditorModalProps = FinancialEditorModalBaseProps &
       }
   );
 
-const FREQUENCY_ORDER: ReadonlyArray<RecurrenceFrequency> = [
-  "once",
-  "weekly",
-  "biweekly",
-  "semimonthly",
-  "monthly",
-];
+/** A monthly start on its month's last day (or already "último día"). */
+function endsMonth(rule: FinancialRecurrence): boolean {
+  if (monthlyDay(rule) === LAST_DAY) return true;
+  if (!isISODate(rule.startDate)) return false;
+  const [y, m, d] = rule.startDate.split("-").map(Number) as [number, number, number];
+  return d === new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
+/** Day of month of the start (the payday of a monthly rule). */
+function startDayOfMonth(rule: FinancialRecurrence): number {
+  return isISODate(rule.startDate) ? Number(rule.startDate.slice(8, 10)) : 1;
+}
+
+// Values of the form while the edited item does not exist (the modal is
+// closing): never shown.
+const MISSING_ITEM: FinancialItem = {
+  id: "",
+  kind: "expense",
+  name: "",
+  amount: 0,
+  recurrence: { frequency: "once", startDate: "1970-01-01", endDate: "1970-01-01" },
+};
 
 /** Kinds whose schedule is driven by `recurrence.frequency`. */
 function usesFrequency(kind: FinancialItemKind): boolean {
@@ -214,6 +233,14 @@ export function normalizeForSave(draft: FinancialItem): FinancialItem {
   const recurrence: FinancialRecurrence = { ...draft.recurrence };
   if (recurrence.endDate === undefined) delete recurrence.endDate;
   if (recurrence.anchorDate === undefined) delete recurrence.anchorDate;
+  // "Cada N" only means something for daily / monthly rules, and 1 is the default.
+  if (
+    recurrence.interval === undefined ||
+    recurrence.interval === 1 ||
+    (recurrence.frequency !== "daily" && recurrence.frequency !== "monthly")
+  ) {
+    delete recurrence.interval;
+  }
   if (isOnce(draft)) {
     delete recurrence.anchorDate;
     recurrence.endDate = recurrence.startDate;
@@ -223,90 +250,33 @@ export function normalizeForSave(draft: FinancialItem): FinancialItem {
   return item as unknown as FinancialItem;
 }
 
-function checkMoney(
-  value: number | undefined,
-  label: string,
-  optional = false,
-): string | null {
-  if (value === undefined) return optional ? null : `${label}: requerido.`;
-  if (!Number.isFinite(value)) return `${label}: número inválido.`;
-  if (value < 0) return `${label}: no puede ser negativo.`;
-  return null;
-}
-
-function checkDay(value: number, label: string): string | null {
-  if (!Number.isInteger(value) || value < 1 || value > 31) {
-    return `${label}: debe ser un día entre 1 y 31.`;
-  }
-  return null;
-}
-
-/** First validation error of the draft, or null when it can be saved. */
+/**
+ * First validation error of the draft ("Monto: No puede ser negativo"), or
+ * null when it can be saved. The rules are the shared schema of
+ * @slicex/contracts + the editor's (item-schema.ts).
+ */
 export function validateFinancialDraft(
   draft: FinancialItem,
   cards: ReadonlyArray<CreditCardItem>,
 ): string | null {
-  if (draft.name.trim() === "") return "Nombre: requerido.";
-  const recurrence = draft.recurrence;
-  if (!isISODate(recurrence.startDate)) return "Fecha: inválida.";
-  if (recurrence.endDate !== undefined) {
-    if (!isISODate(recurrence.endDate)) return "Fecha final: inválida.";
-    if (compareISODate(recurrence.endDate, recurrence.startDate) < 0) {
-      return "Fecha final: no puede ser anterior a la fecha.";
-    }
-  }
-  const hasCard = (id: string | undefined) =>
-    id !== undefined && cards.some((card) => card.id === id);
-  switch (draft.kind) {
-    case "income":
-    case "expense":
-      return checkMoney(draft.amount, "Monto");
-    case "card-purchase":
-      return (
-        checkMoney(draft.amount, "Monto") ??
-        (hasCard(draft.cardId) ? null : "Tarjeta: selecciona una tarjeta.")
-      );
-    case "loan":
-      return (
-        checkMoney(draft.paymentAmount, "Pago") ??
-        checkMoney(draft.balance, "Saldo", true) ??
-        checkMoney(draft.annualRate, "Tasa anual", true)
-      );
-    case "credit-card":
-      return (
-        checkMoney(draft.balance, "Saldo") ??
-        checkMoney(draft.annualRate, "Tasa anual") ??
-        checkDay(draft.cutDay, "Día de corte") ??
-        checkDay(draft.dueDay, "Día de pago") ??
-        checkMoney(draft.minimumPayment, "Pago mínimo") ??
-        checkMoney(draft.paymentAmount, "Pago planeado", true)
-      );
-    case "installment-plan": {
-      const amountError = checkMoney(draft.originalAmount, "Monto original");
-      if (amountError) return amountError;
-      if (
-        !Number.isInteger(draft.installmentsTotal) ||
-        draft.installmentsTotal < 1
-      ) {
-        return "Meses: debe ser un entero ≥ 1.";
-      }
-      if (
-        !Number.isInteger(draft.installmentsPaid) ||
-        draft.installmentsPaid < 0
-      ) {
-        return "Pagados: debe ser un entero ≥ 0.";
-      }
-      if (draft.installmentsPaid > draft.installmentsTotal) {
-        return "Pagados: no puede ser mayor que Meses.";
-      }
-      if (draft.cardId !== undefined && !hasCard(draft.cardId)) {
-        return "Tarjeta: la tarjeta ya no existe.";
-      }
-      return null;
-    }
-    default:
-      return null;
-  }
+  return firstFieldError(itemFormErrors(draft, cards), draft);
+}
+
+// Field errors are shown under their field and tied to its input.
+const FieldErrorsContext = React.createContext<ItemFormErrors>({});
+
+function useFieldError(path: string | undefined): { id: string; message: string | undefined } {
+  const errors = React.useContext(FieldErrorsContext);
+  const id = React.useId();
+  return { id, message: path ? errors[path] : undefined };
+}
+
+function FieldError({ id, message }: { id: string; message: string | undefined }) {
+  return message ? (
+    <span id={id} className="fin-editor__field-error">
+      {message}
+    </span>
+  ) : null;
 }
 
 function numberToText(value: number | undefined): string {
@@ -330,6 +300,7 @@ function NumberField({
   optional = false,
   suffix,
   placeholder,
+  path,
 }: {
   label: string;
   value: number | undefined;
@@ -337,7 +308,10 @@ function NumberField({
   optional?: boolean;
   suffix?: string;
   placeholder?: string;
+  /** Form path of the value (its schema error shows under the field). */
+  path?: string;
 }) {
+  const fieldError = useFieldError(path);
   const [text, setText] = React.useState(() => numberToText(value));
   const emittedRef = React.useRef(value);
   React.useEffect(() => {
@@ -359,6 +333,8 @@ function NumberField({
           spellCheck={false}
           value={text}
           placeholder={placeholder}
+          aria-invalid={fieldError.message ? true : undefined}
+          aria-describedby={fieldError.message ? fieldError.id : undefined}
           onChange={(event) => {
             const raw = event.target.value;
             setText(raw);
@@ -371,6 +347,7 @@ function NumberField({
         />
         {suffix ? <span className="fin-editor__suffix">{suffix}</span> : null}
       </span>
+      <FieldError {...fieldError} />
     </label>
   );
 }
@@ -394,6 +371,9 @@ function DateField({
   prefer = "nearest",
   min,
   disabled = false,
+  preview,
+  inline = false,
+  path,
   children,
 }: {
   label: string;
@@ -405,10 +385,23 @@ function DateField({
   prefer?: DateYearPreference;
   min?: string;
   disabled?: boolean;
+  /**
+   * What to show under a recognised (or disabled) date instead of its
+   * weekday echo — e.g. "12 pagos · el último, vie 1 oct 2027".
+   */
+  preview?: string;
   /** Extra controls on the input row (e.g. the "Indefinido" checkbox). */
   children?: React.ReactNode;
+  /**
+   * Just the input (no field label / preview), named by `label`: for a date
+   * inside a sentence ("Termina ○ El [fecha]").
+   */
+  inline?: boolean;
+  /** Form path of the date (its schema error shows under the field). */
+  path?: string;
 }) {
   const id = React.useId();
+  const fieldError = useFieldError(path);
   const [text, setText] = React.useState(() => formatDateInput(value));
   const emittedRef = React.useRef(value);
   React.useEffect(() => {
@@ -428,13 +421,67 @@ function DateField({
   const empty = text.trim() === "";
   const status = disabled ? "off" : parsed ? "ok" : empty ? "empty" : "invalid";
   const message =
-    status === "off"
-      ? ""
-      : parsed
-        ? formatDateWeekday(parsed)
-        : empty
-          ? "ej. 15/11/2026 o 15 nov"
-          : "No reconocida · ej. 15/11/2026";
+    (status === "off" || status === "ok") && preview !== undefined
+      ? preview
+      : status === "off"
+        ? ""
+        : parsed
+          ? formatDateWeekday(parsed)
+          : empty
+            ? "ej. 15/11/2026 o 15 nov"
+            : "No reconocida · ej. 15/11/2026";
+
+  const input = (
+    <input
+      id={id}
+      type="text"
+      autoComplete="off"
+      spellCheck={false}
+      className="fin-date__input"
+      placeholder="dd/mm/aaaa"
+      value={text}
+      disabled={disabled}
+      aria-label={inline ? label : undefined}
+      aria-invalid={
+        status === "invalid" || (status === "empty" && !inline) || fieldError.message !== undefined
+      }
+      aria-describedby={
+        [inline ? null : `${id}-preview`, fieldError.message ? fieldError.id : null]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
+      onChange={(event) => {
+        const raw = event.target.value;
+        setText(raw);
+        emit(parseDateInput(raw, reference, prefer) ?? "");
+      }}
+      onBlur={() => {
+        if (parsed) setText(formatDateInput(parsed));
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        event.preventDefault();
+        const base = parsed ?? (value || reference);
+        const step = (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 7 : 1);
+        let next = shiftISODate(base, step);
+        if (next === null) return;
+        if (min !== undefined && isISODate(min) && compareISODate(next, min) < 0) {
+          next = min;
+        }
+        setText(formatDateInput(next));
+        emit(next);
+      }}
+    />
+  );
+  if (inline) {
+    return (
+      <>
+        {input}
+        <FieldError {...fieldError} />
+      </>
+    );
+  }
 
   return (
     <div className="fin-editor__field fin-date">
@@ -442,40 +489,7 @@ function DateField({
         {label}
       </label>
       <span className="fin-editor__control">
-        <input
-          id={id}
-          type="text"
-          autoComplete="off"
-          spellCheck={false}
-          className="fin-date__input"
-          placeholder="dd/mm/aaaa"
-          value={text}
-          disabled={disabled}
-          aria-invalid={status === "invalid" || status === "empty"}
-          aria-describedby={`${id}-preview`}
-          onChange={(event) => {
-            const raw = event.target.value;
-            setText(raw);
-            emit(parseDateInput(raw, reference, prefer) ?? "");
-          }}
-          onBlur={() => {
-            if (parsed) setText(formatDateInput(parsed));
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-            if (event.altKey || event.ctrlKey || event.metaKey) return;
-            event.preventDefault();
-            const base = parsed ?? (value || reference);
-            const step = (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 7 : 1);
-            let next = shiftISODate(base, step);
-            if (next === null) return;
-            if (min !== undefined && isISODate(min) && compareISODate(next, min) < 0) {
-              next = min;
-            }
-            setText(formatDateInput(next));
-            emit(next);
-          }}
-        />
+        {input}
         {children}
       </span>
       <span
@@ -485,6 +499,57 @@ function DateField({
       >
         {message}
       </span>
+      <FieldError {...fieldError} />
+    </div>
+  );
+}
+
+// Plain-words readback of the "Cuándo" block: what will happen, and the
+// next dates — so the person sees the schedule, not just the controls.
+function ScheduleReadback({
+  draft,
+  payments,
+  last,
+}: {
+  draft: FinancialItem;
+  payments: number | null;
+  last: string | null;
+}) {
+  const rule = draft.recurrence;
+  if (!isISODate(rule.startDate)) return null;
+  const amount = primaryAmount(draft);
+  const money = amount !== undefined && Number.isFinite(amount) ? ` ${formatMoney(amount)}` : "";
+  const verb = draft.kind === "income" ? "Cobras" : "Pagas";
+  const once = rule.frequency === "once";
+  const upcoming = once ? [] : upcomingPayments(rule, 4);
+  let sentence: string;
+  if (once) {
+    sentence = `${verb}${money} una sola vez, el ${formatDateWeekday(rule.startDate)}.`;
+  } else {
+    const end =
+      rule.endDate === undefined
+        ? ", sin fecha de fin"
+        : payments && last
+          ? `, hasta el ${formatDateWeekday(last)}: ${payments} ${payments === 1 ? "pago" : "pagos"}`
+          : ": ningún pago en ese rango";
+    sentence = `${verb}${money} ${cadenceText(rule)}, desde el ${formatDateWeekday(rule.startDate)}${end}.`;
+  }
+  return (
+    <div className="fin-editor__field--wide fin-readback" role="status" aria-live="polite">
+      <p className="fin-readback__sentence">{sentence}</p>
+      {upcoming.length > 0 ? (
+        <p className="fin-readback__next">
+          <span className="fin-readback__label">Próximos:</span>
+          {upcoming.map((date) => (
+            <span key={date} className="fin-readback__date">
+              {formatDateWeekday(date)}
+            </span>
+          ))}
+          {rule.endDate === undefined || (payments ?? 0) > upcoming.length ? (
+            <span className="fin-readback__more">…</span>
+          ) : null}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -502,6 +567,7 @@ function CardSelect({
   optional: boolean;
   onChange: (cardId: string | undefined) => void;
 }) {
+  const fieldError = useFieldError("cardId");
   const known = value !== undefined && cards.some((card) => card.id === value);
   // A card id that no longer exists (card deleted, or a stale default) gets
   // its own selected placeholder option. Rendering it as "" instead would
@@ -515,6 +581,7 @@ function CardSelect({
         <span className="fin-editor__hint">
           No hay tarjetas. Agrega una con “+ Tarjeta”.
         </span>
+        <FieldError {...fieldError} />
       </div>
     );
   }
@@ -526,6 +593,8 @@ function CardSelect({
       </span>
       <select
         value={known || missing ? value : ""}
+        aria-invalid={fieldError.message ? true : undefined}
+        aria-describedby={fieldError.message ? fieldError.id : undefined}
         onChange={(event) => onChange(event.target.value || undefined)}
       >
         {optional ? (
@@ -546,6 +615,7 @@ function CardSelect({
           </option>
         ))}
       </select>
+      <FieldError {...fieldError} />
     </label>
   );
 }
@@ -616,9 +686,44 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
   onCloseRef.current = onClose;
   useRestoreFocus(returnFocusFallback);
 
-  const [draft, setDraft] = React.useState<FinancialItem | null>(() =>
-    props.draft !== undefined ? props.draft : bridge.getItem(itemId),
+  // State: Mantine Form, controlled — the "Cuándo" readback, the payments
+  // preview and the presets derive from every value as you type. Validation:
+  // the shared Zod schema (item-schema.ts), per field.
+  const initialItem = props.draft !== undefined ? props.draft : bridge.getItem(itemId);
+  const [missing, setMissing] = React.useState(initialItem === null);
+  const form = useForm<FinancialItem>({
+    mode: "controlled",
+    initialValues: initialItem ?? MISSING_ITEM,
+  });
+  const draft: FinancialItem | null = missing ? null : form.getValues();
+  // Same contract as a useState setter (null = the item is gone). A new
+  // object REPLACES the values: keys it lacks (a kind switch) are cleared,
+  // since Mantine merges.
+  const setDraft = React.useCallback(
+    (
+      next:
+        | FinancialItem
+        | null
+        | ((prev: FinancialItem | null) => FinancialItem | null),
+    ) => {
+      const prev = missingRef.current ? null : form.getValues();
+      const value = typeof next === "function" ? next(prev) : next;
+      if (value === null) {
+        missingRef.current = true;
+        setMissing(true);
+        return;
+      }
+      if (value === prev) return;
+      const cleared: Record<string, unknown> = {};
+      if (prev) for (const key of Object.keys(prev)) if (!(key in value)) cleared[key] = undefined;
+      missingRef.current = false;
+      setMissing(false);
+      // (FinancialItem is a union: Mantine types setValues per member.)
+      form.setValues({ ...cleared, ...value } as never);
+    },
+    [form],
   );
+  const missingRef = React.useRef(missing);
   const loadedIdRef = React.useRef(itemId);
   React.useEffect(() => {
     if (creating || loadedIdRef.current === itemId) return;
@@ -690,7 +795,11 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
 
   if (!draft || !exists) return null;
 
-  const error = validateFinancialDraft(draft, cards);
+  const fieldErrors = React.useMemo(
+    () => (draft ? itemFormErrors(draft, cards) : {}),
+    [draft, cards],
+  );
+  const error = draft ? firstFieldError(fieldErrors, draft) : null;
 
   const patch = (fields: Record<string, unknown>) =>
     setDraft((prev) =>
@@ -726,11 +835,12 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
       return { ...prev, recurrence };
     });
 
-  const onFrequencyChange = (frequency: RecurrenceFrequency) =>
+  // "Cada [N] [unit]" changed (either control).
+  const onScheduleChange = (unit: FrequencyUnit, every: number) =>
     setDraft((prev) => {
       if (!prev) return prev;
-      const recurrence: FinancialRecurrence = { ...prev.recurrence, frequency };
-      if (frequency === "once") {
+      const recurrence = withFrequencyParts(prev.recurrence, unit, every);
+      if (recurrence.frequency === "once") {
         // One-day window (endDate === startDate), like the core defaults.
         // The anchor stays in the draft (switching back keeps the paydays);
         // normalizeForSave strips it from a saved single occurrence.
@@ -747,6 +857,10 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
       return { ...prev, recurrence };
     });
 
+  // "Termina": on a date (default) or after N payments — both store an end
+  // date; this only says which one the form shows.
+  const [endBy, setEndBy] = React.useState<"date" | "count">("date");
+
   const onIndefiniteChange = (indefinite: boolean) =>
     setDraft((prev) => {
       if (!prev) return prev;
@@ -756,7 +870,7 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
       } else if (usesFrequency(prev.kind) && !isOnce(prev)) {
         return {
           ...prev,
-          recurrence: withPaymentCount(recurrence, DEFAULT_PAYMENTS[recurrence.frequency]),
+          recurrence: withPaymentCount(recurrence, defaultPaymentCount(recurrence)),
         };
       } else {
         const base = isISODate(recurrence.startDate)
@@ -785,13 +899,13 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
     );
 
   const save = () => {
-    if (locked || validateFinancialDraft(draft, cards) !== null) return;
+    if (locked || error !== null) return;
     if (creating) {
-      bridge.addItem(normalizeForSave(draft), props.placement);
+      bridge.addItem(cleanItem(normalizeForSave(draft)), props.placement);
       onClose();
       return;
     }
-    if (bridge.replaceItem(normalizeForSave(draft))) {
+    if (bridge.replaceItem(cleanItem(normalizeForSave(draft)))) {
       onClose();
     } else {
       setActionError(
@@ -818,11 +932,14 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
   const recurrence = draft.recurrence;
   const showFrequency = usesFrequency(draft.kind);
   const showEndDate = !(showFrequency && recurrence.frequency === "once");
-  // Frequency kinds (income, expense, loan, purchase) end after N payments;
-  // cards / MSI keep their own end date.
+  // Every kind ends on a date ("Fecha final"); for a recurring one the
+  // preview counts its payments and names the last one (the saved end snaps
+  // to it).
   const byPayments = showFrequency && recurrence.frequency !== "once";
+  const schedule = frequencyParts(recurrence);
   const indefinite = recurrence.endDate === undefined;
   const payments = byPayments ? paymentCount(recurrence) : null;
+  const endMode: "never" | "date" | "count" = indefinite ? "never" : endBy;
   const last = byPayments ? lastPayment(recurrence) : null;
   const title = creating
     ? `${NEW_TITLE_PREFIX[draft.kind]} ${KIND_LABELS[draft.kind]}`
@@ -883,6 +1000,7 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
             </p>
           ) : null}
           {/* A disabled fieldset disables every control inside (read-only). */}
+          <FieldErrorsContext.Provider value={fieldErrors}>
           <fieldset className="fin-editor__grid" disabled={locked}>
             <label className="fin-editor__field fin-editor__field--wide">
               <span className="fin-editor__label">Nombre</span>
@@ -890,8 +1008,11 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
                 ref={nameRef}
                 type="text"
                 value={draft.name}
+                aria-invalid={fieldErrors.name ? true : undefined}
+                aria-describedby={fieldErrors.name ? "fin-editor-name-error" : undefined}
                 onChange={(event) => patch({ name: event.target.value })}
               />
+              <FieldError id="fin-editor-name-error" message={fieldErrors.name} />
             </label>
             <label className="fin-editor__field fin-editor__field--wide">
               <span className="fin-editor__label">Tipo</span>
@@ -916,122 +1037,164 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
               patch={patch}
             />
 
-            <DateField
-              label="Fecha"
-              value={recurrence.startDate}
-              reference={doc.startDate}
-              onChange={onStartDateChange}
-            />
-            {showFrequency ? (
-              <label className="fin-editor__field">
-                <span className="fin-editor__label">Frecuencia</span>
-                <select
-                  value={recurrence.frequency}
-                  onChange={(event) =>
-                    onFrequencyChange(event.target.value as RecurrenceFrequency)
-                  }
-                >
-                  {FREQUENCY_ORDER.map((frequency) => (
-                    <option key={frequency} value={frequency}>
-                      {FREQUENCY_LABELS[frequency]}
-                    </option>
-                  ))}
-                </select>
-                <span className="fin-date__preview" data-state="ok">
-                  {byPayments && recurrence.frequency !== "monthly"
-                    ? scheduleSummary(recurrence)
-                    : ""}
-                </span>
-              </label>
-            ) : null}
-            {byPayments && recurrence.frequency === "monthly" ? (
-              <label className="fin-editor__field">
-                <span className="fin-editor__label">Día de pago</span>
-                <select
-                  value={monthlyDay(recurrence)}
-                  onChange={(event) => onMonthlyDayChange(Number(event.target.value))}
-                >
-                  {MONTH_DAYS.map((day) => (
-                    <option key={day} value={day}>
-                      Día {day}
-                    </option>
-                  ))}
-                  <option value={LAST_DAY}>Último día del mes</option>
-                </select>
-                <span className="fin-date__preview" data-state="ok">
-                  {scheduleSummary(recurrence)}
-                </span>
-              </label>
-            ) : null}
-            {byPayments ? (
-              <div className="fin-editor__field">
-                <label className="fin-editor__label" htmlFor="fin-editor-payments">
-                  Pagos
-                </label>
-                <span className="fin-editor__control">
-                  <input
-                    id="fin-editor-payments"
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    step={1}
-                    value={indefinite ? "" : String(payments ?? "")}
-                    disabled={indefinite}
-                    placeholder="—"
-                    onChange={(event) => {
-                      const n = Math.floor(Number(event.target.value));
-                      if (Number.isFinite(n) && n >= 1) onPaymentCountChange(n);
-                    }}
+            {/* Cuándo — ONE way to say when it happens, is paid, comes in and
+                ends, the same for every kind (like a calendar's "Repetir"):
+                Se repite [presets | Personalizado: cada N días / meses] ·
+                Empieza (Fecha if it doesn't repeat; its day is the payday) ·
+                Termina ◉ Nunca ○ El [fecha] ○ Después de [N] pagos — and a
+                plain-words readback with the next dates. */}
+            <div className="fin-editor__when" role="group" aria-labelledby="fin-editor-when">
+              <span id="fin-editor-when" className="fin-editor__section-title">
+                Cuándo
+              </span>
+              {showFrequency ? (
+                <div className="fin-editor__field fin-editor__field--wide">
+                  <span className="fin-editor__label" id="fin-editor-repeat">
+                    Se repite
+                  </span>
+                  <SchedulePicker
+                    labelledBy="fin-editor-repeat"
+                    unit={schedule.unit}
+                    every={schedule.every}
+                    onChange={onScheduleChange}
                   />
-                  <label className="fin-editor__check">
-                    <input
-                      type="checkbox"
-                      checked={indefinite}
-                      onChange={(event) => onIndefiniteChange(event.target.checked)}
-                    />
-                    <span>Indefinido</span>
-                  </label>
-                </span>
-                <span className="fin-date__preview" data-state="ok">
-                  {indefinite
-                    ? "Sin final: sigue hasta el horizonte"
-                    : last
-                      ? `Último: ${formatDateWeekday(last)}`
-                      : "Ningún pago en ese rango"}
-                </span>
-              </div>
-            ) : null}
-            {showEndDate && !byPayments ? (
+                  {byPayments && recurrence.frequency === "monthly" && endsMonth(recurrence) ? (
+                    <label className="fin-editor__check">
+                      <input
+                        type="checkbox"
+                        checked={monthlyDay(recurrence) === LAST_DAY}
+                        onChange={(event) =>
+                          onMonthlyDayChange(
+                            event.target.checked ? LAST_DAY : startDayOfMonth(recurrence),
+                          )
+                        }
+                      />
+                      <span>Siempre el último día del mes</span>
+                    </label>
+                  ) : null}
+                </div>
+              ) : null}
               <DateField
-                label="Fecha final"
-                value={recurrence.endDate}
-                disabled={indefinite}
-                // "15 nov" for an end date means the next 15 NOV on or
-                // after the start, never one before it.
-                reference={
-                  isISODate(recurrence.startDate)
-                    ? recurrence.startDate
-                    : doc.startDate
-                }
-                prefer="on-or-after"
-                min={
-                  isISODate(recurrence.startDate)
-                    ? recurrence.startDate
-                    : undefined
-                }
-                onChange={(endDate) => patchRecurrence({ endDate })}
-              >
-                <label className="fin-editor__check">
-                  <input
-                    type="checkbox"
-                    checked={indefinite}
-                    onChange={(event) => onIndefiniteChange(event.target.checked)}
+                path="recurrence.startDate"
+                label={showFrequency && recurrence.frequency === "once" ? "Fecha" : "Empieza"}
+                value={recurrence.startDate}
+                reference={doc.startDate}
+                onChange={onStartDateChange}
+              />
+              {draft.kind === "credit-card" ? (
+                <>
+                  <NumberField
+                    label="Día de corte" path="cutDay"
+                    value={draft.cutDay}
+                    onChange={(cutDay) => patch({ cutDay: cutDay ?? Number.NaN })}
                   />
-                  <span>Indefinido</span>
-                </label>
-              </DateField>
-            ) : null}
+                  <NumberField
+                    label="Día de pago" path="dueDay"
+                    value={draft.dueDay}
+                    onChange={(dueDay) => patch({ dueDay: dueDay ?? Number.NaN })}
+                  />
+                </>
+              ) : null}
+              {showEndDate ? (
+                <div
+                  className="fin-editor__field fin-editor__field--wide"
+                  role="radiogroup"
+                  aria-labelledby="fin-editor-end"
+                >
+                  <span className="fin-editor__label" id="fin-editor-end">
+                    Termina
+                  </span>
+                  <div className="fin-ends">
+                    <label className="fin-ends__option">
+                      <input
+                        type="radio"
+                        name="fin-editor-end"
+                        checked={endMode === "never"}
+                        onChange={() => onIndefiniteChange(true)}
+                      />
+                      <span>Nunca</span>
+                    </label>
+                    <span className="fin-ends__option">
+                      <label className="fin-ends__choice">
+                        <input
+                          type="radio"
+                          name="fin-editor-end"
+                          checked={endMode === "date"}
+                          onChange={() => {
+                            setEndBy("date");
+                            if (indefinite) onIndefiniteChange(false);
+                          }}
+                        />
+                        <span>El</span>
+                      </label>
+                      {/* Typing a date picks this option by itself. */}
+                      <span
+                        className="fin-ends__input"
+                        onFocusCapture={() => setEndBy("date")}
+                      >
+                        <DateField
+                          inline
+                          path="recurrence.endDate"
+                          label="Fecha de fin"
+                          value={endMode === "date" ? recurrence.endDate : undefined}
+                          // "15 nov" for an end date means the next 15 NOV on
+                          // or after the start, never one before it.
+                          reference={
+                            isISODate(recurrence.startDate)
+                              ? recurrence.startDate
+                              : doc.startDate
+                          }
+                          prefer="on-or-after"
+                          min={isISODate(recurrence.startDate) ? recurrence.startDate : undefined}
+                          onChange={(endDate) => {
+                            setEndBy("date");
+                            patchRecurrence({ endDate });
+                          }}
+                        />
+                      </span>
+                    </span>
+                    {byPayments ? (
+                      <span className="fin-ends__option">
+                        <label className="fin-ends__choice">
+                          <input
+                            type="radio"
+                            name="fin-editor-end"
+                            checked={endMode === "count"}
+                            onChange={() => {
+                              setEndBy("count");
+                              if (indefinite) onIndefiniteChange(false);
+                            }}
+                          />
+                          <span>Después de</span>
+                        </label>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min={1}
+                          step={1}
+                          className="fin-ends__count"
+                          aria-label="Número de pagos"
+                          value={endMode === "count" && payments ? String(payments) : ""}
+                          placeholder="12"
+                          onFocus={() => setEndBy("count")}
+                          onChange={(event) => {
+                            const n = Math.floor(Number(event.target.value));
+                            setEndBy("count");
+                            if (Number.isFinite(n) && n >= 1) onPaymentCountChange(n);
+                          }}
+                        />
+                        <span className="fin-ends__unit">pagos</span>
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {showFrequency ? (
+                <ScheduleReadback draft={draft} payments={payments} last={last} />
+              ) : null}
+            </div>
           </fieldset>
+          </FieldErrorsContext.Provider>
 
           <p className="fin-editor__error" role="alert" aria-live="polite">
             {message ?? ""}
@@ -1095,7 +1258,7 @@ function KindFields({
     case "expense":
       return (
         <NumberField
-          label="Monto"
+          label="Monto" path="amount"
           value={draft.amount}
           onChange={(amount) => patch({ amount })}
         />
@@ -1104,7 +1267,7 @@ function KindFields({
       return (
         <>
           <NumberField
-            label="Monto"
+            label="Monto" path="amount"
             value={draft.amount}
             onChange={(amount) => patch({ amount })}
           />
@@ -1121,18 +1284,18 @@ function KindFields({
       return (
         <>
           <NumberField
-            label="Pago"
+            label="Pago" path="paymentAmount"
             value={draft.paymentAmount}
             onChange={(paymentAmount) => patch({ paymentAmount })}
           />
           <NumberField
-            label="Saldo"
+            label="Saldo" path="balance"
             optional
             value={draft.balance}
             onChange={(balance) => patch({ balance })}
           />
           <NumberField
-            label="Tasa anual"
+            label="Tasa anual" path="annualRate"
             optional
             suffix="%"
             value={draft.annualRate}
@@ -1164,34 +1327,24 @@ function KindFields({
             ) : null}
           </label>
           <NumberField
-            label="Saldo"
+            label="Saldo" path="balance"
             value={draft.balance}
             onChange={(balance) => patch({ balance })}
           />
           <NumberField
-            label="Tasa anual"
+            label="Tasa anual" path="annualRate"
             suffix="%"
             value={draft.annualRate}
             onChange={(annualRate) => patch({ annualRate })}
           />
           <NumberField
-            label="Día de corte"
-            value={draft.cutDay}
-            onChange={(cutDay) => patch({ cutDay: cutDay ?? Number.NaN })}
-          />
-          <NumberField
-            label="Día de pago"
-            value={draft.dueDay}
-            onChange={(dueDay) => patch({ dueDay: dueDay ?? Number.NaN })}
-          />
-          <NumberField
-            label="Pago mínimo"
+            label="Pago mínimo" path="minimumPayment"
             value={draft.minimumPayment}
             onChange={(minimumPayment) => patch({ minimumPayment })}
           />
           {draft.paymentMode === "statement" ? null : (
             <NumberField
-              label="Pago planeado"
+              label="Pago planeado" path="paymentAmount"
               optional
               value={draft.paymentAmount}
               onChange={(paymentAmount) => patch({ paymentAmount })}
@@ -1226,19 +1379,19 @@ function InstallmentFields({
   return (
     <>
       <NumberField
-        label="Monto original"
+        label="Monto original" path="originalAmount"
         value={draft.originalAmount}
         onChange={(originalAmount) => patch({ originalAmount })}
       />
       <NumberField
-        label="Meses"
+        label="Meses" path="installmentsTotal"
         value={draft.installmentsTotal}
         onChange={(installmentsTotal) =>
           patch({ installmentsTotal: installmentsTotal ?? Number.NaN })
         }
       />
       <NumberField
-        label="Pagados"
+        label="Pagados" path="installmentsPaid"
         value={draft.installmentsPaid}
         onChange={(installmentsPaid) =>
           patch({ installmentsPaid: installmentsPaid ?? Number.NaN })

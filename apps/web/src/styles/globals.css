@@ -71,6 +71,7 @@ body,
   --ink: #111113;
   --ink-hover: #2c2c31;
   --on-ink: #ffffff;
+  --on-accent: #ffffff;
   --now: #d1292f;
 
   --hover: rgba(17, 17, 19, 0.05);
@@ -124,6 +125,7 @@ body,
   --ink: #f4f4f6;
   --ink-hover: #ffffff;
   --on-ink: #0e0e10;
+  --on-accent: #0e0e10;
   --now: #ff5c61;
 
   --hover: rgba(255, 255, 255, 0.06);
@@ -422,9 +424,31 @@ button {
   white-space: nowrap;
 }
 
+.playlist-shell__snap-field {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+/* Magnet inside the pill: the control stays recognisable when the words
+   "Ajustar a" are hidden on narrower windows. */
+.playlist-shell__snap-icon {
+  position: absolute;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
 .playlist-shell__snap-select {
   height: 32px;
-  padding: 0 30px 0 12px;
+  padding: 0 30px 0 30px;
   border: 0;
   border-radius: var(--radius-m);
   background: var(--surface-2) var(--select-chevron) no-repeat right 10px center;
@@ -478,9 +502,34 @@ button {
 }
 
 @media (max-width: 960px) {
-  .playlist-shell__snap-label,
   .playlist-shell__counter {
     display: none;
+  }
+}
+
+/* Words that give way on narrower windows but keep naming their control
+   (visually hidden, not display: none, so screen readers still read them). */
+@media (max-width: 1799px) {
+  .playlist-shell__snap-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 1599px) {
+  .fin-summary__chip-words {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 }
 
@@ -937,24 +986,77 @@ button {
   transition: background 120ms ease;
 }
 
+.fin-summary__metric--action[aria-disabled="true"] {
+  cursor: default;
+}
+
+.fin-summary__metric:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .fin-summary__metric--action:hover {
   background: var(--hover);
 }
 
 .fin-summary__label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   line-height: 1.2;
+  /* Every metric explains itself on hover / focus (MetricHelp.tsx). */
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, var(--muted) 55%, transparent);
+  text-underline-offset: 3px;
 }
 
 .fin-summary__date {
   color: var(--muted);
+  font-size: 11px;
   font-weight: 400;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* Dated metric: "label date" over the value on wide windows; on narrower
+   ones the date moves next to the value ("−$1,292 27 nov"), so the long
+   label no longer sets the metric's width. Same DOM, two grid layouts. */
+.fin-summary__metric--dated {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "label date"
+    "value value";
+  align-content: center;
+  align-items: baseline;
+  column-gap: 4px;
+  row-gap: 3px;
+}
+
+.fin-summary__metric--dated > .fin-summary__label {
+  grid-area: label;
+}
+
+.fin-summary__metric--dated > .fin-summary__date {
+  grid-area: date;
+}
+
+.fin-summary__metric--dated > .fin-summary__value {
+  grid-area: value;
+}
+
+@media (max-width: 1799px) {
+  .fin-summary__metric--dated {
+    grid-template-areas:
+      "label label"
+      "value date";
+    column-gap: 6px;
+    row-gap: 2px;
+  }
 }
 
 .fin-summary__value {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.25;
   letter-spacing: -0.01em;
@@ -968,7 +1070,7 @@ button {
 
 .fin-summary__name {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0;
 }
@@ -982,14 +1084,14 @@ button {
 }
 
 .fin-summary__input {
-  width: 112px;
+  width: 104px;
   padding: 0;
   border: 0;
   border-bottom: 1px dashed transparent;
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.25;
   letter-spacing: -0.01em;
@@ -1068,22 +1170,32 @@ button.fin-summary__chip:hover,
   gap: 6px;
 }
 
-@media (max-width: 1440px) {
+/* Below the widest windows everything shares ONE header row (see the
+   "tool row lives INSIDE the header card" block): the metrics tighten
+   first, then the extras give way — the payee's name, the wordmark (the
+   logo stays), the words of the alert chip. */
+@media (max-width: 1799px) {
   .fin-summary__metric {
-    padding: 0 9px;
+    padding: 0 8px;
   }
 
   .fin-summary__value,
   .fin-summary__input {
-    font-size: 16px;
+    font-size: 14px;
   }
 
+  .fin-summary__input {
+    width: 88px;
+  }
+}
+
+@media (max-width: 1699px) {
   .fin-summary__name {
     display: none;
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1599px) {
   .fin-summary__brand {
     padding-right: 12px;
   }
@@ -1160,6 +1272,60 @@ button.fin-summary__chip:hover,
 
 .fin-popover__item[data-state="negative"] strong {
   color: var(--fin-negative-text);
+}
+
+/* Metric help card (MetricHelp.tsx): what a number means + what yours say. */
+.fin-help {
+  position: fixed;
+  z-index: 31;
+  display: grid;
+  gap: 4px;
+  width: max-content;
+  max-width: 300px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+  pointer-events: none;
+}
+
+.fin-help__title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fin-help__body {
+  color: var(--muted);
+}
+
+.fin-help__detail {
+  font-weight: 500;
+}
+
+.fin-help__detail[data-tone="low"] {
+  color: var(--fin-warning-text);
+}
+
+.fin-help__detail[data-tone="negative"] {
+  color: var(--fin-negative-text);
+}
+
+.fin-help__action {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.fin-popover__note {
+  max-width: 320px;
+  margin: 2px 4px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
 }
 
 /* "Nuevo" menu */
@@ -1365,11 +1531,13 @@ button.fin-summary__chip:hover,
 }
 
 /* Collapsed "Análisis" toggle lives in the money lane's header cell (an
-   inert area under the "Caja" title) instead of over the first track
-   header, where it would cover the track name. */
+   inert area), on the "Caja" title row, right-aligned: it never covers a
+   track name, and the readout (date · cash · debt) under the title keeps
+   the rest of the cell — so the lane can shrink on short windows. */
 .playlist-shell--finance .fin-side--collapsed {
-  top: calc(var(--pl-ruler-h, 38px) + var(--pl-lane-h, 0px) - 40px);
-  left: 14px;
+  top: calc(var(--pl-ruler-h, 38px) + 6px);
+  left: calc(var(--pl-header-w, 216px) - 10px);
+  transform: translateX(-100%);
 }
 
 /* The collapsed inspector is a small round button floating at the bottom
@@ -1624,6 +1792,204 @@ button.fin-summary__chip:hover,
   grid-column: 1 / -1;
 }
 
+/* "Cuándo": the one block that says when (Desde · Se repite · Hasta), the
+   same for every kind. Full width, its own two columns, a quiet title. */
+.fin-editor__when {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.fin-editor__section-title {
+  grid-column: 1 / -1;
+  margin-bottom: -6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* "Se repite" (SchedulePicker.tsx): one-click presets as pills, and
+   "Personalizado…" opening "Cada [N] [días | meses]" right under them. */
+.fin-repeat {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fin-repeat__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fin-repeat__preset {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.fin-repeat__preset:hover {
+  background: var(--surface-2);
+}
+
+.fin-repeat__preset[data-checked="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.fin-repeat__preset:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.fin-repeat__custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.fin-repeat__word {
+  flex: none;
+  color: var(--text);
+  font-size: 13px;
+}
+
+/* Beats the editor's generic `input[type="number"]` (full width). */
+.fin-repeat input[type="number"].fin-repeat__every {
+  flex: none;
+  width: 72px;
+  min-width: 0;
+}
+
+.fin-repeat select.fin-repeat__unit {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+/* "Termina ◉ Nunca ○ El [fecha] ○ Después de [N] pagos". */
+.fin-ends {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+}
+
+.fin-ends__option,
+.fin-ends__choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.fin-ends__option {
+  gap: 8px;
+}
+
+.fin-ends__choice,
+label.fin-ends__option {
+  cursor: pointer;
+}
+
+.fin-ends input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+/* Beats the editor's generic `input[type="text"]` (full width). */
+.fin-ends__input input[type="text"].fin-date__input {
+  width: 150px;
+}
+
+.fin-ends__input .fin-date__picker,
+.fin-ends__input .fin-date__box {
+  flex: none;
+}
+
+.fin-ends input[type="number"].fin-ends__count {
+  width: 72px;
+}
+
+.fin-ends__unit {
+  color: var(--muted);
+}
+
+/* Readback: the schedule in plain words + the next dates. */
+.fin-readback {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.fin-readback__sentence {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.fin-readback__next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.fin-readback__label {
+  color: var(--muted);
+}
+
+.fin-readback__date {
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-readback__more {
+  color: var(--muted);
+}
+
+/* A field's own error (the shared schema's message), under the field and
+   tied to its input with aria-describedby. */
+.fin-editor__field-error {
+  color: var(--fin-negative-text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+/* Beats the editor's / onboarding's generic `input[type=…]` borders. */
+.fin-editor input[type][aria-invalid="true"],
+.fin-editor select[aria-invalid="true"],
+.fin-onboarding input[type][aria-invalid="true"] {
+  border-color: var(--fin-negative);
+}
+
 .fin-editor__label {
   color: var(--muted);
   font-size: 12px;
@@ -1710,6 +2076,140 @@ button.fin-summary__chip:hover,
 
 .fin-date__preview[data-state="invalid"] {
   color: var(--fin-negative);
+}
+
+/* The field and its calendar button (▦) inside the input's right edge. */
+.fin-date__picker,
+.fin-date__box {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+}
+
+.fin-editor .fin-date__box input.fin-date__input,
+.fin-onboarding .fin-date__box input.fin-date__input {
+  padding-right: 40px;
+}
+
+.fin-date__toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.fin-date__toggle:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.fin-date__toggle[aria-expanded="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.fin-date__toggle:focus-visible {
+  outline-offset: -2px;
+}
+
+.fin-date__toggle:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* The calendar: @mantine/dates (DatePicker in a Popover) dressed in our
+   tokens. Mantine's own variables already point at them (src/mantine.tsx);
+   these rules set the shape and the states. */
+.fin-cal {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  font-family: var(--font-sans);
+}
+
+.fin-cal__level {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fin-cal__nav,
+.fin-cal__level,
+.fin-cal__day,
+.fin-cal__cell {
+  border-radius: var(--radius-s);
+}
+
+.fin-cal__nav {
+  color: var(--muted);
+}
+
+.fin-cal__nav:hover:not([data-disabled]),
+.fin-cal__level:hover:not([data-disabled]),
+.fin-cal__day:hover:not([data-selected], [data-disabled]),
+.fin-cal__cell:hover:not([data-selected], [data-disabled]) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.fin-cal__weekday {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.fin-cal__day,
+.fin-cal__cell {
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-cal__day[data-outside] {
+  color: var(--muted);
+}
+
+/* Today in the "now" colour, as the playhead / today line on the canvas. */
+.fin-cal__day[data-today]:not([data-selected]) {
+  border: 0;
+  color: var(--now);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.fin-cal__day[data-selected],
+.fin-cal__cell[data-selected] {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.fin-cal__day[data-selected]:hover,
+.fin-cal__cell[data-selected]:hover {
+  background: var(--accent-hover);
+}
+
+.fin-cal__day[data-disabled],
+.fin-cal__cell[data-disabled] {
+  color: var(--subtle);
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .fin-editor__suffix {
@@ -2438,6 +2938,28 @@ kbd {
   height: 32px;
 }
 
+/* Short windows: every pixel of the canvas counts. Tighter card gaps and
+   one-line banners (they float over the rows). */
+@media (max-height: 819px) {
+  .playlist-shell--finance {
+    --gap-card: 6px;
+  }
+
+  .fin-banners {
+    bottom: 24px;
+  }
+
+  .fin-banner {
+    gap: 10px;
+    padding: 6px 6px 6px 14px;
+    line-height: 1.35;
+  }
+
+  .fin-banner .fin-button {
+    height: 30px;
+  }
+}
+
 /* --- Rec / onboarding / statement dialogs --------------------------------------- */
 .fin-rec,
 .fin-onboarding,
@@ -2594,12 +3116,14 @@ kbd {
 .fin-navctl {
   position: absolute;
   top: calc((var(--pl-ruler-h, 52px) - 30px) / 2);
-  left: 10px;
+  left: 8px;
   z-index: 7;
   display: flex;
   align-items: center;
-  gap: 3px;
-  width: calc(var(--pl-header-w, 216px) - 20px);
+  gap: 2px;
+  /* Tight on purpose: the range select gets every spare pixel of the
+     216 px corner, so "3 meses" / "128 d" never clip. */
+  width: calc(var(--pl-header-w, 216px) - 16px);
 }
 
 .fin-navctl__button {
@@ -2607,8 +3131,8 @@ kbd {
   flex: none;
   place-items: center;
   height: 30px;
-  min-width: 28px;
-  padding: 0 6px;
+  min-width: 24px;
+  padding: 0 5px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -2635,7 +3159,7 @@ kbd {
 }
 
 .fin-navctl__today {
-  padding: 0 10px;
+  padding: 0 7px;
 }
 
 .fin-navctl__help {
@@ -2646,12 +3170,12 @@ kbd {
   flex: 1 1 auto;
   min-width: 0;
   height: 30px;
-  padding: 0 22px 0 8px;
+  padding: 0 16px 0 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--surface) var(--select-chevron) no-repeat right 6px center;
+  background: var(--surface) var(--select-chevron) no-repeat right 3px center;
   color: var(--text);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   appearance: none;
   cursor: pointer;
@@ -2733,6 +3257,16 @@ kbd {
   min-height: 24px;
 }
 
+/* …and only as wide as the amount (no reserved blank before the next
+   metric) where the browser can size a field to its content. */
+@supports (field-sizing: content) {
+  .fin-summary__input {
+    field-sizing: content;
+    width: auto;
+    min-width: 56px;
+  }
+}
+
 @media (max-width: 720px) {
   /* Brand + actions, then the metrics (scrollable), then the tools. */
   .fin-summary {
@@ -2794,10 +3328,13 @@ kbd {
 }
 
 /* The tool row lives INSIDE the header card.
-   Two rows (most windows): brand + metrics across the top; tools on the
-   left and the actions (alertas · tema · Nuevo) on the right below — both
-   rows used, nothing stranded. A pseudo-element forces the break.
-   One row (wide windows): brand · metrics · tools · actions. */
+   One row (laptops and up, ≥1200 px): brand · metrics · tools · actions.
+   The metrics take what is left and scroll sideways (with a fade) when it
+   is tight; tools and actions never move. A two-row header would leave
+   ~2/3 of its width empty and cost the canvas ~45 px of height.
+   Two rows (tablets): brand + metrics across the top; tools on the left
+   and the actions (alertas · tema · Nuevo) on the right below. A
+   pseudo-element forces the break. Three on phones. */
 .playlist-shell--finance .fin-summary::after {
   content: "";
   order: 9;
@@ -2828,9 +3365,12 @@ kbd {
   padding-bottom: 6px;
 }
 
-@media (min-width: 1800px) {
+@media (min-width: 1200px) {
   .playlist-shell--finance .fin-summary {
     flex-wrap: nowrap;
+    gap: 12px;
+    min-height: 52px;
+    padding: 0 12px 0 16px;
   }
 
   .playlist-shell--finance .fin-summary::after {
@@ -2842,6 +3382,11 @@ kbd {
     flex: 1 1 0;
   }
 
+  .playlist-shell--finance .fin-summary__metric {
+    height: 40px;
+    row-gap: 2px;
+  }
+
   .fin-summary > .playlist-shell__bar,
   .playlist-shell--finance .fin-summary__spacer,
   .playlist-shell--finance .fin-summary__actions {
@@ -2850,8 +3395,47 @@ kbd {
     padding: 0;
   }
 
+  .fin-summary > .playlist-shell__bar {
+    gap: 10px;
+  }
+
+  .fin-summary > .playlist-shell__bar .playlist-shell__toolbar {
+    gap: 10px;
+  }
+
   .playlist-shell--finance .fin-summary__spacer {
     flex: 0 0 0;
+  }
+}
+
+@media (min-width: 1200px) and (max-width: 1439px) {
+  /* The future's name gives way first among the tools: truncated, and
+     hidden altogether when the main plan is the only future (nothing to
+     tell apart; it stays the button's accessible name). */
+  .fin-futures__trigger {
+    max-width: 150px;
+  }
+
+  .fin-futures__trigger[data-quiet="true"] {
+    padding: 0 9px;
+  }
+
+  .fin-futures__trigger[data-quiet="true"] .fin-futures__name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+  }
+
+  .playlist-shell__snap-select {
+    padding-right: 26px;
+    background-position: right 8px center;
+  }
+
+  .playlist-shell--finance .fin-summary__metric {
+    padding: 0 6px;
   }
 }
 
