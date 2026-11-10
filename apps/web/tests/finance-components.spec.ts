@@ -20,6 +20,7 @@ import {
   type FinancialDocument,
   type FinancialItem,
   type FinancialItemKind,
+  type FinancialProjectionPoint,
 } from "@slicex/core";
 import type { PlaylistCore } from "@slicex/canvas";
 import type { FinancialBridgeApi } from "../src/finance/bridge-api";
@@ -33,6 +34,9 @@ import { FinancialSummaryBar } from "../src/finance/components/FinancialSummaryB
 import { OnboardingDialog } from "../src/finance/components/Onboarding";
 import { FinancialSidePanel } from "../src/finance/components/FinancialSidePanel";
 import { DebtStrategyPanel } from "../src/finance/components/DebtStrategyPanel";
+import { RecDialog } from "../src/finance/components/RecDialog";
+import { StatementDialog } from "../src/finance/components/StatementDialog";
+import { SlicexMantineProvider } from "../src/mantine";
 
 const h = React.createElement;
 const START = "2026-11-07";
@@ -167,11 +171,12 @@ function createFakeBridge(initial: FinancialDocument, options: FakeOptions = {})
 let root: Root | null = null;
 let container: HTMLElement | null = null;
 
+/** Renders inside the app's Mantine provider (the forms' DateField needs it), as the shell does. */
 function mount(element: React.ReactElement): HTMLElement {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  act(() => root!.render(element));
+  act(() => root!.render(h(SlicexMantineProvider, { theme: "light", children: element })));
   return container;
 }
 
@@ -222,6 +227,21 @@ function typeInto(input: HTMLInputElement, text: string) {
     setter.call(input, text);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
+}
+
+/** Types into a React-controlled <textarea> like a user would. */
+function typeIntoArea(area: HTMLTextAreaElement, text: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+  act(() => {
+    setter.call(area, text);
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+/** The message an input's aria-describedby points at ("" when none). */
+function describedText(input: HTMLElement): string {
+  const id = input.getAttribute("aria-describedby");
+  return id ? (document.getElementById(id)?.textContent ?? "") : "";
 }
 
 function pressKey(target: HTMLElement, key: string, init: KeyboardEventInit = {}) {
@@ -1129,5 +1149,257 @@ describe("onboarding: Mantine Form (uncontrolled) + Zod, errors per field", () =
     expect(doc.initialCash).toBe(12000);
     expect(doc.items.find((item: FinancialItem) => item.name === "Sueldo")?.recurrence.frequency).toBe("semimonthly");
     expect(doc.items.find((item: FinancialItem) => item.name === "Renta")).toMatchObject({ amount: 8000 });
+  });
+});
+
+// --- Forms integration: the shared DateField, Rec, statement, header amounts --
+
+describe("the editor's dates are THE date field (typing + calendar)", () => {
+  const RENTA: FinancialItem = {
+    id: "fin-renta",
+    kind: "expense",
+    name: "Renta",
+    amount: 8000,
+    recurrence: { frequency: "monthly", startDate: "2026-11-20", endDate: "2027-05-20" },
+  };
+
+  it("the calendar picks a day: Spanish month, the field and the saved date follow", () => {
+    const { bridge } = createFakeBridge(docWith([RENTA]));
+    mount(h(FinancialEditorModal, { bridge, itemId: RENTA.id, onClose: () => {} }));
+    click(document.querySelector<HTMLButtonElement>('[aria-label="Abrir calendario: Empieza"]')!);
+    const calendar = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Calendario: Empieza"]');
+    expect(calendar).not.toBeNull();
+    expect(calendar!.textContent).toContain("Noviembre 2026");
+    click(calendar!.querySelector<HTMLButtonElement>('button[aria-label="viernes 27 de noviembre de 2026"]')!);
+    expect(field("Empieza").value).toBe("27/11/2026");
+    expect(document.querySelector('[aria-label="Calendario: Empieza"]')).toBeNull();
+    click(mustButton(document, "Guardar"));
+    expect(bridge.replaceItem.mock.calls[0]![0].recurrence.startDate).toBe("2026-11-27");
+  });
+
+  it("Escape on the calendar button closes the calendar, not the editor", () => {
+    const { bridge } = createFakeBridge(docWith([RENTA]));
+    const onClose = vi.fn();
+    mount(h(FinancialEditorModal, { bridge, itemId: RENTA.id, onClose }));
+    const toggle = document.querySelector<HTMLButtonElement>('[aria-label="Abrir calendario: Empieza"]')!;
+    click(toggle);
+    expect(document.querySelector('[aria-label="Calendario: Empieza"]')).not.toBeNull();
+    pressKey(toggle, "Escape");
+    expect(document.querySelector('[aria-label="Calendario: Empieza"]')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("the item vanishing while the editor is open closes it (no hook-order crash)", () => {
+    const { bridge } = createFakeBridge(docWith([RENTA]));
+    const onClose = vi.fn();
+    mount(h(FinancialEditorModal, { bridge, itemId: RENTA.id, onClose }));
+    act(() => {
+      bridge.deleteItem(RENTA.id);
+    });
+    expect(onClose).toHaveBeenCalled();
+    expect(document.querySelector(".fin-editor")).toBeNull();
+  });
+});
+
+describe("onboarding: the next pay is THE date field", () => {
+  const TODAY = "2026-11-09";
+  const input = (label: string) =>
+    [...document.querySelectorAll<HTMLInputElement>(".fin-onboarding input")].find(
+      (el) => el.closest("label")?.querySelector(".fin-editor__label")?.textContent?.startsWith(label),
+    )!;
+  const submit = () =>
+    act(() => {
+      document
+        .querySelector<HTMLFormElement>(".fin-onboarding")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+  it("es-MX text (or the calendar); an unrecognised date blocks 'Crear mi año' on its field", () => {
+    const onCreate = vi.fn();
+    mount(h(OnboardingDialog, { today: TODAY, onCreate, onClose: () => {} }));
+    click(preset("Cada semana"));
+    const nextPay = () => field("¿Cuándo es tu próximo pago?");
+    expect(
+      document.querySelector('[aria-label="Abrir calendario: ¿Cuándo es tu próximo pago?"]'),
+    ).not.toBeNull();
+    typeInto(input("¿Cuánto dinero tienes hoy?"), "1000");
+    typeInto(input("¿Cuánto cada vez?"), "3000");
+    typeInto(nextPay(), "13/31/2026");
+    submit();
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(nextPay().getAttribute("aria-invalid")).toBe("true");
+    expect(errorText()).toBe("Fecha inválida");
+    // "13 nov" is the NEXT 13 nov (the next pay is never behind you).
+    typeInto(nextPay(), "13 nov");
+    expect(datePreview("¿Cuándo es tu próximo pago?").textContent).toBe("vie 13 nov 2026");
+    submit();
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    const sueldo = onCreate.mock.calls[0]![0].items.find((item: FinancialItem) => item.name === "Sueldo");
+    expect(sueldo.recurrence).toMatchObject({ frequency: "weekly", anchorDate: "2026-11-13" });
+  });
+
+  it("left empty, the next pay is optional", () => {
+    const onCreate = vi.fn();
+    mount(h(OnboardingDialog, { today: TODAY, onCreate, onClose: () => {} }));
+    click(preset("Cada semana"));
+    typeInto(input("¿Cuánto dinero tienes hoy?"), "0");
+    typeInto(input("¿Cuánto cada vez?"), "3000");
+    submit();
+    expect(onCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Rec: Mantine Form + the shared schemas, errors on their row", () => {
+  const point = (eventId: string, name: string, date: string, cashDelta: number): FinancialProjectionPoint => ({
+    eventId,
+    itemId: eventId,
+    type: cashDelta < 0 ? "expense" : "income",
+    name,
+    date,
+    cashBefore: 0,
+    cashAfter: cashDelta,
+    cashDelta,
+    debtDelta: 0,
+    debtAfter: 0,
+  });
+  const PENDING = [
+    point("e-renta", "Renta", "2026-11-01", -8000),
+    point("e-sueldo", "Sueldo", "2026-11-05", 9000),
+  ];
+
+  function openRec() {
+    const onApply = vi.fn();
+    mount(h(RecDialog, { pending: PENDING, since: "2026-11-01", onApply, onClose: () => {} }));
+    return onApply;
+  }
+  const status = (name: string) =>
+    document.querySelector<HTMLSelectElement>(`select[aria-label^="Qué pasó con ${name}"]`)!;
+  const realAmount = () => document.querySelector<HTMLInputElement>('[aria-label="Monto real"]')!;
+  const save = () => click(mustButton(document, "Guardar"));
+
+  it("'Otro monto' needs a real amount (MoneySchema): its error sits on the row, nothing is applied", () => {
+    const onApply = openRec();
+    choose(status("Renta"), "edited");
+    save();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(realAmount().getAttribute("aria-invalid")).toBe("true");
+    expect(describedText(realAmount())).toBe("Escribe el monto real");
+    expect(errorText()).toBe("Escribe el monto real");
+    typeInto(realAmount(), "-5");
+    save();
+    expect(describedText(realAmount())).toBe("No puede ser negativo");
+    expect(onApply).not.toHaveBeenCalled();
+    typeInto(realAmount(), "7,500");
+    choose(status("Sueldo"), "skipped");
+    save();
+    expect(onApply).toHaveBeenCalledWith(
+      [
+        { eventId: "e-renta", status: "edited", amount: 7500 },
+        { eventId: "e-sueldo", status: "skipped" },
+      ],
+      undefined,
+    );
+  });
+
+  it("back to 'Pasó', a row has nothing left to fix", () => {
+    const onApply = openRec();
+    choose(status("Renta"), "edited");
+    save();
+    expect(errorText()).not.toBe("");
+    choose(status("Renta"), "happened");
+    expect(errorText()).toBe("");
+    save();
+    expect(onApply).toHaveBeenCalledWith([], undefined);
+  });
+
+  it("today's real cash: optional, may be negative (an overdraft), never garbage", () => {
+    const onApply = openRec();
+    const cash = field("Saldo real hoy");
+    typeInto(cash, "abc");
+    blur(cash);
+    expect(cash.getAttribute("aria-invalid")).toBe("true");
+    expect(describedText(cash)).toBe("Escribe un número");
+    save();
+    expect(onApply).not.toHaveBeenCalled();
+    typeInto(cash, "-1,200");
+    save();
+    expect(onApply).toHaveBeenCalledWith([], -1200);
+  });
+});
+
+describe("statement: the pasted text is checked as you type", () => {
+  const CARD: FinancialItem = {
+    id: "card-oro",
+    kind: "credit-card",
+    name: "Oro",
+    balance: 1000,
+    annualRate: 40,
+    cutDay: 5,
+    dueDay: 25,
+    minimumPayment: 200,
+    recurrence: { frequency: "monthly", startDate: START },
+  };
+  const area = () => document.querySelector<HTMLTextAreaElement>(".fin-statement__input")!;
+
+  it("text without movements is an error of the text area; valid rows apply", () => {
+    const { bridge } = createFakeBridge(docWith([CARD]));
+    const onClose = vi.fn();
+    mount(h(StatementDialog, { bridge, cardId: CARD.id, today: START, onClose }));
+    expect(area().getAttribute("aria-invalid")).toBeNull();
+    typeIntoArea(area(), "hola");
+    expect(area().getAttribute("aria-invalid")).toBe("true");
+    expect(describedText(area())).toBe("No encontré movimientos con fecha y monto.");
+    expect(mustButton(document, "Aplicar").disabled).toBe(true);
+    typeIntoArea(area(), "01/11/2026 OXXO 500\n20/11/2026 TIENDA 300");
+    expect(area().getAttribute("aria-invalid")).toBeNull();
+    click(mustButton(document, "Aplicar"));
+    expect(bridge.replaceItem).toHaveBeenCalledWith(expect.objectContaining({ id: CARD.id, balance: 1500 }));
+    expect(bridge.addItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "card-purchase",
+        cardId: CARD.id,
+        amount: 300,
+        recurrence: { frequency: "once", startDate: "2026-11-20", endDate: "2026-11-20" },
+      }),
+    );
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("text handed in (the slash command) is checked at once", () => {
+    const { bridge } = createFakeBridge(docWith([CARD]));
+    mount(h(StatementDialog, { bridge, cardId: CARD.id, today: START, initialText: "nada", onClose: () => {} }));
+    expect(area().getAttribute("aria-invalid")).toBe("true");
+  });
+});
+
+describe("header amounts follow the plan's shared schema", () => {
+  function mountBar() {
+    const { bridge } = createFakeBridge(docWith([]));
+    mount(h(FinancialSummaryBar, { bridge, onCreateDraft: vi.fn() }));
+    return bridge;
+  }
+  const amount = (label: string) =>
+    document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+
+  it("Reserva mínima: a negative amount is marked while typing and reverts on Enter", () => {
+    const bridge = mountBar();
+    const reserve = amount("Reserva mínima");
+    act(() => reserve.focus());
+    typeInto(reserve, "-5");
+    expect(reserve.getAttribute("aria-invalid")).toBe("true");
+    expect(describedText(reserve)).toBe("No puede ser negativo");
+    pressKey(reserve, "Enter");
+    expect(reserve.getAttribute("aria-invalid")).toBeNull();
+    expect(bridge.getDocument().minimumCashReserve).toBe(0);
+  });
+
+  it("Liquidez hoy: an overdraft is a valid amount", () => {
+    const bridge = mountBar();
+    const cash = amount("Liquidez hoy");
+    act(() => cash.focus());
+    typeInto(cash, "-1,500");
+    expect(cash.getAttribute("aria-invalid")).toBeNull();
+    pressKey(cash, "Enter");
+    expect(bridge.getDocument().initialCash).toBe(-1500);
   });
 });

@@ -2,6 +2,81 @@
 // Mantine Form holds the values and runs the Zod schema; these pieces show
 // each error under its field and keep typing smooth. See docs/forms-audit.md.
 import * as React from "react";
+import type { UseFormReturnType } from "@mantine/form";
+import { MoneySchema } from "@slicex/contracts";
+import { z } from "zod";
+import { parseNumberInput } from "../format";
+
+/**
+ * Zod schema of an amount AS TYPED ("$12,000", "1 234.5"): the text is read
+ * like every money input (parseNumberInput) and the number checked with
+ * `number` — by default the shared MoneySchema (finite, ≥ 0). Empty passes
+ * unless `required`. `message` replaces the schema's wording for every
+ * failure (the onboarding's questions say what to write).
+ */
+export function amountTextSchema({
+  number = MoneySchema,
+  required = false,
+  requiredMessage = "Escribe un monto",
+  message,
+}: {
+  number?: z.ZodType<number>;
+  required?: boolean;
+  requiredMessage?: string;
+  message?: string;
+} = {}) {
+  return z.string().superRefine((text, ctx) => {
+    const value = parseNumberInput(text);
+    if (value === null) {
+      if (required) ctx.addIssue({ code: z.ZodIssueCode.custom, message: message ?? requiredMessage });
+      return;
+    }
+    const result = number.safeParse(value);
+    if (!result.success) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: message ?? result.error.issues[0]?.message ?? "Escribe un número",
+      });
+    }
+  });
+}
+
+/** The number an amount text that passed `amountTextSchema` stands for (empty → undefined). */
+export function amountValue(text: string): number | undefined {
+  return parseNumberInput(text) ?? undefined;
+}
+
+/**
+ * A native input bound to a Mantine form at `path`: its props (value or
+ * defaultValue + key, by the form's mode), its error tied to it
+ * (aria-invalid + aria-describedby) and the message to render under it.
+ */
+export function bindField<Values>(
+  form: UseFormReturnType<Values>,
+  path: string,
+  idPrefix: string,
+): {
+  key: string;
+  input: Record<string, unknown>;
+  error: React.ReactNode;
+} {
+  const { error, ...input } = form.getInputProps(path);
+  const errorId = `${idPrefix}-${path.replace(/\./g, "-")}-error`;
+  return {
+    key: form.key(path),
+    input: {
+      ...input,
+      "aria-invalid": error ? true : undefined,
+      "aria-describedby": error ? errorId : undefined,
+    },
+    error: <FieldError id={errorId} message={error} />,
+  };
+}
+
+/** The summary line's text: the first error, in the form's field order. */
+export function firstError(errors: Readonly<Record<string, React.ReactNode>>): React.ReactNode {
+  return Object.values(errors).find((message) => message) ?? "";
+}
 
 /** The form's errors by path ("amount", "recurrence.endDate", "rows.2.amount"). */
 export type FieldErrors = Readonly<Record<string, React.ReactNode>>;

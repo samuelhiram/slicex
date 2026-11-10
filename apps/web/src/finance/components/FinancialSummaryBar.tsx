@@ -11,6 +11,7 @@ import { useFitInViewport } from "../../ui/fit-in-viewport";
 import { useDismiss } from "../../ui/use-dismiss";
 import { useWheelScrollX } from "../../ui/wheel-scroll-x";
 import { createPortal } from "react-dom";
+import { FinancialDocumentSchema } from "@slicex/contracts";
 import { addDays } from "@slicex/core";
 import type {
   FinancialItem,
@@ -26,6 +27,11 @@ import {
   jumpPlayheadToDate,
   useFinancialRevision,
 } from "./FinancialUi";
+
+// The editable headline numbers follow the plan's shared schema: cash can be
+// negative (an overdraft), the reserve cannot.
+const CASH_SCHEMA = FinancialDocumentSchema.shape.initialCash;
+const RESERVE_SCHEMA = FinancialDocumentSchema.shape.minimumCashReserve;
 
 export interface FinancialSummaryBarProps {
   bridge: FinancialBridgeApi;
@@ -174,6 +180,7 @@ export function FinancialSummaryBar({
             className="fin-summary__input"
             ariaLabel="Liquidez hoy"
             value={doc.initialCash}
+            schema={CASH_SCHEMA}
             format={formatMoney}
             onCommit={(amount) => bridge.setInitialCash(amount)}
           />
@@ -185,7 +192,7 @@ export function FinancialSummaryBar({
             className="fin-summary__input"
             ariaLabel="Reserva mínima"
             value={reserve}
-            min={0}
+            schema={RESERVE_SCHEMA}
             format={formatMoney}
             onCommit={(amount) => bridge.setMinimumCashReserve(amount)}
           />

@@ -2,6 +2,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 // Mantine's stylesheets first (only what is in use — no baseline, it would
 // restyle <body>), so globals.css wins at equal specificity. See mantine.tsx.
+// default-css-variables: Mantine's own sizes (--mantine-scale, spacing…) on
+// :root only — the provider injects just what differs from them, so without
+// this file every calc() of the calendar is invalid.
+import "@mantine/core/styles/default-css-variables.css";
 import "@mantine/core/styles/global.css";
 import "@mantine/core/styles/UnstyledButton.css";
 import "@mantine/core/styles/Popover.css";

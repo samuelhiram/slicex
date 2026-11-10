@@ -25,23 +25,13 @@ import type {
   RecurrenceFrequency,
 } from "@slicex/core";
 import type { FinancialBridgeApi, FinancialPlacement } from "../bridge-api";
-import {
-  formatDateInput,
-  formatDateWeekday,
-  formatMoney,
-  parseDateInput,
-  shiftISODate,
-  type DateYearPreference,
-} from "../format";
+import { formatDateWeekday, formatMoney, parseNumberInput } from "../format";
 import { KIND_COLORS, KIND_LABELS, KIND_ORDER } from "../labels";
-import { parseNumberInput, useFinancialRevision } from "./FinancialUi";
+import { useFinancialRevision } from "./FinancialUi";
+import { DateField } from "./DateField";
+import { FieldError, FieldErrorsContext, useEditableText, useFieldError } from "./form-kit";
 import { SchedulePicker } from "./SchedulePicker";
-import {
-  cleanItem,
-  firstFieldError,
-  itemFormErrors,
-  type ItemFormErrors,
-} from "../item-schema";
+import { cleanItem, firstFieldError, itemFormErrors } from "../item-schema";
 import {
   LAST_DAY,
   lastPayment,
@@ -262,22 +252,8 @@ export function validateFinancialDraft(
   return firstFieldError(itemFormErrors(draft, cards), draft);
 }
 
-// Field errors are shown under their field and tied to its input.
-const FieldErrorsContext = React.createContext<ItemFormErrors>({});
-
-function useFieldError(path: string | undefined): { id: string; message: string | undefined } {
-  const errors = React.useContext(FieldErrorsContext);
-  const id = React.useId();
-  return { id, message: path ? errors[path] : undefined };
-}
-
-function FieldError({ id, message }: { id: string; message: string | undefined }) {
-  return message ? (
-    <span id={id} className="fin-editor__field-error">
-      {message}
-    </span>
-  ) : null;
-}
+// Field errors are shown under their field and tied to its input (form-kit:
+// FieldErrorsContext, provided around the fields with the form's errors).
 
 function numberToText(value: number | undefined): string {
   return value === undefined || Number.isNaN(value) ? "" : String(value);
@@ -312,14 +288,7 @@ function NumberField({
   path?: string;
 }) {
   const fieldError = useFieldError(path);
-  const [text, setText] = React.useState(() => numberToText(value));
-  const emittedRef = React.useRef(value);
-  React.useEffect(() => {
-    if (!sameNumber(value, emittedRef.current)) {
-      emittedRef.current = value;
-      setText(numberToText(value));
-    }
-  }, [value]);
+  const { text, setText, emit } = useEditableText(value, numberToText, sameNumber);
   return (
     <label className="fin-editor__field">
       <span className="fin-editor__label">
@@ -341,166 +310,13 @@ function NumberField({
             const parsed = parseNumberInput(raw);
             const next =
               parsed === null ? (optional ? undefined : Number.NaN) : parsed;
-            emittedRef.current = next;
-            onChange(next);
+            if (emit(next)) onChange(next);
           }}
         />
         {suffix ? <span className="fin-editor__suffix">{suffix}</span> : null}
       </span>
       <FieldError {...fieldError} />
     </label>
-  );
-}
-
-/**
- * es-MX date entry (never the browser's locale-dependent date picker, which
- * renders mm/dd/yyyy in en-US browsers). Free text parsed by
- * `parseDateInput` ("15/11/2026", "15 nov", "2026-11-15"…) with a live
- * canonical preview ("dom 15 NOV 2026") and inline validation. ↑/↓ move
- * the date one day (Shift: one week), never below `min`.
- *
- * Emits the ISO date, or "" while the text is not a date (the form's
- * validation then blocks Guardar). Keeps the raw text locally so typing is
- * never clobbered; canonicalises it ("15/11/2026") on blur.
- */
-function DateField({
-  label,
-  value,
-  onChange,
-  reference,
-  prefer = "nearest",
-  min,
-  disabled = false,
-  preview,
-  inline = false,
-  path,
-  children,
-}: {
-  label: string;
-  /** ISO date, "" (invalid entry) or undefined (no date, e.g. Indefinido). */
-  value: string | undefined;
-  onChange: (iso: string) => void;
-  /** Where a date typed without a year ("15 nov") takes its year from. */
-  reference: string;
-  prefer?: DateYearPreference;
-  min?: string;
-  disabled?: boolean;
-  /**
-   * What to show under a recognised (or disabled) date instead of its
-   * weekday echo — e.g. "12 pagos · el último, vie 1 oct 2027".
-   */
-  preview?: string;
-  /** Extra controls on the input row (e.g. the "Indefinido" checkbox). */
-  children?: React.ReactNode;
-  /**
-   * Just the input (no field label / preview), named by `label`: for a date
-   * inside a sentence ("Termina ○ El [fecha]").
-   */
-  inline?: boolean;
-  /** Form path of the date (its schema error shows under the field). */
-  path?: string;
-}) {
-  const id = React.useId();
-  const fieldError = useFieldError(path);
-  const [text, setText] = React.useState(() => formatDateInput(value));
-  const emittedRef = React.useRef(value);
-  React.useEffect(() => {
-    if (value !== emittedRef.current) {
-      emittedRef.current = value;
-      setText(formatDateInput(value));
-    }
-  }, [value]);
-
-  const emit = (iso: string) => {
-    if (iso === emittedRef.current) return;
-    emittedRef.current = iso;
-    onChange(iso);
-  };
-
-  const parsed = parseDateInput(text, reference, prefer);
-  const empty = text.trim() === "";
-  const status = disabled ? "off" : parsed ? "ok" : empty ? "empty" : "invalid";
-  const message =
-    (status === "off" || status === "ok") && preview !== undefined
-      ? preview
-      : status === "off"
-        ? ""
-        : parsed
-          ? formatDateWeekday(parsed)
-          : empty
-            ? "ej. 15/11/2026 o 15 nov"
-            : "No reconocida · ej. 15/11/2026";
-
-  const input = (
-    <input
-      id={id}
-      type="text"
-      autoComplete="off"
-      spellCheck={false}
-      className="fin-date__input"
-      placeholder="dd/mm/aaaa"
-      value={text}
-      disabled={disabled}
-      aria-label={inline ? label : undefined}
-      aria-invalid={
-        status === "invalid" || (status === "empty" && !inline) || fieldError.message !== undefined
-      }
-      aria-describedby={
-        [inline ? null : `${id}-preview`, fieldError.message ? fieldError.id : null]
-          .filter(Boolean)
-          .join(" ") || undefined
-      }
-      onChange={(event) => {
-        const raw = event.target.value;
-        setText(raw);
-        emit(parseDateInput(raw, reference, prefer) ?? "");
-      }}
-      onBlur={() => {
-        if (parsed) setText(formatDateInput(parsed));
-      }}
-      onKeyDown={(event) => {
-        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-        if (event.altKey || event.ctrlKey || event.metaKey) return;
-        event.preventDefault();
-        const base = parsed ?? (value || reference);
-        const step = (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 7 : 1);
-        let next = shiftISODate(base, step);
-        if (next === null) return;
-        if (min !== undefined && isISODate(min) && compareISODate(next, min) < 0) {
-          next = min;
-        }
-        setText(formatDateInput(next));
-        emit(next);
-      }}
-    />
-  );
-  if (inline) {
-    return (
-      <>
-        {input}
-        <FieldError {...fieldError} />
-      </>
-    );
-  }
-
-  return (
-    <div className="fin-editor__field fin-date">
-      <label className="fin-editor__label" htmlFor={id}>
-        {label}
-      </label>
-      <span className="fin-editor__control">
-        {input}
-        {children}
-      </span>
-      <span
-        id={`${id}-preview`}
-        className="fin-date__preview"
-        data-state={status}
-      >
-        {message}
-      </span>
-      <FieldError {...fieldError} />
-    </div>
   );
 }
 
@@ -793,13 +609,19 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
   // selection dragged out of an input must not close the editor).
   const pressedOnOverlayRef = React.useRef(false);
 
-  if (!draft || !exists) return null;
-
+  // Every hook runs before the early return below (rules of hooks: the item
+  // can vanish while the editor is open — deleted / undone elsewhere).
   const fieldErrors = React.useMemo(
     () => (draft ? itemFormErrors(draft, cards) : {}),
     [draft, cards],
   );
-  const error = draft ? firstFieldError(fieldErrors, draft) : null;
+  // "Termina": on a date (default) or after N payments — both store an end
+  // date; this only says which one the form shows.
+  const [endBy, setEndBy] = React.useState<"date" | "count">("date");
+
+  if (!draft || !exists) return null;
+
+  const error = firstFieldError(fieldErrors, draft);
 
   const patch = (fields: Record<string, unknown>) =>
     setDraft((prev) =>
@@ -856,10 +678,6 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
       }
       return { ...prev, recurrence };
     });
-
-  // "Termina": on a date (default) or after N payments — both store an end
-  // date; this only says which one the form shows.
-  const [endBy, setEndBy] = React.useState<"date" | "count">("date");
 
   const onIndefiniteChange = (indefinite: boolean) =>
     setDraft((prev) => {

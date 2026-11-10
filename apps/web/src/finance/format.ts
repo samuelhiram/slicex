@@ -136,6 +136,16 @@ export function formatSignedMoneyWhole(n: number): string {
   return formatSignedMoney(Math.round(n) || 0);
 }
 
+/**
+ * Lenient money/number parser for text inputs: accepts "12,000", "$12000",
+ * " 1 234.5 ". Empty → `null`; garbage → NaN.
+ */
+export function parseNumberInput(raw: string): number | null {
+  const cleaned = raw.replace(/[\s$,]/g, "").replace(/−/g, "-");
+  if (cleaned === "") return null;
+  return Number(cleaned);
+}
+
 // --- es-MX date entry -------------------------------------------------------
 
 /** Weekday abbreviations, index 0 = Sunday. */

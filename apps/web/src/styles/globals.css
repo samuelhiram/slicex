@@ -1109,6 +1109,12 @@ button {
   border-bottom: 1px solid var(--accent);
 }
 
+/* Not a valid amount (yet): leaving the field puts the value back. */
+.fin-summary__input[aria-invalid="true"] {
+  border-bottom-color: var(--fin-negative);
+  color: var(--fin-negative-text);
+}
+
 .fin-summary__warnings {
   display: flex;
   flex: none;
@@ -2978,7 +2984,18 @@ kbd {
 
 .fin-rec__actual {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+}
+
+/* A row's error goes under its controls. */
+.fin-rec__actual .fin-editor__field-error {
+  flex-basis: 100%;
+}
+
+.fin-rec input[type="text"][aria-invalid="true"],
+.fin-statement .fin-statement__input[aria-invalid="true"] {
+  border-color: var(--fin-negative);
 }
 
 .fin-rec .fin-rec__actual select,

@@ -50,6 +50,7 @@ import { FinancialSummaryBar } from "../finance/components/FinancialSummaryBar";
 import { PlayheadReadout } from "../finance/components/PlayheadReadout";
 import { FinancialEditorModal } from "../finance/components/FinancialEditorModal";
 import { FinancialSidePanel } from "../finance/components/FinancialSidePanel";
+import { SlicexMantineProvider } from "../mantine";
 import { useTheme } from "../theme";
 import { useFitInViewport } from "../ui/fit-in-viewport";
 import { useDismiss } from "../ui/use-dismiss";
@@ -1161,7 +1162,7 @@ export function PlaylistShell() {
     [bridge, futures, rec, today],
   );
 
-  return (
+  const shell = (
     <section
       className="playlist-shell playlist-shell--finance"
       aria-label="Playlist"
@@ -1334,4 +1335,7 @@ export function PlaylistShell() {
       ) : null}
     </section>
   );
+
+  // Mantine (forms' calendar) follows the app theme; see mantine.tsx.
+  return <SlicexMantineProvider theme={theme}>{shell}</SlicexMantineProvider>;
 }

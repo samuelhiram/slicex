@@ -6,6 +6,7 @@
 import * as React from "react";
 import { schemaResolver, useForm } from "@mantine/form";
 import { z } from "zod";
+import { FinancialDocumentSchema, ISODateSchema } from "@slicex/contracts";
 import {
   addDays,
   daysInMonth,
@@ -15,9 +16,9 @@ import {
   type ISODate,
   type RecurrenceFrequency,
 } from "@slicex/core";
-import { formatDateWeekday, parseDateInput } from "../format";
 import { frequencyParts, withFrequencyParts, type FrequencyUnit } from "../schedule-ui";
-import { parseNumberInput } from "./FinancialUi";
+import { DateField } from "./DateField";
+import { amountTextSchema, amountValue, bindField, FieldErrorsContext, firstError } from "./form-kit";
 import { SchedulePicker } from "./SchedulePicker";
 
 export function WelcomeBanner({
@@ -143,49 +144,37 @@ export function buildYear(today: ISODate, answers: OnboardingAnswers): Financial
 }
 
 // The onboarding's form: Mantine Form in UNCONTROLLED mode (nothing here
-// derives from every keystroke but two previews, watched) validated with a
-// Zod schema of the TEXT as typed (es-MX amounts and dates) — errors land on
-// their field. The schedule (SchedulePicker) is a custom control: plain state.
+// derives from every keystroke but the reserve's placeholder and the next
+// pay's date, watched) validated with a Zod schema of the TEXT as typed
+// (es-MX amounts) on top of the shared schemas — errors land on their field.
+// The schedule (SchedulePicker) is a custom control: plain state. The next
+// pay is THE date field (DateField): it holds the ISO date ("" while the
+// text is not a date, undefined when empty).
 interface OnboardingValues {
   cash: string;
   pay: string;
-  nextPay: string;
+  nextPay: string | undefined;
   reserve: string;
   fixed: FixedRow[];
   withSuggestions: boolean;
 }
 
-const amountText = (message: string, { required = false } = {}) =>
-  z.string().superRefine((text, ctx) => {
-    if (text.trim() === "") {
-      if (required) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
-      return;
-    }
-    const value = parseNumberInput(text);
-    if (value === null || !Number.isFinite(value) || value < 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message });
-    }
-  });
-
 /** The onboarding's answers, as typed. Exported for tests. */
-export function onboardingSchema(today: ISODate) {
+export function onboardingSchema() {
   return z.object({
-    cash: z.string().superRefine((text, ctx) => {
-      const value = parseNumberInput(text);
-      if (text.trim() === "" || value === null || !Number.isFinite(value)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Escribe cuánto dinero tienes hoy (puede ser 0)" });
-      }
+    // A plan's cash may be negative (an overdraft), never empty.
+    cash: amountTextSchema({
+      number: FinancialDocumentSchema.shape.initialCash,
+      required: true,
+      message: "Escribe cuánto dinero tienes hoy (puede ser 0)",
     }),
-    pay: amountText("Escribe cuánto te pagan cada vez", { required: true }),
-    nextPay: z.string().refine(
-      (text) => text.trim() === "" || parseDateInput(text, today) !== null,
-      "No reconocida · ej. 15/11/2026",
-    ),
-    reserve: amountText("Escribe un monto (o déjalo vacío)"),
+    pay: amountTextSchema({ required: true, message: "Escribe cuánto te pagan cada vez" }),
+    nextPay: ISODateSchema.optional(),
+    reserve: amountTextSchema({ message: "Escribe un monto (o déjalo vacío)" }),
     fixed: z.array(
       z.object({
         name: z.string(),
-        amount: amountText("Escribe un monto"),
+        amount: amountTextSchema({ message: "Escribe un monto" }),
         day: z.string().refine((text) => {
           if (text.trim() === "") return true;
           const day = Number(text);
@@ -195,14 +184,6 @@ export function onboardingSchema(today: ISODate) {
     ),
     withSuggestions: z.boolean(),
   });
-}
-
-function FieldError({ id, message }: { id: string; message: React.ReactNode }) {
-  return message ? (
-    <span id={id} className="fin-editor__field-error">
-      {message}
-    </span>
-  ) : null;
 }
 
 export function OnboardingDialog({
@@ -219,24 +200,24 @@ export function OnboardingDialog({
     initialValues: {
       cash: "",
       pay: "",
-      nextPay: "",
+      nextPay: undefined,
       reserve: "",
       fixed: EMPTY_ROWS,
       withSuggestions: true,
     },
-    validate: schemaResolver(onboardingSchema(today), { sync: true }),
+    validate: schemaResolver(onboardingSchema(), { sync: true }),
   });
   // How often you get paid: a unit + "cada N" (default: la quincena).
   const [payUnit, setPayUnit] = React.useState<FrequencyUnit>("semimonthly");
   const [payEvery, setPayEvery] = React.useState(1);
   const payRule = withFrequencyParts({ frequency: "monthly", startDate: today }, payUnit, payEvery);
   const frequency = payRule.frequency;
-  // The two previews that follow the typing (uncontrolled: watched).
-  const [nextPayText, setNextPayText] = React.useState("");
+  // What follows the typing (uncontrolled: watched): the next pay's date
+  // field and the reserve's placeholder.
+  const [nextPay, setNextPay] = React.useState<string | undefined>(undefined);
   const [payText, setPayText] = React.useState("");
-  form.watch("nextPay", ({ value }) => setNextPayText(value));
+  form.watch("nextPay", ({ value }) => setNextPay(value));
   form.watch("pay", ({ value }) => setPayText(value));
-  const parsedNextPay = nextPayText.trim() ? parseDateInput(nextPayText, today) : null;
   const firstRef = React.useRef<HTMLInputElement | null>(null);
 
   React.useEffect(() => {
@@ -250,56 +231,39 @@ export function OnboardingDialog({
 
   // A text input bound to the form: uncontrolled (key + defaultValue), its
   // error under it and tied to it.
-  const text = (path: string, describe = true) => {
-    const { error, ...input } = form.getInputProps(path);
-    const errorId = `fin-onboarding-${path.replace(/\./g, "-")}-error`;
-    return {
-      key: form.key(path),
-      input: {
-        ...input,
-        "aria-invalid": error ? true : undefined,
-        "aria-describedby": error && describe ? errorId : undefined,
-      },
-      error: <FieldError id={errorId} message={error} />,
-    };
-  };
+  const text = (path: string) => bindField(form, path, "fin-onboarding");
 
+  // The values passed the schema: every amount is a valid number or empty.
   const submit = form.onSubmit((values) => {
-    const cashValue = parseNumberInput(values.cash) ?? 0;
-    const payValue = parseNumberInput(values.pay) ?? 0;
-    const reserveValue = values.reserve.trim() ? parseNumberInput(values.reserve) : payValue;
-    const nextPay = values.nextPay.trim() ? parseDateInput(values.nextPay, today) : null;
+    const payValue = amountValue(values.pay) ?? 0;
     const fixed = values.fixed
       .map((row) => ({
         name: row.name,
-        amount: parseNumberInput(row.amount) ?? 0,
+        amount: amountValue(row.amount) ?? 0,
         day: Number(row.day) || 1,
       }))
-      .filter((row) => row.name.trim() && Number.isFinite(row.amount) && row.amount > 0);
+      .filter((row) => row.name.trim() && row.amount > 0);
     onCreate(
       buildYear(today, {
-        cash: cashValue,
+        cash: amountValue(values.cash) ?? 0,
         frequency,
         interval: payRule.interval,
         pay: payValue,
         nextPay:
-          nextPay ??
+          values.nextPay ||
           addDays(
             today,
             frequencyParts(payRule).unit === "days" ? frequencyParts(payRule).every : 14,
           ),
-        reserve: reserveValue !== null && Number.isFinite(reserveValue) ? reserveValue : payValue,
+        reserve: amountValue(values.reserve) ?? payValue,
         fixed,
         withSuggestions: values.withSuggestions,
       }),
     );
   });
 
-  // The summary line: the first field error, in form order.
-  const firstError = Object.values(form.errors).find((message) => message) ?? "";
   const cash = text("cash");
   const pay = text("pay");
-  const nextPayField = text("nextPay");
   const reserve = text("reserve");
 
   return (
@@ -354,15 +318,20 @@ export function OnboardingDialog({
               {pay.error}
             </label>
             {frequency !== "semimonthly" ? (
-              <label className="fin-editor__field fin-editor__field--wide">
-                <span className="fin-editor__label">¿Cuándo es tu próximo pago?</span>
-                <input key={nextPayField.key}
-                {...nextPayField.input} type="text" placeholder="dd/mm/aaaa" />
-                <span className="fin-date__preview" data-state={parsedNextPay ? "ok" : undefined}>
-                  {parsedNextPay ? formatDateWeekday(parsedNextPay) : ""}
-                </span>
-                {nextPayField.error}
-              </label>
+              // "15 nov" is the NEXT 15 nov: the next pay is never behind you.
+              <FieldErrorsContext.Provider value={form.errors}>
+                <DateField
+                  wide
+                  optional
+                  path="nextPay"
+                  label="¿Cuándo es tu próximo pago?"
+                  value={nextPay}
+                  reference={today}
+                  prefer="on-or-after"
+                  min={today}
+                  onChange={(iso) => form.setFieldValue("nextPay", iso, { forceUpdate: false })}
+                />
+              </FieldErrorsContext.Provider>
             ) : null}
             <label className="fin-editor__field fin-editor__field--wide">
               <span className="fin-editor__label">
@@ -430,7 +399,7 @@ export function OnboardingDialog({
           </label>
 
           <p className="fin-editor__error" role="alert">
-            {firstError}
+            {firstError(form.errors)}
           </p>
           <div className="fin-editor__actions">
             <span className="fin-editor__actions-spacer" />

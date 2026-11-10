@@ -84,9 +84,41 @@ publicado), con `schemaResolver` nativo (Standard Schema; Zod 3.25 lo implementa
 - Tests: `packages/contracts/tests/finance.spec.ts`, persistencia en `finance-plan.spec.ts`,
   errores por campo y onboarding en `finance-components.spec.ts`.
 
+## 5. Completado (2026-11-10)
+
+- **Piezas compartidas, conectadas** (`finance/components/form-kit.tsx`): `FieldErrorsContext` /
+  `useFieldError` / `FieldError`, `useEditableText` (el patrón "texto local + valor emitido", antes
+  copiado), `amountTextSchema` (monto *tal como se escribe* → `MoneySchema` u otro esquema de
+  número compartido), `bindField` (input nativo ↔ Mantine Form con su error ligado) y `firstError`
+  (la línea `role="alert"`). `parseNumberInput` vive en `finance/format.ts`, junto a `parseDateInput`.
+- **Un solo `DateField`** (`finance/components/DateField.tsx`, texto es-MX + calendario de
+  `@mantine/dates`): el editor ("Empieza", "Termina el…") y el onboarding ("¿Cuándo es tu próximo
+  pago?", `prefer="on-or-after"`, `min` = hoy) usan el mismo. El editor ya no tiene copias propias.
+  `SlicexMantineProvider` (`mantine.tsx`) envuelve el shell con el tema de la app.
+- **Rec** (`RecDialog`): Mantine Form controlado; "Otro monto" valida con `MoneySchema` y el saldo
+  real con el `initialCash` del documento (puede ser negativo). Antes un monto vacío o inválido se
+  tomaba en silencio como "Pasó"; ahora es un error en su fila y bloquea Guardar.
+- **Estado de cuenta** (`StatementDialog`): Mantine Form controlado; un texto sin movimientos es
+  error del textarea (`aria-invalid` + `aria-describedby`), validado al escribir con un solo parseo
+  compartido entre la vista previa y el esquema.
+- **Encabezado** (`InlineNumberInput`): valida con el esquema compartido del documento
+  (`initialCash` admite sobregiro, `minimumCashReserve` no); el inválido se marca mientras se
+  escribe y se revierte al confirmar, como un campo numérico de herramienta de diseño.
+- **Bugs corregidos**:
+  - el editor llamaba hooks después de su `return null` (ítem borrado con el editor abierto →
+    "Rendered fewer hooks than expected");
+  - el calendario se veía roto (días amontonados, controles gigantes): faltaba
+    `@mantine/core/styles/default-css-variables.css` en `main.tsx` — el provider solo inyecta lo que
+    difiere de esas variables (`--mantine-scale`, espaciados…) y sin ellas todo `calc()` es inválido;
+  - Escape con el foco en el botón ▦ cerraba el diálogo entero en vez de solo el calendario;
+  - texto no reconocido mostraba dos mensajes bajo la fecha ("No reconocida…" + "Fecha inválida");
+    ahora solo la vista previa (el resumen y `aria-invalid` siguen).
+  Tests de regresión en `finance-components.spec.ts` (los visuales, verificados en el navegador).
+- Tests: calendario, regresión de hooks, fecha del onboarding, Rec, estado de cuenta y montos del
+  encabezado en `finance-components.spec.ts`. `vitest.setup.ts` simula `matchMedia` (jsdom no lo
+  trae y el provider de Mantine lo lee).
+
 ### Pendiente
-- `RecDialog`, `StatementDialog` e `InlineNumberInput` (encabezado) aún con estado propio:
-  migrarlos al mismo patrón (montos con `MoneySchema`).
 - `FinancialObjectSchema` / `RecurrenceRuleSchema` de `contracts` describen el modelo dormido del
   API y no el real: retirarlos cuando se conecte el servidor con `FinancialItemSchema`.
 - Presets de "Se repite" sin navegación con flechas (roving tabindex).

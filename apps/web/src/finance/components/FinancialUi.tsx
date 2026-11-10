@@ -9,7 +9,9 @@
 import * as React from "react";
 import { DEFAULT_PLAYLIST_METRICS } from "@slicex/canvas";
 import type { ISODate } from "@slicex/core";
+import type { z } from "zod";
 import type { FinancialBridgeApi } from "../bridge-api";
+import { amountTextSchema, amountValue } from "./form-kit";
 
 /** Re-renders only when the bridge revision changes. */
 export function useFinancialRevision(bridge: FinancialBridgeApi): number {
@@ -70,16 +72,6 @@ export function jumpPlayheadToDate(
   }
 }
 
-/**
- * Lenient money/number parser for text inputs: accepts "12,000", "$12000",
- * " 1 234.5 ". Empty → `null`; garbage → NaN.
- */
-export function parseNumberInput(raw: string): number | null {
-  const cleaned = raw.replace(/[\s$,]/g, "").replace(/−/g, "-");
-  if (cleaned === "") return null;
-  return Number(cleaned);
-}
-
 /** Collapsible section with a 1px divider header (no cards). */
 export function FinSection({
   title,
@@ -117,42 +109,53 @@ export function FinSection({
 /**
  * Inline editable amount. Shows the formatted value at rest; on focus
  * switches to the raw number. Commits on blur / Enter, cancels on Escape.
- * Invalid input (NaN, below `min`) reverts silently.
+ * What is valid is `schema` — a shared number schema of @slicex/contracts
+ * (e.g. MoneySchema): while typing, an invalid amount marks the input
+ * (aria-invalid, its reason tied by aria-describedby); committed, it
+ * reverts to the current value (like a design tool's numeric field).
  */
 export function InlineNumberInput({
   value,
   format,
   onCommit,
-  min,
+  schema,
   ariaLabel,
   className,
 }: {
   value: number;
   format: (n: number) => string;
   onCommit: (n: number) => void;
-  min?: number;
+  schema: z.ZodType<number>;
   ariaLabel: string;
   className?: string;
 }) {
   // `null` = not editing (show the formatted value).
   const [draft, setDraft] = React.useState<string | null>(null);
   const cancelledRef = React.useRef(false);
+  const errorId = React.useId();
+  const textSchema = React.useMemo(
+    () => amountTextSchema({ number: schema, required: true }),
+    [schema],
+  );
+  const error = draft === null ? undefined : textSchema.safeParse(draft).error?.issues[0]?.message;
 
   const commit = () => {
     if (draft === null) return;
-    const parsed = parseNumberInput(draft);
+    const parsed = amountValue(draft);
     setDraft(null);
-    if (parsed === null || !Number.isFinite(parsed)) return;
-    if (min !== undefined && parsed < min) return;
+    if (error !== undefined || parsed === undefined) return;
     if (parsed !== value) onCommit(parsed);
   };
 
   return (
+    <>
     <input
       type="text"
       inputMode="decimal"
       spellCheck={false}
       aria-label={ariaLabel}
+      aria-invalid={error ? true : undefined}
+      aria-describedby={error ? errorId : undefined}
       className={className}
       value={draft ?? format(value)}
       onFocus={(event) => {
@@ -182,5 +185,11 @@ export function InlineNumberInput({
         }
       }}
     />
+    {error ? (
+      <span id={errorId} className="fin-sr-only">
+        {error}
+      </span>
+    ) : null}
+    </>
   );
 }

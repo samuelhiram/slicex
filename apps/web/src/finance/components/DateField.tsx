@@ -187,7 +187,11 @@ export function DateField(props: DateFieldProps) {
     return true;
   };
 
-  const errorId = fieldError.message ? fieldError.id : null;
+  // Text that is not a date: the preview line already says so ("No
+  // reconocida · ej. …") and the schema could only repeat it ("Fecha
+  // inválida") — one message under the field, not two.
+  const shownError = status === "invalid" && !inline ? { ...fieldError, message: undefined } : fieldError;
+  const errorId = shownError.message ? shownError.id : null;
   const input = (
     <input
       ref={inputRef}
@@ -278,6 +282,9 @@ export function DateField(props: DateFieldProps) {
               aria-expanded={open}
               aria-controls={open ? `${id}-calendar` : undefined}
               disabled={disabled}
+              // Opened with the mouse, focus stays here: Escape still closes
+              // only the calendar.
+              onKeyDown={escapeCloses}
               onClick={(event) => {
                 if (open) setOpen(false);
                 // detail 0: Enter / Space (keyboard) → focus goes into the month.
@@ -342,7 +349,7 @@ export function DateField(props: DateFieldProps) {
       <span id={`${id}-preview`} className="fin-date__preview" data-state={status}>
         {message}
       </span>
-      <FieldError {...fieldError} />
+      <FieldError {...shownError} />
     </div>
   );
 }
