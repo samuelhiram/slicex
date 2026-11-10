@@ -1,5 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+// Mantine's stylesheets first (only what is in use — no baseline, it would
+// restyle <body>), so globals.css wins at equal specificity. See mantine.tsx.
+import "@mantine/core/styles/global.css";
+import "@mantine/core/styles/UnstyledButton.css";
+import "@mantine/core/styles/Popover.css";
+import "@mantine/dates/styles.css";
 import "./styles/globals.css";
 import { App } from "./App";
 import { initSentry } from "./lib/sentry";
