@@ -6,6 +6,8 @@ import {
   FinancialItemSchemaStrict,
   FinancialRecurrenceSchema,
   ISODateSchema,
+  MoneySchema,
+  SignedMoneySchema,
 } from "../src/index";
 
 const monthly = { frequency: "monthly", startDate: "2026-11-20" } as const;
@@ -22,6 +24,16 @@ describe("ISODateSchema", () => {
     expect(ISODateSchema.safeParse("2027-02-29").success).toBe(false);
     expect(ISODateSchema.safeParse("20/11/2026").success).toBe(false);
     expect(ISODateSchema.safeParse("").success).toBe(false);
+  });
+});
+
+describe("MoneySchema / SignedMoneySchema", () => {
+  it("money is >= 0; a balance may be negative; neither takes NaN", () => {
+    expect(MoneySchema.safeParse(0).success).toBe(true);
+    expect(MoneySchema.safeParse(-1).error?.issues[0]!.message).toBe("No puede ser negativo");
+    expect(SignedMoneySchema.safeParse(-1500).success).toBe(true);
+    expect(SignedMoneySchema.safeParse(Number.NaN).error?.issues[0]!.message).toBe("Escribe un número");
+    expect(SignedMoneySchema.safeParse(Number.POSITIVE_INFINITY).success).toBe(false);
   });
 });
 

@@ -77,6 +77,11 @@ export type ActiveGesture =
       pointerId: number;
       clipId: string;
       startY: number;
+      // Axis lock: the press point, and whether the drag already proved
+      // vertical (the host's level drag started). A mostly-horizontal start
+      // turns the gesture into a plain move of the clip instead.
+      startX: number;
+      vertical: boolean;
     }
   | {
       // The selected clip's extend grabber: the right end moves by the
@@ -139,6 +144,9 @@ export type ActiveGesture =
       // automation clips are off-limits (RMB there means "add control point").
       // The Delete tool leaves it false and deletes everything.
       skipAutomation?: boolean;
+      // Host option deferDelete: the sweep only marks what it touches
+      // (onPendingChange) and deletes it all on release, in one step.
+      deferred?: boolean;
     }
   | {
       kind: "mute-drag";
@@ -173,6 +181,12 @@ export type ActiveGesture =
       pointerId: number;
       startPoint: PlaylistPoint;
       currentPoint: PlaylistPoint;
+      // Clip pressed on (null: empty space). With sliceScope "target" the
+      // cut is limited to it (or to the selection it belongs to).
+      targetClipId?: string | null;
+      // Last snapped time / Shift state the guide was described for.
+      lastTime?: number;
+      lastAll?: boolean;
     }
   | {
       kind: "marker-drag";

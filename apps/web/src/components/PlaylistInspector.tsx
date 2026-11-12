@@ -10,8 +10,14 @@
 // Visual: collapsed by default, opens to a right-side rail. Pure SliceX
 // palette (no FL colours), driven by the same CSS vars as the rest of
 // the shell.
+//
+// UX-27: ONE toggle button (a stable node, `aria-expanded`), and the open /
+// close contract of `useOverlay` ("panel"): opening moves the focus into the
+// panel, Escape from inside closes it, and closing gives the focus back to
+// the toggle. UX-58: every text in Spanish.
 import * as React from "react";
 import type { PlaylistClip, PlaylistCore } from "@slicex/canvas";
+import { useOverlay } from "../ui/use-overlay";
 
 interface InspectorState {
   selectedClipIds: string[];
@@ -70,52 +76,78 @@ function useDebounced<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
-export function PlaylistInspector({ core }: { core: PlaylistCore | null }) {
-  const [collapsed, setCollapsed] = React.useState(true);
+export function PlaylistInspector({
+  core,
+  fallbackFocus,
+}: {
+  core: PlaylistCore | null;
+  /** Where the focus goes on close when the toggle cannot take it. */
+  fallbackFocus?: () => HTMLElement | null;
+}) {
+  const [open, setOpen] = React.useState(false);
   const { selectedClipIds, focusedClip } = useInspectorState(core);
+  const toggleRef = React.useRef<HTMLButtonElement | null>(null);
+  const panelRef = React.useRef<HTMLDivElement | null>(null);
+  const panelId = React.useId();
+  const titleId = React.useId();
+  const close = React.useCallback(() => setOpen(false), []);
+  useOverlay({
+    open: open && core !== null,
+    onClose: close,
+    kind: "panel",
+    containerRef: panelRef,
+    triggerRef: toggleRef,
+    autoFocus: true,
+    fallbackFocus,
+  });
 
   if (!core) {
     return null;
   }
 
-  const toggleButton = (
-    <button
-      type="button"
-      className="playlist-inspector__toggle"
-      onClick={() => setCollapsed((c) => !c)}
-      aria-label={collapsed ? "Abrir inspector" : "Cerrar inspector"}
-      title={collapsed ? "Abrir inspector" : "Cerrar inspector"}
-    >
-      {collapsed ? "◀" : "▶"}
-    </button>
-  );
-
-  if (collapsed) {
-    return (
-      <aside
-        className="playlist-inspector playlist-inspector--collapsed"
-        aria-label="Inspector"
-      >
-        {toggleButton}
-      </aside>
-    );
-  }
-
   return (
-    <aside className="playlist-inspector" aria-label="Inspector">
-      <header className="playlist-inspector__header">
-        <strong>Inspector</strong>
-        {toggleButton}
-      </header>
-      <div className="playlist-inspector__body">
-        {selectedClipIds.length === 0 ? (
-          <p className="playlist-inspector__empty">No clip selected.</p>
-        ) : selectedClipIds.length === 1 && focusedClip ? (
-          <SingleClipInspector core={core} clip={focusedClip} />
-        ) : (
-          <MultiClipInspector core={core} clipIds={selectedClipIds} />
-        )}
-      </div>
+    <aside
+      className={open ? "playlist-inspector" : "playlist-inspector playlist-inspector--collapsed"}
+      aria-label="Inspector"
+    >
+      <button
+        ref={toggleRef}
+        type="button"
+        className="playlist-inspector__toggle"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        aria-label="Inspector"
+        title={open ? "Cerrar inspector" : "Abrir inspector"}
+      >
+        <span aria-hidden="true">{open ? "▶" : "◀"}</span>
+      </button>
+      {open ? (
+        <div
+          ref={panelRef}
+          id={panelId}
+          className="playlist-inspector__panel"
+          role="group"
+          aria-labelledby={titleId}
+        >
+          <header className="playlist-inspector__header">
+            <h2 id={titleId} className="playlist-inspector__title">
+              Inspector
+            </h2>
+          </header>
+          <div className="playlist-inspector__body">
+            {selectedClipIds.length === 0 ? (
+              <p className="playlist-inspector__empty">
+                Ningún objeto seleccionado. Elige uno en la línea de tiempo.
+              </p>
+            ) : selectedClipIds.length === 1 && focusedClip ? (
+              <SingleClipInspector core={core} clip={focusedClip} />
+            ) : (
+              <MultiClipInspector core={core} clipIds={selectedClipIds} />
+            )}
+          </div>
+        </div>
+      ) : null}
     </aside>
   );
 }
@@ -144,7 +176,7 @@ function SingleClipInspector({
   return (
     <div className="playlist-inspector__form">
       <label className="playlist-inspector__field">
-        <span>Label</span>
+        <span>Nombre</span>
         <input
           type="text"
           value={label}
@@ -165,10 +197,10 @@ function SingleClipInspector({
           checked={clip.muted === true}
           onChange={() => core.toggleClipMute(clip.id)}
         />
-        <span>Muted</span>
+        <span>Silenciado (fuera del cálculo)</span>
       </label>
       <label className="playlist-inspector__field">
-        <span>Content offset (beats)</span>
+        <span>Desfase del contenido (días)</span>
         <input
           type="number"
           step={0.01}
@@ -179,7 +211,7 @@ function SingleClipInspector({
         />
       </label>
       <label className="playlist-inspector__field">
-        <span>Stretch ratio</span>
+        <span>Estiramiento</span>
         <input
           type="number"
           step={0.01}
@@ -192,14 +224,14 @@ function SingleClipInspector({
       </label>
       {clip.groupId !== undefined ? (
         <div className="playlist-inspector__field">
-          <span>Group</span>
+          <span>Grupo</span>
           <div className="playlist-inspector__group-row">
             <code>{clip.groupId}</code>
             <button
               type="button"
               onClick={() => core.setClipGroup(clip.id, null)}
             >
-              Ungroup
+              Desagrupar
             </button>
           </div>
         </div>
@@ -217,25 +249,25 @@ function MultiClipInspector({
 }) {
   return (
     <div className="playlist-inspector__multi">
-      <p>{clipIds.length} clips selected.</p>
+      <p>{clipIds.length} objetos seleccionados.</p>
       <div className="playlist-inspector__multi-actions">
         <button
           type="button"
           onClick={() => core.setClipsMuted(clipIds, true)}
         >
-          Mute all
+          Silenciar todos
         </button>
         <button
           type="button"
           onClick={() => core.setClipsMuted(clipIds, false)}
         >
-          Unmute all
+          Reactivar todos
         </button>
         <button type="button" onClick={() => core.groupSelection()}>
-          Group
+          Agrupar
         </button>
         <button type="button" onClick={() => core.ungroupSelection()}>
-          Ungroup
+          Desagrupar
         </button>
       </div>
     </div>

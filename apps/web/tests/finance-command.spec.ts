@@ -240,7 +240,9 @@ describe("parseCommand — the required phrasings", () => {
     expect(parse("hipoteca 12000 mensual el 10").item).toMatchObject({ kind: "loan", name: "Hipoteca" });
   });
 
-  it('"laptop 18000 a 12 msi" / "12 msi laptop 18000" → MSI starting next month', () => {
+  // UX-33: the date is the purchase date (today), like the editor's draft;
+  // the engine pays the first installment on the card's payment day.
+  it('"laptop 18000 a 12 msi" / "12 msi laptop 18000" → MSI bought today', () => {
     for (const text of ["laptop 18000 a 12 msi", "12 msi laptop 18000", "laptop 18000 a 12 meses sin intereses"]) {
       const { item, summary, assumed } = parse(text);
       expect(item, text).toMatchObject({
@@ -249,10 +251,10 @@ describe("parseCommand — the required phrasings", () => {
         originalAmount: 18000,
         installmentsTotal: 12,
         installmentsPaid: 0,
-        recurrence: { frequency: "monthly", startDate: "2026-12-08" },
+        recurrence: { frequency: "monthly", startDate: TODAY },
       });
       expect(item.kind === "installment-plan" && item.cardId).toBe(undefined);
-      expect(summary).toBe("MSI · Laptop · $18,000 a 12 MSI ($1,500/mes) · desde 8 dic");
+      expect(summary).toBe("MSI · Laptop · $18,000 a 12 MSI ($1,500/mes) · compra hoy · primer abono 8 nov");
       expect(assumed).toEqual(["fecha"]);
     }
   });
@@ -271,7 +273,9 @@ describe("parseCommand — the required phrasings", () => {
       installmentsPaid: 2,
     });
     expect(named.assumed).not.toContain("tarjeta");
-    expect(named.summary).toBe("MSI · Tele · $9,000 a 6 MSI ($1,500/mes) · 2 pagados · con BBVA · desde 8 dic");
+    expect(named.summary).toBe(
+      "MSI · Tele · $9,000 a 6 MSI ($1,500/mes) · 2 pagados · con BBVA · compra hoy · primer abono 27 nov",
+    );
   });
 
   it('"tarjeta nu 30000 al 99.9%" → credit card with default cut / due days', () => {

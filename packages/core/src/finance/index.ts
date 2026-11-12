@@ -48,6 +48,7 @@ export type {
 export { suggestMexicanYear } from "./mx-year";
 export type { YearSuggestion } from "./mx-year";
 export { solveDebtPayment } from "./goalseek";
+export { amortizedPayment, loanPaymentCount, periodsPerYear } from "./amortization";
 export type { DebtPaymentSolution } from "./goalseek";
 export { explainValley, suggestValleyFixes } from "./valley";
 export type { ValleyCause, ValleyExplanation, ValleyFix } from "./valley";

@@ -111,6 +111,7 @@ export type PlaylistAction =
   | { type: "SET_SELECTION"; selection: Partial<PlaylistSelection> }
   | { type: "SET_MARQUEE"; marquee: PlaylistMarquee | null }
   | { type: "SET_HOVER"; hover: PlaylistHover }
+  | { type: "SET_HOVER_TIME"; time: number | null }
   | { type: "SET_CONTEXT_MENU"; contextMenu: PlaylistContextMenu }
   | {
       type: "OPEN_TRACK_CONTEXT_MENU";

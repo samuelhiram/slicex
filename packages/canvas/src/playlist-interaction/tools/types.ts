@@ -21,6 +21,9 @@ export interface ToolEnvironment {
   // set, tools never create clips on empty space themselves — Draw asks the
   // host instead (double-click now, drag on release).
   onCreateRequest?: (request: PlaylistCreateRequest) => void;
+  // Host option (PlaylistInteractionOptions.deferDelete): the Delete tool
+  // marks what it touches and deletes on release instead of at once.
+  deferDelete?: boolean;
 }
 
 // What the Draw tool asks a host that creates through its own flow: the
@@ -31,6 +34,12 @@ export interface PlaylistCreateRequest {
   start: number;
   duration: number | null;
   templateClipId: string | null;
+  // Where the press happened (host-local px): anchor for a menu.
+  point?: PlaylistPoint;
+  // Lane the new clip would take in that row (ghost of a menu).
+  lane?: number;
+  // 2 = the second press of a double-click (open at once, no menu).
+  clickCount?: number;
 }
 
 export interface PlaylistTool {

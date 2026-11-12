@@ -356,3 +356,52 @@ describe("suggestValleyFixes — hand-made documents", () => {
     expect(suggestValleyFixes(noPayday, late!)).toEqual([]);
   });
 });
+
+// UX audit 2026-11-11, UX-06: every fix says what it costs.
+describe("suggestValleyFixes — what each fix costs (UX-06)", () => {
+  const demo = createDemoFinancialDocument(START);
+  const base = projectFinancialDocument(demo);
+  const [valley] = findLiquidityWarnings(base, demo.minimumCashReserve);
+  const all = suggestValleyFixes(demo, valley!, { limit: 10 });
+
+  it("moving the loan's day pays it late (15 nov → 30 nov): flagged, with the warning in words", () => {
+    const loan = all.find((f) => f.itemId === "fin-prestamo")!;
+    expect(loan.delaysDebt).toBe(true);
+    expect(loan.delayDays).toBe(15);
+    expect(loan.warning).toBe(
+      "Pagarías 15 días después de tu fecha de pago: puede generar intereses moratorios y afectar tu historial de crédito.",
+    );
+  });
+
+  it("no fix that delays a debt payment comes without a warning", () => {
+    for (const fix of all) {
+      if (fix.delaysDebt || fix.delayDays > 0) expect(fix.warning, fix.id).not.toBeNull();
+    }
+  });
+
+  it("paying only Nu's minimum shows the extra interest it costs (and a lower horizon)", () => {
+    const nu = all.find((f) => f.id === "fin-nu:minimum")!;
+    expect(nu.delaysDebt).toBe(false);
+    expect(nu.delayDays).toBe(0);
+    expect(nu.extraInterest).toBeGreaterThan(0);
+    // Paying less keeps cash but leaves more debt: net, it costs the interest.
+    expect(nu.finalDebtDelta).toBeGreaterThan(0);
+    expect(nu.finalCashDelta - nu.finalDebtDelta).toBeLessThan(0);
+    expect(nu.warning).toMatch(/^Pagarías \$[\d,.]+ más de intereses en tu horizonte\.$/);
+  });
+
+  it("finalCashDelta is the horizon difference of the patched plan", () => {
+    for (const fix of all) {
+      const after = projectFinancialDocument(apply(demo, fix));
+      expect(fix.finalCashDelta, fix.id).toBeCloseTo(after.finalCash - base.finalCash, 2);
+      expect(fix.finalDebtDelta, fix.id).toBeCloseTo(after.finalDebt - base.finalDebt, 2);
+    }
+  });
+
+  it("a one-off expense moved to payday: a mild warning, not a debt delay", () => {
+    const plata = all.find((f) => f.itemId === "fin-pago-plata")!;
+    expect(plata.delaysDebt).toBe(false);
+    expect(plata.delayDays).toBeGreaterThan(0);
+    expect(plata.warning).toContain("revisa que no tenga recargo");
+  });
+});

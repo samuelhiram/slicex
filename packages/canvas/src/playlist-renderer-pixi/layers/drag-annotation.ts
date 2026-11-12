@@ -57,6 +57,7 @@ export function createDragAnnotationLayer(
 ): DragAnnotationLayer {
   const stats = { repaints: 0 };
   let painted: PlaylistDragAnnotation | null = null;
+  let paintedWidth = 0;
 
   function repaint(annotation: PlaylistDragAnnotation): void {
     stats.repaints += 1;
@@ -68,6 +69,7 @@ export function createDragAnnotationLayer(
       Math.max(annotation.text.length, 1) * TEXT_CHAR_WIDTH +
       TOOLTIP_PADDING_X * 2 +
       DOT_SPACE;
+    paintedWidth = width;
     // Raised card: soft shadow (light theme), hairline in the tone, a tone
     // dot and the text in the tone (all tones are AA on the surface).
     if (COLORS.shadowAlpha > 0) {
@@ -108,7 +110,10 @@ export function createDragAnnotationLayer(
     if (y + PILL_HEIGHT > presentation.state.viewport.height) {
       y = tooltipY - PILL_GAP - PILL_HEIGHT;
     }
-    parts.container.x = Math.round(tooltip.x + TOOLTIP_OFFSET_X);
+    // Kept inside the canvas: a long effect near the right edge slides left.
+    const right = presentation.state.viewport.width - 4;
+    const x = Math.round(tooltip.x + TOOLTIP_OFFSET_X);
+    parts.container.x = x + paintedWidth > right ? Math.max(4, Math.round(right - paintedWidth)) : x;
     parts.container.y = y;
     if (!parts.container.visible) parts.container.visible = true;
   }

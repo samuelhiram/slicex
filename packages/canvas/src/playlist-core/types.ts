@@ -276,12 +276,17 @@ export interface PlaylistSnapHint {
 // Time tooltip floating near the cursor. Kind tells the renderer how to
 // format/colour it; anchor is in screen coordinates.
 export interface PlaylistTooltip {
-  kind: "time" | "ratio" | "offset";
+  // "clip": the info card of a hovered / tapped clip (the host adds its
+  // lines through PlaylistRendererCallbacks.getClipInfo). "hint": a plain
+  // label (e.g. what a track header button does).
+  kind: "time" | "ratio" | "offset" | "clip" | "hint";
   text: string;
   anchor: PlaylistPoint;
   // Beat a "time" tooltip is about: lets the host add a detail line under
   // the date (PlaylistRendererCallbacks.getTooltipDetail).
   time?: number;
+  // Clip a "clip" tooltip describes.
+  clipId?: string;
 }
 
 export interface PlaylistTrackContextMenu {
@@ -304,6 +309,20 @@ export interface PlaylistBackgroundContextMenu {
   position: PlaylistPoint;
 }
 
+// "What goes here?": a host that creates through its own flow asks the
+// person on a click on empty space (PlaylistInteractionOptions.clickToCreate).
+// While it is open the spot shows a dashed ghost (presentation
+// dragPreviewView, `creating`): `duration` beats (null: one cell) from
+// `time`, in row `trackIndex`, lane `lane`.
+export interface PlaylistCreateContextMenu {
+  kind: "create";
+  time: number;
+  duration: number | null;
+  trackIndex: number;
+  lane: number;
+  position: PlaylistPoint;
+}
+
 export interface PlaylistMarkerContextMenu {
   kind: "marker";
   markerId: string;
@@ -314,6 +333,7 @@ export type PlaylistContextMenu =
   | PlaylistTrackContextMenu
   | PlaylistClipContextMenu
   | PlaylistBackgroundContextMenu
+  | PlaylistCreateContextMenu
   | PlaylistMarkerContextMenu
   | null;
 
@@ -337,6 +357,12 @@ export interface PlaylistState {
   marquee: PlaylistMarquee | null;
   contextMenu: PlaylistContextMenu;
   hover: PlaylistHover;
+  // Beat cell under the pointer over the timeline columns (ruler, overview
+  // lane, rows): floor(time). Drives the hover-time indicator (a faint line
+  // that follows the pointer + the day's name on the ruler). null / absent:
+  // the pointer is elsewhere, a gesture is running or the host did not ask
+  // for it (PlaylistInteractionOptions.hoverTimeIndicator).
+  hoverTime?: number | null;
   playPosition: PlaylistPlayPosition;
   tool: PlaylistToolId;
   clipboard: PlaylistClipboard | null;
@@ -499,7 +525,25 @@ export interface PlaylistOverviewData {
   scale?: { kind: "linear" } | { kind: "symlog"; constant: number };
   /** Data ends here (e.g. a projection horizon): no curve past it. */
   endBeat?: number;
+  /**
+   * Faint labelled guide lines on the primary scale (e.g. round amounts),
+   * drawn with the frame — once per data reference, never per frame. A
+   * guide outside the scale or too close to another label is skipped.
+   */
+  guides?: readonly number[];
+  /**
+   * Fixed bounds of the primary scale (∪ 0 ∪ thresholds). With it the scale
+   * does not follow every small change of the data: the host decides when
+   * it moves (e.g. round steps with hysteresis). Absent: the data extent.
+   */
+  domain?: { min: number; max: number };
 }
+
+/**
+ * Shape of a clip's accent bar, so kinds tell apart without colour (e.g. a
+ * grayscale print): "solid" (default), "dashed" or "dotted".
+ */
+export type PlaylistClipAccent = "solid" | "dashed" | "dotted";
 
 /** Content drawn inside a clip body, positioned at absolute beats. */
 export type PlaylistClipContent =
@@ -511,6 +555,11 @@ export type PlaylistClipContent =
       values: readonly number[];
       // Optional vertical guide lines at these beats (e.g. a billing cut).
       marks?: readonly number[];
+      // Real extent of what the clip stands for, in beats from its start
+      // (e.g. 1 for a one-day event drawn wider so its name fits): that
+      // span is drawn as the card, the rest as a faint tag.
+      extent?: number;
+      accent?: PlaylistClipAccent;
     }
   | {
       kind: "level";
@@ -520,6 +569,7 @@ export type PlaylistClipContent =
       max: number;
       // Optional vertical guide lines at these beats (e.g. a billing cut).
       marks?: readonly number[];
+      accent?: PlaylistClipAccent;
     };
 
 /** A pill attached to the drag tooltip (e.g. the effect of the gesture). */

@@ -529,6 +529,12 @@ export class PlaylistCore {
     this.dispatch({ type: "SET_HOVER", hover });
   }
 
+  /** Beat cell under the pointer (hover-time indicator); null hides it. */
+  setHoverTime(time: number | null): void {
+    const cell = time === null || !Number.isFinite(time) ? null : Math.max(0, Math.floor(time));
+    this.dispatch({ type: "SET_HOVER_TIME", time: cell });
+  }
+
   setPlayPosition(time: number): void {
     this.dispatch({ type: "SET_PLAY_POSITION", time });
   }
@@ -790,16 +796,20 @@ export class PlaylistCore {
   // Each affected clip becomes a left half (truncated in place) plus a right
   // half pushed back into the state with a fresh id and a contentOffset that
   // represents the drop-in time of the cut. Locked tracks and noSlice clips
-  // are skipped.
-  sliceClipsAtTime(time: number): string[] {
+  // are skipped. `onlyClipIds` narrows the cut to those clips (a host whose
+  // Slice acts on the clip under the pointer / the selection, not on every
+  // row at once); absent = every clip crossing `time` (FL).
+  sliceClipsAtTime(time: number, onlyClipIds?: readonly string[]): string[] {
     const state = this.history.present;
     const lockedTrackIds = new Set(
       state.tracks
         .filter((track) => track.locked === true)
         .map((track) => track.id),
     );
+    const only = onlyClipIds ? new Set(onlyClipIds) : null;
     const candidates = state.clips.filter(
       (clip) =>
+        (only === null || only.has(clip.id)) &&
         clip.noSlice !== true &&
         !lockedTrackIds.has(clip.trackId) &&
         time > clip.start + 1e-6 &&
@@ -1120,6 +1130,27 @@ export class PlaylistCore {
     this.dispatch({
       type: "SET_CONTEXT_MENU",
       contextMenu: { kind: "clip", clipId, position },
+    });
+  }
+
+  /** The "what goes here?" menu at a spot (see PlaylistCreateContextMenu). */
+  openCreateMenu(input: {
+    time: number;
+    duration: number | null;
+    trackIndex: number;
+    lane?: number;
+    position: PlaylistPoint;
+  }): void {
+    this.dispatch({
+      type: "SET_CONTEXT_MENU",
+      contextMenu: {
+        kind: "create",
+        time: Math.max(0, input.time),
+        duration: input.duration !== null && input.duration > 0 ? input.duration : null,
+        trackIndex: Math.max(0, input.trackIndex),
+        lane: Math.max(0, input.lane ?? 0),
+        position: input.position,
+      },
     });
   }
 

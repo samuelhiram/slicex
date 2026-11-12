@@ -7,12 +7,16 @@
 // The common schedules are one click (like a calendar app's "Repetir");
 // anything else is "cada N días / meses". The model side is schedule-ui.ts
 // (frequencyParts / withFrequencyParts / SCHEDULE_PRESETS).
+//
+// Keyboard: a radio group — Tab lands on the chosen option, the arrows
+// move AND choose (wrapping), Home / End jump to the ends.
 import * as React from "react";
 import {
   presetOf,
   SCHEDULE_PRESETS,
   type FrequencyUnit,
 } from "../schedule-ui";
+import { useEditableText } from "./form-kit";
 
 // "Cada N": a number field the person can clear while typing (the rule only
 // takes whole numbers >= 1; leaving it empty restores the rule's).
@@ -25,14 +29,7 @@ function EveryInput({
   unit: "days" | "months";
   onChange: (every: number) => void;
 }) {
-  const [text, setText] = React.useState(String(value));
-  const emitted = React.useRef(value);
-  React.useEffect(() => {
-    if (value !== emitted.current) {
-      emitted.current = value;
-      setText(String(value));
-    }
-  }, [value]);
+  const { text, setText, emit } = useEditableText(value, String);
   return (
     <input
       type="number"
@@ -46,10 +43,7 @@ function EveryInput({
         const raw = event.target.value;
         setText(raw);
         const n = Math.floor(Number(raw));
-        if (raw.trim() !== "" && Number.isFinite(n) && n >= 1) {
-          emitted.current = n;
-          onChange(n);
-        }
+        if (raw.trim() !== "" && Number.isFinite(n) && n >= 1 && emit(n)) onChange(n);
       }}
       onBlur={() => setText(String(value))}
     />
@@ -79,43 +73,85 @@ export function SchedulePicker({
   const custom = customOpen || matched === null;
   const counted: "days" | "months" = unit === "days" ? "days" : "months";
 
+  // Every option of the group, in order: the presets, then "Personalizado…".
+  const options = [
+    ...presets.map((preset) => ({
+      id: preset.id,
+      label: preset.label,
+      checked: !custom && matched?.id === preset.id,
+      choose: () => {
+        setCustomOpen(false);
+        onChange(preset.unit, preset.every);
+      },
+    })),
+    {
+      id: "custom",
+      label: "Personalizado…",
+      checked: custom,
+      choose: () => {
+        setCustomOpen(true);
+        // From a schedule that isn't "cada N" (una vez, quincena): start
+        // at "cada 2 meses", the first thing no preset says.
+        if (unit !== "days" && unit !== "months") onChange("months", 2);
+      },
+    },
+  ];
+  const checkedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.checked),
+  );
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    const from = buttons.indexOf(event.target as HTMLButtonElement);
+    if (from < 0) return;
+    const last = buttons.length - 1;
+    let to: number;
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        to = from === last ? 0 : from + 1;
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        to = from === 0 ? last : from - 1;
+        break;
+      case "Home":
+        to = 0;
+        break;
+      case "End":
+        to = last;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    options[to]!.choose();
+    buttons[to]!.focus();
+  };
+
   return (
     <div className="fin-repeat">
-      <div className="fin-repeat__presets" role="radiogroup" aria-labelledby={labelledBy}>
-        {presets.map((preset) => {
-          const checked = !custom && matched?.id === preset.id;
-          return (
-            <button
-              key={preset.id}
-              type="button"
-              role="radio"
-              aria-checked={checked}
-              className="fin-repeat__preset"
-              data-checked={checked ? "true" : undefined}
-              onClick={() => {
-                setCustomOpen(false);
-                onChange(preset.unit, preset.every);
-              }}
-            >
-              {preset.label}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          role="radio"
-          aria-checked={custom}
-          className="fin-repeat__preset"
-          data-checked={custom ? "true" : undefined}
-          onClick={() => {
-            setCustomOpen(true);
-            // From a schedule that isn't "cada N" (una vez, quincena): start
-            // at "cada 2 meses", the first thing no preset says.
-            if (unit !== "days" && unit !== "months") onChange("months", 2);
-          }}
-        >
-          Personalizado…
-        </button>
+      <div
+        className="fin-repeat__presets"
+        role="radiogroup"
+        aria-labelledby={labelledBy}
+        onKeyDown={onKeyDown}
+      >
+        {options.map((option, index) => (
+          <button
+            key={option.id}
+            type="button"
+            role="radio"
+            aria-checked={option.checked}
+            tabIndex={index === checkedIndex ? 0 : -1}
+            className="fin-repeat__preset"
+            data-checked={option.checked ? "true" : undefined}
+            onClick={option.choose}
+          >
+            {option.label}
+          </button>
+        ))}
       </div>
       {custom ? (
         <div className="fin-repeat__custom">

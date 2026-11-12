@@ -43,6 +43,7 @@ function tooltipsEqual(
     a.kind === b.kind &&
     a.text === b.text &&
     a.time === b.time &&
+    a.clipId === b.clipId &&
     a.anchor.x === b.anchor.x &&
     a.anchor.y === b.anchor.y
   );
@@ -401,6 +402,11 @@ export function playlistReducer(
         return state;
       }
       return { ...state, hover: action.hover ? { ...action.hover } : null };
+    case "SET_HOVER_TIME":
+      if ((state.hoverTime ?? null) === action.time) {
+        return state;
+      }
+      return { ...state, hoverTime: action.time };
     case "SET_CONTEXT_MENU":
       return {
         ...state,

@@ -40,6 +40,14 @@ export function rulerTierSplit(rulerHeight: number): number {
   return Math.round(rulerHeight * 0.46);
 }
 
+/** Top y of the day / tick labels (the lower tier of a two-tier ruler). */
+export function rulerTickLabelY(presentation: PlaylistPresentation): number {
+  const rulerHeight = presentation.metrics.rulerHeight;
+  if (!hasGroups(presentation)) return 11;
+  const tierTop = rulerTierSplit(rulerHeight);
+  return tierTop + Math.round((rulerHeight - tierTop - TICK_LABEL_SIZE) / 2) - 2;
+}
+
 function hasGroups(presentation: PlaylistPresentation): boolean {
   const bands = presentation.rulerBands;
   for (let i = 0; i < bands.length; i += 1) {
@@ -187,9 +195,7 @@ export function drawRulerChrome(
 
   // Lower tier (or the only tier): tick marks + labels.
   const ticks = presentation.rulerTicks;
-  const labelY = twoTier
-    ? tierTop + Math.round((rulerHeight - tierTop - TICK_LABEL_SIZE) / 2) - 2
-    : 11;
+  const labelY = rulerTickLabelY(presentation);
 
   // Pass 1: the emphasised pill (if any) claims its span first.
   let pillLeft = Number.POSITIVE_INFINITY;

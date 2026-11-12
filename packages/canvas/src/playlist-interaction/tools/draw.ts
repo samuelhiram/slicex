@@ -96,7 +96,14 @@ export const drawTool: PlaylistTool = {
     if (env.onCreateRequest) {
       const templateClipId = state.selection.clipIds[0] ?? null;
       if (doubleClick) {
-        env.onCreateRequest({ trackIndex, start, duration: null, templateClipId });
+        env.onCreateRequest({
+          trackIndex,
+          start,
+          duration: null,
+          templateClipId,
+          point,
+          clickCount: 2,
+        });
         return null;
       }
       return {

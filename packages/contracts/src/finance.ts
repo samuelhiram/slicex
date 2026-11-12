@@ -32,6 +32,9 @@ const number = (required = "Requerido") =>
 /** A finite amount of money, >= 0. */
 export const MoneySchema = number().finite("Escribe un número").nonnegative("No puede ser negativo");
 
+/** A balance: finite, may be negative (an overdraft). */
+export const SignedMoneySchema = number().finite("Escribe un número");
+
 /** Day of the month, 1–31. */
 export const DayOfMonthSchema = number()
   .int("Debe ser un día entre 1 y 31")
@@ -154,7 +157,7 @@ export const FinancialDocumentSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
   startDate: ISODateSchema,
-  initialCash: number().finite("Escribe un número"),
+  initialCash: SignedMoneySchema,
   minimumCashReserve: MoneySchema,
   horizonMonths: number().int().min(1).max(1200),
   items: z.array(z.unknown()),

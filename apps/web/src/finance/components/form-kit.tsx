@@ -118,6 +118,75 @@ export function FieldError({ id, message }: FieldErrorRef) {
   ) : null;
 }
 
+/** "Último día" of a day-of-month control: 31 clamps to every month's end. */
+export const LAST_DAY_OF_MONTH = 31;
+
+const DAY_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
+  ...Array.from({ length: 30 }, (_, index) => ({ value: index + 1, label: String(index + 1) })),
+  { value: LAST_DAY_OF_MONTH, label: "Último día" },
+];
+
+/**
+ * THE day-of-month control (UX-34): the same "[1–30 | Último día]" select in
+ * the editor's monthly "Día de pago", the card's "Día de corte / de pago"
+ * and the onboarding's fixed expenses. `value` undefined = not chosen yet
+ * (a "—" option, only when `allowEmpty`).
+ */
+export function DaySelect({
+  value,
+  onChange,
+  allowEmpty = false,
+  emptyLabel = "—",
+  id,
+  ...aria
+}: {
+  value: number | undefined;
+  onChange: (day: number | undefined) => void;
+  allowEmpty?: boolean;
+  emptyLabel?: string;
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-invalid"?: true;
+  "aria-describedby"?: string;
+}) {
+  const known = value !== undefined && Number.isFinite(value) && value >= 1 && value <= LAST_DAY_OF_MONTH;
+  return (
+    <select
+      id={id}
+      className="fin-day-select"
+      value={known ? String(Math.round(value)) : ""}
+      onChange={(event) => onChange(event.target.value === "" ? undefined : Number(event.target.value))}
+      {...aria}
+    >
+      {allowEmpty || !known ? (
+        <option value="" disabled={!allowEmpty}>
+          {emptyLabel}
+        </option>
+      ) : null}
+      {DAY_OPTIONS.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/**
+ * After a failed submit: the focus goes to the first invalid control of
+ * `root` (WCAG 3.3.1, UX-32), so a keyboard user lands on what to fix.
+ * Returns whether one was focused.
+ */
+export function focusFirstInvalid(root: ParentNode | null): boolean {
+  const target = root?.querySelector<HTMLElement>(
+    'input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"]',
+  );
+  if (!target || target.matches(":disabled")) return false;
+  target.focus();
+  return target.ownerDocument.activeElement === target;
+}
+
 /**
  * The text of an input whose PARSED value lives in the form. The text stays
  * local so a parse never clobbers typing ("12.", "15 no", an emptied

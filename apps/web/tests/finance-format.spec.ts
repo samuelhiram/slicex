@@ -216,7 +216,9 @@ describe("parseDateInput", () => {
     "",
     "   ",
     "abc",
-    "15",
+    // A bare day is a date since UX-35 ("15" = the next 15th, ux-forms.spec);
+    // one that no month has is not.
+    "32",
     "nov",
     "15 xyz",
     "15 ma",

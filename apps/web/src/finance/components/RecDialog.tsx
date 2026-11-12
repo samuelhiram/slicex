@@ -9,12 +9,21 @@
 // its choice), validated with the shared schemas — a real amount is a
 // MoneySchema amount, today's real cash a plan's cash (may be negative).
 // Each error shows under its field; one role="alert" line names the first.
+//
+// UX-22: the dialog says what SliceX assumes today ("Hoy SliceX supone que
+// tienes $5,708…") and, before "Aplicar", what today's cash becomes
+// ("Liquidez hoy: $5,708 → $11,400 (ajuste +$5,692)"), computed deferred
+// (one roll-forward per settled change, never per keystroke burst).
+// UX-27: one open / close contract (useOverlay "modal": Escape, focus in,
+// focus back). UX-62: "Aplicar" puts what you reviewed into the plan;
+// "Después" / × close without deciding (Rec stays pending).
 import * as React from "react";
 import { schemaResolver, useForm } from "@mantine/form";
 import { z } from "zod";
 import { FinancialDocumentSchema } from "@slicex/contracts";
 import type { ActualRecord, FinancialProjectionPoint, ISODate } from "@slicex/core";
 import { formatDateShort, formatMoneyWhole, formatSignedMoneyWhole } from "../format";
+import { useOverlay } from "../../ui/use-overlay";
 import { amountTextSchema, amountValue, bindField, firstError } from "./form-kit";
 
 export interface RecDialogProps {
@@ -24,6 +33,19 @@ export interface RecDialogProps {
   since: ISODate;
   onApply: (actuals: ActualRecord[], cashOverride: number | undefined) => void;
   onClose: () => void;
+  /** Today's cash as the plan has it now ("Liquidez hoy"): what SliceX assumes. */
+  currentCash?: number;
+  /** Today's cash once these corrections are applied (pure; see bootstrap.recResultCash). */
+  resultCash?: (actuals: ActualRecord[], cashOverride: number | undefined) => number;
+  /** Where the focus goes on close when its opener is gone. */
+  fallbackFocus?: () => HTMLElement | null;
+}
+
+/** "Liquidez hoy: $5,708 → $11,400 (ajuste +$5,692)" / "Liquidez hoy: $5,708, sin cambio". */
+export function recResultLine(before: number, after: number): string {
+  const delta = Math.round((after - before) * 100) / 100;
+  if (Math.abs(delta) < 0.5) return `Liquidez hoy: ${formatMoneyWhole(before)}, sin cambio`;
+  return `Liquidez hoy: ${formatMoneyWhole(before)} → ${formatMoneyWhole(after)} (ajuste ${formatSignedMoneyWhole(delta)})`;
 }
 
 export type RecRowStatus = "happened" | "edited" | "skipped";
@@ -81,7 +103,15 @@ export function recActuals(
   return { actuals, cash: amountValue(values.cash) };
 }
 
-export function RecDialog({ pending, since, onApply, onClose }: RecDialogProps) {
+export function RecDialog({
+  pending,
+  since,
+  onApply,
+  onClose,
+  currentCash,
+  resultCash,
+  fallbackFocus,
+}: RecDialogProps) {
   const rows = React.useMemo(() => recRows(pending), [pending]);
   const form = useForm<RecValues>({
     mode: "controlled",
@@ -93,15 +123,18 @@ export function RecDialog({ pending, since, onApply, onClose }: RecDialogProps) 
     validateInputOnBlur: true,
   });
   const dialogRef = React.useRef<HTMLFormElement | null>(null);
-
-  React.useEffect(() => {
-    dialogRef.current?.querySelector<HTMLElement>("select, input, button")?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const firstFieldRef = React.useRef<HTMLElement | null>(null);
+  React.useLayoutEffect(() => {
+    firstFieldRef.current = dialogRef.current?.querySelector<HTMLElement>("select, input") ?? null;
+  }, []);
+  useOverlay({
+    open: true,
+    onClose,
+    kind: "modal",
+    containerRef: dialogRef,
+    initialFocusRef: firstFieldRef,
+    fallbackFocus,
+  });
 
   const submit = form.onSubmit((values) => {
     const { actuals, cash } = recActuals(rows, values);
@@ -111,6 +144,32 @@ export function RecDialog({ pending, since, onApply, onClose }: RecDialogProps) 
   const values = form.getValues();
   const cash = bindField(form, "cash", "fin-rec");
 
+  // The result before "Aplicar": only VALID values count (a half-typed
+  // amount keeps the last result), recomputed deferred (useDeferredValue:
+  // typing stays responsive; one roll-forward per settled change).
+  const valid = React.useMemo(() => {
+    const parsed = recFormSchema.safeParse(values);
+    return parsed.success ? recActuals(rows, values) : null;
+    // `values` is a fresh object per render: key on its content.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, JSON.stringify(values)]);
+  const lastValidRef = React.useRef<{ actuals: ActualRecord[]; cash: number | undefined }>({
+    actuals: [],
+    cash: undefined,
+  });
+  if (valid) lastValidRef.current = valid;
+  const settled = React.useDeferredValue(lastValidRef.current);
+  const after = React.useMemo(
+    () =>
+      currentCash === undefined || !resultCash
+        ? null
+        : resultCash(settled.actuals, settled.cash),
+    [currentCash, resultCash, settled],
+  );
+  const changed = rows.filter((_, index) => (values.rows[index]?.status ?? "happened") !== "happened").length;
+  const titleId = React.useId();
+  const assumedId = React.useId();
+
   return (
     <div className="playlist-shell__modal-overlay" role="presentation">
       <form
@@ -118,22 +177,33 @@ export function RecDialog({ pending, since, onApply, onClose }: RecDialogProps) 
         className="playlist-shell__modal fin-rec"
         role="dialog"
         aria-modal="true"
-        aria-label="Pon tu año al día"
+        aria-labelledby={titleId}
+        aria-describedby={currentCash !== undefined ? assumedId : undefined}
         noValidate
         onSubmit={submit}
       >
         <header className="playlist-shell__modal-header">
-          <strong className="fin-editor__title">Pon tu año al día</strong>
+          <h2 id={titleId} className="fin-editor__title">
+            Pon tu año al día
+          </h2>
           <button
             type="button"
             className="playlist-shell__modal-close"
-            aria-label="Cerrar"
+            aria-label="Cerrar sin decidir"
+            title="Cerrar: lo revisas después"
             onClick={onClose}
           >
             ×
           </button>
         </header>
         <div className="playlist-shell__modal-body fin-editor__body">
+          {currentCash !== undefined ? (
+            <p id={assumedId} className="fin-rec__assumed">
+              Hoy SliceX supone que tienes <strong>{formatMoneyWhole(currentCash)}</strong> (
+              {rows.length === 1 ? "1 movimiento" : `${rows.length} movimientos`} desde el{" "}
+              {formatDateShort(since)}).
+            </p>
+          ) : null}
           <p className="fin-rec__intro">
             Desde el {formatDateShort(since)} supusimos que todo pasó como lo planeaste.
             Corrige lo que fue distinto.
@@ -211,10 +281,21 @@ export function RecDialog({ pending, since, onApply, onClose }: RecDialogProps) 
             />
             {cash.error}
             <span className="fin-editor__hint">
-              Si lo escribes, manda sobre todo lo demás: la diferencia queda registrada como
-              ajuste.
+              Si lo escribes, esa es tu liquidez de hoy: manda sobre todo lo demás y la
+              diferencia queda registrada como ajuste.
             </span>
           </label>
+          {currentCash !== undefined && after !== null ? (
+            <p className="fin-rec__result" data-changed={Math.abs(after - currentCash) >= 0.5}>
+              {recResultLine(currentCash, after)}
+              {changed > 0 ? (
+                <span className="fin-rec__result-note">
+                  {" "}
+                  · {changed === 1 ? "1 movimiento corregido" : `${changed} movimientos corregidos`}
+                </span>
+              ) : null}
+            </p>
+          ) : null}
           <p className="fin-editor__error" role="alert">
             {firstError(form.errors)}
           </p>
@@ -224,7 +305,7 @@ export function RecDialog({ pending, since, onApply, onClose }: RecDialogProps) 
               Después
             </button>
             <button type="submit" className="fin-editor__button fin-editor__button--primary">
-              Guardar
+              Aplicar
             </button>
           </div>
         </div>

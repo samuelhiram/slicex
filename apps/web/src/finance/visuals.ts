@@ -29,8 +29,8 @@ import {
   formatMoneyWhole,
   formatSignedMoneyWhole,
 } from "./format";
-import { autoRowName, frequencyShort } from "./labels";
-import { beatOf, horizonBeat } from "./mapping";
+import { derivedRowTitle, frequencyShort, KIND_ACCENT } from "./labels";
+import { beatOf, horizonBeat, isPointItem } from "./mapping";
 
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
@@ -127,11 +127,95 @@ export function debtSeries(
   return endOfDaySeries(doc, projection, projection.initialDebt, (i) => projection.points[i]!.debtAfter);
 }
 
+// --- scale of the money lane ---------------------------------------------
+
+/** Smallest 1 / 2 / 5 × 10^k at or above `value` (> 0). */
+export function niceCeil(value: number): number {
+  if (!(value > 0)) return 0;
+  const power = Math.pow(10, Math.floor(Math.log10(value)));
+  for (const step of [1, 2, 5, 10]) {
+    if (step * power >= value - 1e-9) return step * power;
+  }
+  return 10 * power;
+}
+
+export interface OverviewDomain {
+  min: number;
+  max: number;
+}
+
+// Below this share of the current bound, the bound comes down a step.
+const DOMAIN_SHRINK = 0.4;
+
+/**
+ * Bounds of the money lane in round steps, with hysteresis: the scale only
+ * moves when the data leaves its step ("cambio de tramo") — it grows past
+ * the bound, or falls under 40% of it. An edit far away no longer redraws
+ * the rest of the year higher or lower.
+ */
+export function overviewDomain(
+  dataMin: number,
+  dataMax: number,
+  previous: OverviewDomain | null,
+): OverviewDomain {
+  const bound = (value: number, prev: number | undefined): number => {
+    // `value` and `prev` are magnitudes (≥ 0) on one side of zero.
+    if (!(value > 0)) return prev !== undefined && prev > 0 && value > prev * DOMAIN_SHRINK ? prev : 0;
+    if (prev !== undefined && prev > 0 && value <= prev && value >= prev * DOMAIN_SHRINK) return prev;
+    return niceCeil(value);
+  };
+  const max = bound(Math.max(0, dataMax), previous ? previous.max : undefined);
+  const min = -bound(Math.max(0, -dataMin), previous ? -previous.min : undefined);
+  return { min: min === 0 ? 0 : min, max };
+}
+
+/**
+ * Up to 4 round amounts to draw as labelled guides on a symlog lane: from
+ * the top of the domain down, each far enough (in the lane's own scale)
+ * from the others and from the reserve / zero lines.
+ */
+export function overviewGuides(domain: OverviewDomain, reserve: number, constant: number): number[] {
+  const t = (value: number) =>
+    value < 0 ? -Math.log1p(-value / constant) : Math.log1p(value / constant);
+  const span = t(domain.max) - t(Math.min(0, domain.min));
+  if (!(span > 0)) return [];
+  const minGap = span / 7;
+  const taken = [t(0), t(reserve)];
+  const guides: number[] = [];
+  const candidates: number[] = [];
+  for (let power = 100; power <= domain.max * 10; power *= 10) {
+    for (const step of [1, 2, 5]) {
+      const value = step * power;
+      if (value <= domain.max + 1e-9) candidates.push(value);
+    }
+  }
+  candidates.sort((a, b) => b - a);
+  for (const value of candidates) {
+    if (guides.length >= 4) break;
+    const y = t(value);
+    if (taken.some((other) => Math.abs(other - y) < minGap)) continue;
+    taken.push(y);
+    guides.push(value);
+  }
+  return guides.sort((a, b) => a - b);
+}
+
+function seriesExtent(series: PlaylistStepSeries, acc: { min: number; max: number }): void {
+  if (series.initial < acc.min) acc.min = series.initial;
+  if (series.initial > acc.max) acc.max = series.initial;
+  for (const value of series.values) {
+    if (value < acc.min) acc.min = value;
+    if (value > acc.max) acc.max = value;
+  }
+}
+
 export function buildOverview(
   doc: FinancialDocument,
   projection: FinancialProjection,
   warnings: readonly LiquidityWarning[],
   baseline: PlaylistStepSeries | null,
+  // The lane's previous bounds (hysteresis, see overviewDomain); null = fresh.
+  previousDomain: OverviewDomain | null = null,
 ): PlaylistOverviewData {
   const reserve = doc.minimumCashReserve;
   const annotations: PlaylistOverviewAnnotation[] = warnings.map((warning) => ({
@@ -149,9 +233,19 @@ export function buildOverview(
       tone: "info",
     });
   }
+  const primary = cashSeries(doc, projection);
+  const extent = { min: Number.POSITIVE_INFINITY, max: Number.NEGATIVE_INFINITY };
+  seriesExtent(primary, extent);
+  if (baseline) seriesExtent(baseline, extent);
+  const domain = overviewDomain(
+    Number.isFinite(extent.min) ? extent.min : 0,
+    Number.isFinite(extent.max) ? extent.max : 0,
+    previousDomain,
+  );
+  const constant = Math.max(1000, reserve);
   return {
     title: "Caja",
-    primary: cashSeries(doc, projection),
+    primary,
     secondary: debtSeries(doc, projection),
     baseline,
     thresholds: [
@@ -161,24 +255,40 @@ export function buildOverview(
     annotations,
     formatValue: compactMoney,
     // Detail near the reserve and the valleys matters more than the size
-    // of the year-end pile: log beyond ~the reserve.
-    scale: { kind: "symlog", constant: Math.max(1000, reserve) },
+    // of the year-end pile: log beyond ~the reserve. Round guides make
+    // the non-linear scale readable; the bounds move only by steps.
+    scale: { kind: "symlog", constant },
+    domain,
+    guides: overviewGuides(domain, reserve, constant),
     endBeat: horizonBeat(doc),
   };
 }
 
 // --- gesture effect ------------------------------------------------------
 
+export interface DragAnnotationOptions {
+  /**
+   * The gesture changes a debt: also say what happens to the debt and its
+   * interest, and judge the tone by the net (cash − debt), so paying a debt
+   * off sooner never reads as a loss.
+   */
+  debt?: boolean;
+  /** Interest of the debts after − before (negative = saved). */
+  interestDelta?: number;
+}
+
 export function dragAnnotation(
   doc: FinancialDocument,
   base: FinancialProjection,
   current: FinancialProjection,
+  options: DragAnnotationOptions = {},
 ): PlaylistDragAnnotation {
   const before = summarizeProjection(base);
   const after = summarizeProjection(current);
   const reserve = doc.minimumCashReserve;
   const minDelta = after.minimumCash - before.minimumCash;
   const finalDelta = after.finalCash - before.finalCash;
+  const debtDelta = after.finalDebt - before.finalDebt;
   const parts: string[] = [];
   if (Math.abs(minDelta) >= 0.5) {
     parts.push(
@@ -192,6 +302,18 @@ export function dragAnnotation(
   else if (before.minimumCash >= 0 && after.minimumCash < 0) parts.push("entras en rojo");
   else if (before.minimumCash >= reserve && after.minimumCash < reserve) parts.push("rompes tu reserva");
   else if (before.minimumCash < reserve && after.minimumCash >= reserve) parts.push("recuperas tu reserva");
+
+  if (options.debt) {
+    if (Math.abs(debtDelta) >= 0.5) {
+      parts.push(`deuda al horizonte ${formatSignedMoneyWhole(debtDelta)}`);
+    }
+    const interest = options.interestDelta ?? 0;
+    if (Math.abs(interest) >= 0.5) parts.push(`intereses ${formatSignedMoneyWhole(interest)}`);
+    // Net worth at the horizon: cash minus what is still owed.
+    const net = finalDelta - debtDelta;
+    const tone = net > 0.5 ? "positive" : net < -0.5 ? "negative" : "neutral";
+    return { text: parts.length > 0 ? parts.join(" · ") : "Sin efecto en tu caja", tone };
+  }
 
   const tone =
     minDelta > 0.5 || (Math.abs(minDelta) < 0.5 && finalDelta > 0.5)
@@ -214,8 +336,13 @@ const NO_MARKS: readonly number[] = [];
 
 function sameContent(a: PlaylistClipContent, b: PlaylistClipContent): boolean {
   if (!sameNumbers(a.marks ?? NO_MARKS, b.marks ?? NO_MARKS)) return false;
+  if (a.accent !== b.accent) return false;
   if (a.kind === "events" && b.kind === "events") {
-    return sameNumbers(a.beats, b.beats) && sameNumbers(a.values, b.values);
+    return (
+      a.extent === b.extent &&
+      sameNumbers(a.beats, b.beats) &&
+      sameNumbers(a.values, b.values)
+    );
   }
   if (a.kind === "level" && b.kind === "level") {
     return (
@@ -289,13 +416,21 @@ export function buildClipContents(
 
   const contents = new Map<string, PlaylistClipContent>();
   const scale = Math.log1p(maxMagnitude);
+  const itemById = new Map<string, FinancialItem>();
+  for (const item of doc.items) itemById.set(item.id, item);
   for (const [id, beats] of eventBeats) {
     const signed = eventSigned.get(id)!;
     const values = signed.map((v) => {
       const relative = scale > 0 ? Math.log1p(Math.abs(v)) / scale : 1;
       return Math.sign(v) * (0.18 + 0.82 * relative);
     });
-    contents.set(id, { kind: "events", beats, values });
+    const item = itemById.get(id);
+    const content: PlaylistClipContent = { kind: "events", beats, values };
+    // A one-day event is drawn a week wide so its name fits: its real day
+    // is the card, the rest a faint tag (the day reads without hover).
+    if (item && isPointItem(item)) content.extent = 1;
+    if (item && KIND_ACCENT[item.kind] !== "solid") content.accent = KIND_ACCENT[item.kind];
+    contents.set(id, content);
   }
   // A card's billing cuts ("la tarjeta como compás"): guide marks.
   const cutBeats = new Map<string, number[]>();
@@ -311,17 +446,22 @@ export function buildClipContents(
     let max = initial;
     for (const v of values) if (v > max) max = v;
     const marks = cutBeats.get(id);
+    const debtItem = itemById.get(id);
+    const accent = debtItem ? KIND_ACCENT[debtItem.kind] : "solid";
     if (max <= 0) {
       // A card with nothing owed still shows its cycles.
       if (marks && marks.length > 0) {
-        contents.set(id, { kind: "events", beats: [], values: [], marks });
+        const content: PlaylistClipContent = { kind: "events", beats: [], values: [], marks };
+        if (accent !== "solid") content.accent = accent;
+        contents.set(id, content);
       }
       continue;
     }
-    contents.set(
-      id,
-      marks ? { kind: "level", series: { initial, beats, values }, max, marks } : { kind: "level", series: { initial, beats, values }, max },
-    );
+    const content: PlaylistClipContent = marks
+      ? { kind: "level", series: { initial, beats, values }, max, marks }
+      : { kind: "level", series: { initial, beats, values }, max };
+    if (accent !== "solid") content.accent = accent;
+    contents.set(id, content);
   }
 
   for (const [id, content] of contents) {
@@ -344,6 +484,10 @@ export function describeItemAt(
   // A one-time event is a narrow card: just the amount, whole pesos (the
   // editor shows the cents), so it fits instead of being cut.
   const once = item.recurrence.frequency === "once";
+  // Figures that follow the playhead say which day they describe when it is
+  // not today ("Al 2 mar: debes $25,513"), next to "Deuda hoy" in the header.
+  const at = date === doc.startDate ? "" : `al ${formatDateShort(date)}: `;
+  const At = at ? `Al ${formatDateShort(date)}: ` : "";
   switch (item.kind) {
     case "income":
       return once
@@ -354,15 +498,16 @@ export function describeItemAt(
         ? `−${formatMoneyWhole(item.amount)}`
         : `−${formatMoney(item.amount)} ${freq}`;
     case "card-purchase": {
+      // An outflow too: "−", and the card it is charged to.
       const card = doc.items.find((candidate) => candidate.id === item.cardId);
       return card
-        ? `${formatMoney(item.amount)} → ${card.name}`
-        : `${formatMoney(item.amount)} (sin tarjeta)`;
+        ? `−${formatMoney(item.amount)} con ${card.name}`
+        : `−${formatMoney(item.amount)} (sin tarjeta)`;
     }
     case "loan": {
       const debt = debtAt.get(item.id);
       return debt !== undefined && debt > 0
-        ? `−${formatMoney(item.paymentAmount)} ${freq} · resta ${formatMoneyWhole(debt)}`
+        ? `−${formatMoney(item.paymentAmount)} ${freq} · ${at}resta ${formatMoneyWhole(debt)}`
         : `−${formatMoney(item.paymentAmount)} ${freq}`;
     }
     case "credit-card": {
@@ -375,10 +520,10 @@ export function describeItemAt(
           return `Totalero · pagas ${formatMoneyWhole(-point.cashDelta)} el ${formatDateShort(point.date)} · sin intereses`;
         }
         return debt > 0.5
-          ? `Totalero · debes ${formatMoneyWhole(debt)} · sin intereses`
+          ? `Totalero · ${at}debes ${formatMoneyWhole(debt)} · sin intereses`
           : "Totalero · sin saldo";
       }
-      if (debt <= 0.5) return `Liquidada · ${item.annualRate}%`;
+      if (debt <= 0.5) return `${At ? `${At}liquidada` : "Liquidada"} · tasa ${item.annualRate}%`;
       // Of a typical monthly payment, how much only feeds the interest
       // (a month of interest on today's balance, same 360-day basis).
       const payment = item.paymentAmount ?? item.minimumPayment;
@@ -391,7 +536,7 @@ export function describeItemAt(
             ? " · tu pago no cubre el interés"
             : ` · ${share}% de tu pago es interés`;
       }
-      return `Debes ${formatMoneyWhole(debt)}${interest} · ${item.annualRate}%`;
+      return `${At ? `${At}debes` : "Debes"} ${formatMoneyWhole(debt)}${interest} · tasa ${item.annualRate}%`;
     }
     case "installment-plan": {
       const monthly =
@@ -401,7 +546,8 @@ export function describeItemAt(
           ? Math.round(accountActivity(projection, item.id, doc.startDate, date).payments / monthly)
           : 0;
       const paid = Math.min(item.installmentsTotal, item.installmentsPaid + paidSince);
-      return `${formatMoney(monthly)}/mes · ${paid}/${item.installmentsTotal}`;
+      // A payment out of your cash every month: "−", and a unit on the count.
+      return `−${formatMoney(monthly)}/mes · ${at}${paid} de ${item.installmentsTotal} pagos`;
     }
   }
 }
@@ -410,6 +556,18 @@ export function describeItemAt(
 
 function sameMeta(a: PlaylistTrackMeta, b: PlaylistTrackMeta): boolean {
   return a.title === b.title && a.subtitle === b.subtitle && a.meter === b.meter;
+}
+
+// Weight of an item for naming its row: the largest yearly cash impact,
+// then the document order.
+function mainFirst(
+  items: readonly FinancialItem[],
+  impacts: ReadonlyMap<string, number>,
+): FinancialItem[] {
+  return items
+    .map((item, index) => ({ item, index, weight: Math.abs(impacts.get(item.id) ?? 0) }))
+    .sort((a, b) => b.weight - a.weight || a.index - b.index)
+    .map((entry) => entry.item);
 }
 
 /** Signed cash impact of every item over the projection. */
@@ -446,18 +604,15 @@ export function buildTrackMeta(
   }
 
   const trackImpact = new Map<string, number>();
-  let maxAbs = 0;
   for (const [trackId, items] of byTrack) {
     let sum = 0;
     for (const item of items) if (item.enabled !== false) sum += impacts.get(item.id) ?? 0;
     trackImpact.set(trackId, sum);
-    maxAbs = Math.max(maxAbs, Math.abs(sum));
   }
 
   const metas = new Map<string, PlaylistTrackMeta>();
   for (const [trackId, items] of byTrack) {
     const impact = trackImpact.get(trackId) ?? 0;
-    const meter = maxAbs > 0 ? Math.round((impact / maxAbs) * 1000) / 1000 : 0;
     let subtitle: string;
     const only = items.length === 1 ? items[0]! : null;
     if (only && only.enabled === false) {
@@ -477,10 +632,16 @@ export function buildTrackMeta(
     } else {
       subtitle = `${items.length} eventos · ${impact > 0 ? "+" : ""}${compactMoney(impact)}`;
     }
-    const meta: PlaylistTrackMeta = { subtitle, meter };
-    // "Línea de eventos" once an unnamed row holds two or more (one or none:
-    // the renderer's label formatting already says "Línea de evento").
-    if (autoRows.has(trackId) && items.length >= 2) meta.title = autoRowName(items.length);
+    // No meter: an unlabelled 3 px bar read as a fader (UX-44); the
+    // subtitle already says the row's weight in words.
+    const meta: PlaylistTrackMeta = { subtitle };
+    // A row the person never named is titled after what it holds, live
+    // (never stored): "Sueldo", "Pago Tarjeta Plata +1". Their own name
+    // always wins; an empty row stays "Línea de evento".
+    if (autoRows.has(trackId)) {
+      const title = derivedRowTitle(mainFirst(items, impacts).map((item) => item.name));
+      if (title !== null) meta.title = title;
+    }
     const old = previous.get(trackId);
     metas.set(trackId, old && sameMeta(old, meta) ? old : meta);
   }

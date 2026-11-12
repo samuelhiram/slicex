@@ -49,6 +49,7 @@ const TITLE_SIZE = 13;
 const TITLE_CHAR_PX = 7.8;
 const PIN_RADIUS = 3.5;
 const DOT_RADIUS = 4.5;
+const GUIDE_DOT_PX = 2;
 
 export const OVERVIEW_TONE_POSITIVE = 0;
 export const OVERVIEW_TONE_WARNING = 1;
@@ -128,6 +129,12 @@ export function computeOverviewScale(
   if (data.baseline) {
     dataMin = seriesMin(data.baseline, dataMin);
     dataMax = seriesMax(data.baseline, dataMax);
+  }
+  // A host domain (e.g. round steps with hysteresis) fixes the scale: small
+  // edits no longer move the whole curve. Never narrower than the data.
+  if (data.domain) {
+    dataMin = Math.min(dataMin, data.domain.min);
+    dataMax = Math.max(dataMax, data.domain.max);
   }
   let min = Math.min(dataMin, 0);
   let max = Math.max(dataMax, 0);
@@ -371,6 +378,21 @@ export function createOverviewLaneLayer(
         dashH(g, lane.x, right, y);
         g.stroke({ color: thresholdColor(threshold), width: 1, alpha: 0.7 });
       }
+      // Guides: faint dotted lines at the host's round values (their labels
+      // go with the other fixed labels, see drawFixedLabels).
+      const guides = frameData.guides;
+      if (guides && guides.length > 0) {
+        let drew = false;
+        for (let i = 0; i < guides.length; i += 1) {
+          const y = yLine(guides[i]!);
+          if (y < plotTop - 0.5 || y > plotBottom + 0.5) continue;
+          for (let x = lane.x; x < right; x += GUIDE_DOT_PX * 3) {
+            g.moveTo(x, y).lineTo(Math.min(x + GUIDE_DOT_PX, right), y);
+          }
+          drew = true;
+        }
+        if (drew) g.stroke({ color: COLORS.overviewZeroLine, width: 1, alpha: 0.75 });
+      }
       const maxTitleChars = Math.floor((head.width - 24) / TITLE_CHAR_PX);
       addText(text, truncate(frameData.title, maxTitleChars), 16, lane.y + 12, {
         size: TITLE_SIZE,
@@ -436,7 +458,8 @@ export function createOverviewLaneLayer(
           }
           g.lineTo(xOf(from), y).lineTo(xOf(to), y);
         });
-        g.stroke({ color: COLORS.overviewSecondary, width: 1, alpha: 0.45 });
+        // Legible on its own (the header cell names it "Deuda"): UX-11.
+        g.stroke({ color: COLORS.overviewSecondary, width: 1.25, alpha: 0.7 });
       }
     }
 
@@ -610,6 +633,20 @@ export function createOverviewLaneLayer(
       drawScaleLabel(g, text, format(scale.dataMax), right, topY);
       if (bottomY - topY >= 14) {
         drawScaleLabel(g, text, format(scale.dataMin), right, bottomY);
+      }
+      // Guide labels where they fit (never over another fixed label).
+      const guides = data.guides;
+      if (guides) {
+        for (let i = 0; i < guides.length; i += 1) {
+          const value = guides[i]!;
+          const lineY = yLine(value);
+          if (lineY < plotTop - 0.5 || lineY > plotBottom + 0.5) continue;
+          const label = format(value);
+          const y = clampNumber(lineY - 7, lane.y + 1, laneBottom - 15);
+          const width = label.length * LABEL_CHAR_PX + 8;
+          if (!isFree(right - 4 - width, y, width, 14)) continue;
+          drawScaleLabel(g, text, label, right, y);
+        }
       }
     }
   }

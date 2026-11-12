@@ -79,10 +79,47 @@ function balanceOf(item: FinancialItem): number | null {
   return null;
 }
 
+function roundCents(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/** What Rec assumed at load ("todo pasó como lo planeaste"); memoize per Rec. */
+export function recAssumed(rec: RecState, today: ISODate) {
+  return rollForward(rec.original, today);
+}
+
+/**
+ * Today's cash once the corrections are applied (UX-02):
+ * - with `cashOverride` (the "Saldo real hoy" typed), THAT is today's cash:
+ *   an absolute value, whatever was edited before (the header's "Liquidez
+ *   hoy" included) — it "manda sobre todo lo demás";
+ * - without it, the rows' corrections ("No pasó", "Otro monto") move the
+ *   CURRENT cash by their difference against what was assumed at load, so
+ *   edits made since are kept.
+ * Pure. `assumed` = `recAssumed(rec, today)` (pass it to skip one roll).
+ */
+export function recResultCash(
+  rec: RecState,
+  today: ISODate,
+  actuals: readonly ActualRecord[],
+  cashOverride: number | undefined,
+  currentCash: number,
+  assumed: ReturnType<typeof recAssumed> = recAssumed(rec, today),
+): number {
+  if (cashOverride !== undefined && Number.isFinite(cashOverride)) return roundCents(cashOverride);
+  if (actuals.length === 0) return currentCash;
+  const corrected = rollForward(rec.original, today, { actuals: [...actuals] });
+  const delta = corrected.doc.initialCash - assumed.doc.initialCash;
+  return Math.abs(delta) > 0.004 ? roundCents(currentCash + delta) : currentCash;
+}
+
 /**
  * Applies the person's corrections ("no pasó", "otro monto", real balance)
- * to the CURRENT plan as deltas against what was assumed at load, so edits
- * made since are kept. Returns the corrected ledger entries.
+ * to the CURRENT plan. Today's cash: see `recResultCash` (the real balance
+ * typed is absolute; row corrections are deltas). Debts (card / loan
+ * balances, MSI counters) move by their difference against what was
+ * assumed at load, so edits made since are kept. Returns the corrected
+ * ledger entries. Several bridge writes: wrap the call in ONE undo step.
  */
 export function applyRecCorrections(
   bridge: FinancialBridgeApi,
@@ -91,14 +128,12 @@ export function applyRecCorrections(
   actuals: ActualRecord[],
   cashOverride: number | undefined,
 ): LedgerEntry[] {
-  const assumed = rollForward(rec.original, today);
+  const assumed = recAssumed(rec, today);
   const corrected = rollForward(rec.original, today, { actuals, cashOverride });
 
-  const cashDelta = corrected.doc.initialCash - assumed.doc.initialCash;
-  if (Math.abs(cashDelta) > 0.004) {
-    const current = bridge.getDocument().initialCash;
-    bridge.setInitialCash(Math.round((current + cashDelta) * 100) / 100);
-  }
+  const current = bridge.getDocument().initialCash;
+  const nextCash = recResultCash(rec, today, actuals, cashOverride, current, assumed);
+  if (Math.abs(nextCash - current) > 0.004) bridge.setInitialCash(nextCash);
 
   const assumedById = new Map<string, FinancialItem>();
   for (const item of assumed.doc.items) assumedById.set(item.id, item);

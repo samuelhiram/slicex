@@ -7,6 +7,11 @@
 //     something else does (the anchor moved);
 //   - a window resize closes (the anchor moved);
 //   - Escape closes when asked (menus with their own key handling skip it).
+//     This Escape is a plain `window` listener (bubble, not consumed): a
+//     focused field still gets its own Escape first (MetricHelp opens on the
+//     focus of "Liquidez hoy", whose Escape reverts the value). Surfaces
+//     built on `useOverlay` use the Escape stack instead (use-overlay.ts),
+//     whose top layer, when there is one, takes the key before this.
 import * as React from "react";
 
 type OwnedRef = React.RefObject<HTMLElement | null>;
@@ -23,6 +28,10 @@ export function isInsideAny(target: EventTarget | null, refs: readonly OwnedRef[
 export interface DismissOptions {
   /** Close on Escape (default false). */
   escape?: boolean;
+  /** Close on an outside scroll (default true; false for panels / dialogs). */
+  scroll?: boolean;
+  /** Close on a window resize (default true; false for panels / dialogs). */
+  resize?: boolean;
 }
 
 /**
@@ -39,6 +48,8 @@ export function useDismiss(
   const latest = React.useRef({ refs, onDismiss });
   latest.current = { refs, onDismiss };
   const escape = options.escape === true;
+  const scroll = options.scroll !== false;
+  const resize = options.resize !== false;
 
   React.useEffect(() => {
     if (!open) return undefined;
@@ -50,14 +61,14 @@ export function useDismiss(
       if (event.key === "Escape") dismiss();
     };
     window.addEventListener("pointerdown", outside, true);
-    window.addEventListener("scroll", outside, true);
-    window.addEventListener("resize", dismiss);
+    if (scroll) window.addEventListener("scroll", outside, true);
+    if (resize) window.addEventListener("resize", dismiss);
     if (escape) window.addEventListener("keydown", key);
     return () => {
       window.removeEventListener("pointerdown", outside, true);
-      window.removeEventListener("scroll", outside, true);
-      window.removeEventListener("resize", dismiss);
+      if (scroll) window.removeEventListener("scroll", outside, true);
+      if (resize) window.removeEventListener("resize", dismiss);
       if (escape) window.removeEventListener("keydown", key);
     };
-  }, [open, escape]);
+  }, [open, escape, scroll, resize]);
 }

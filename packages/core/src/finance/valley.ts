@@ -61,6 +61,31 @@ export interface ValleyFix {
   /** Min cash in the same window after the fix. */
   after: number;
   afterDate: ISODate;
+  /**
+   * What the fix does to the cash at the horizon (patched finalCash − base
+   * finalCash, rounded): a payment moved inside the plan is ~0, paying a
+   * card's minimum is negative (more interest).
+   */
+  finalCashDelta: number;
+  /**
+   * Debt left at the horizon, patched − base (rounded). Paying a card's
+   * minimum keeps cash (+) but leaves more debt (+): read both.
+   */
+  finalDebtDelta: number;
+  /** Days the payment in the valley moves LATER (0 = not moved). */
+  delayDays: number;
+  /**
+   * The fix pays a debt (a loan) after its due date: in real life that means
+   * late fees and the credit bureau. Never presented as the best option.
+   */
+  delaysDebt: boolean;
+  /** Extra card interest over the horizon (patched − base, ≥ 0; 0 when none). */
+  extraInterest: number;
+  /**
+   * What the fix costs, in Spanish, or null when nothing ("Pagarías 11 días
+   * después de tu fecha de pago: puede generar intereses moratorios…").
+   */
+  warning: string | null;
 }
 
 const MAX_CAUSES = 6;
@@ -380,6 +405,29 @@ function candidateFor(
 
 const OUTCOME_RANK: Readonly<Record<ValleyFix["outcome"], number>> = { resolves: 0, "exits-red": 1, improves: 2 };
 
+/** Card interest posted to `accountId` over the whole projection. */
+function interestPosted(projection: FinancialProjection, accountId: string): number {
+  let total = 0;
+  for (const point of projection.points) {
+    if (point.type === "credit-card-interest" && point.accountId === accountId) total += point.debtDelta;
+  }
+  return total;
+}
+
+/** The cost of a fix in words (UX-06), or null. */
+function fixWarning(item: FinancialItem, delayDays: number, extraInterest: number): string | null {
+  if (delayDays > 0 && item.kind === "loan") {
+    return `Pagarías ${delayDays} ${delayDays === 1 ? "día" : "días"} después de tu fecha de pago: puede generar intereses moratorios y afectar tu historial de crédito.`;
+  }
+  if (delayDays > 0) {
+    return `Lo pagarías ${delayDays} ${delayDays === 1 ? "día" : "días"} después: revisa que no tenga recargo.`;
+  }
+  if (extraInterest >= 0.5) {
+    return `Pagarías ${formatPesos(extraInterest)} más de intereses en tu horizonte.`;
+  }
+  return null;
+}
+
 /**
  * Concrete item patches that lift the valley of `warning` (a warning of
  * `projectFinancialDocument(doc)`), best first, at most `limit` (default 3).
@@ -403,6 +451,12 @@ const OUTCOME_RANK: Readonly<Record<ValleyFix["outcome"], number>> = { resolves:
  * up; anything else is dropped, and so is any fix that lowers the minimum
  * cash of the whole projection. Ordered resolves > exits-red > improves,
  * then by `after` (higher first), then by the smaller date shift.
+ *
+ * Every fix also says what it costs (UX-06): `finalCashDelta` (horizon),
+ * `delayDays` / `delaysDebt` (a loan paid after its due date) and
+ * `extraInterest` (a card paying only its minimum), plus `warning`, the
+ * same in Spanish. A host must never present a `delaysDebt` fix as the
+ * recommended one.
  */
 export function suggestValleyFixes(
   doc: FinancialDocument,
@@ -446,6 +500,11 @@ export function suggestValleyFixes(
     else if (before < 0 && after.cash >= 0) outcome = "exits-red";
     else if (candidate.strict) continue;
     else outcome = "improves";
+    const delayDays = candidate.shift > 0 ? candidate.shift : 0;
+    const extraInterest =
+      candidate.item.kind === "credit-card"
+        ? Math.max(0, roundMoney(interestPosted(projection, candidate.item.id) - interestPosted(base, candidate.item.id)))
+        : 0;
     fixes.push({
       fix: {
         id: candidate.id,
@@ -456,6 +515,12 @@ export function suggestValleyFixes(
         before,
         after: after.cash,
         afterDate: after.date,
+        finalCashDelta: roundMoney(projection.finalCash - base.finalCash),
+        finalDebtDelta: roundMoney(projection.finalDebt - base.finalDebt),
+        delayDays,
+        delaysDebt: delayDays > 0 && candidate.item.kind === "loan",
+        extraInterest,
+        warning: fixWarning(candidate.item, delayDays, extraInterest),
       },
       shift: candidate.shift,
     });

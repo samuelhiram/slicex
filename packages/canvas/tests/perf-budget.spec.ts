@@ -164,6 +164,25 @@ describe("perf budget — hot-path actions are idempotent", () => {
     expect(count).toBe(0);
   });
 
+  it("SET_HOVER_TIME with the same cell (hover-time indicator)", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setViewportSize(1200, 700);
+    core.setHoverTime(12.2);
+    const before = core.getState();
+    let count = 0;
+    const sub = core.subscribe(() => {
+      count += 1;
+    });
+    for (let i = 0; i < 500; i += 1) {
+      // Every x inside the same beat cell is the same cell.
+      core.setHoverTime(12 + (i % 10) / 10);
+    }
+    sub.unsubscribe();
+    expect(count).toBe(0);
+    expect(core.getState()).toBe(before);
+    expect(core.getState().clips).toBe(before.clips);
+  });
+
   it("SET_PLAY_POSITION with the same time", () => {
     const core = createPlaylistCore(createDemoPlaylistState());
     core.setPlayPosition(12);

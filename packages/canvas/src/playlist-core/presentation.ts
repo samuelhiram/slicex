@@ -2,6 +2,7 @@ import {
   DEFAULT_PLAYLIST_METRICS,
   type PlaylistAutomationPoint,
   type PlaylistClip,
+  type PlaylistDragPreview,
   type PlaylistMarker,
   type PlaylistMetrics,
   type PlaylistPoint,
@@ -275,10 +276,12 @@ const EMPTY_DRAG_PREVIEW_VIEW: PlaylistDragPreviewView = {
 
 // Floating tooltip in screen coords. The renderer pill consumes this verbatim.
 export interface PlaylistTooltipView {
-  kind: "time" | "ratio" | "offset";
+  kind: "time" | "ratio" | "offset" | "clip" | "hint";
   text: string;
   // Beat of a "time" tooltip (null when it has none).
   time: number | null;
+  // Clip of a "clip" tooltip (null / absent otherwise).
+  clipId?: string | null;
   x: number;
   y: number;
 }
@@ -588,10 +591,13 @@ function buildTrackRow(
     width: buttonSize,
     height: buttonSize,
   };
+  // Only the header column's divisor resizes the row: the horizontal grid
+  // lines over the timeline are not handles (they would steal presses on the
+  // clips' bottom edge and the background).
   const resizeHandleRect = {
     x: 0,
     y: rowTop + height - metrics.trackResizeHandleSize,
-    width: state.viewport.width,
+    width: metrics.trackHeaderWidth,
     height: metrics.trackResizeHandleSize * 2,
   };
   const flags = flagsByTrackId.get(track.id) ?? {
@@ -761,7 +767,19 @@ function createDragPreviewView(
   metrics: PlaylistMetrics,
   cache: TrackLayoutCache,
 ): PlaylistDragPreviewView | null {
-  const preview = state.dragPreview;
+  // The "what goes here?" menu shows the spot it would fill as a ghost.
+  const menu = state.contextMenu;
+  const preview: PlaylistDragPreview | null =
+    state.dragPreview ??
+    (menu && menu.kind === "create"
+      ? {
+          kind: "clip-create",
+          trackIndex: menu.trackIndex,
+          lane: menu.lane,
+          previewStart: menu.time,
+          previewDuration: Math.max(menu.duration ?? 1, metrics.minClipDuration),
+        }
+      : null);
   if (!preview) return null;
   const pxPerBeat = state.viewport.pxPerBeat;
   const headerOffset = metrics.trackHeaderWidth - state.viewport.scrollX;
@@ -842,7 +860,7 @@ function createDragPreviewView(
 
 function createTooltipView(state: PlaylistState): PlaylistTooltipView | null {
   if (!state.tooltip) return null;
-  return {
+  const view: PlaylistTooltipView = {
     kind: state.tooltip.kind,
     text: state.tooltip.text,
     time: state.tooltip.time ?? null,
@@ -851,6 +869,8 @@ function createTooltipView(state: PlaylistState): PlaylistTooltipView | null {
     x: state.tooltip.anchor.x,
     y: state.tooltip.anchor.y,
   };
+  if (state.tooltip.clipId !== undefined) view.clipId = state.tooltip.clipId;
+  return view;
 }
 
 function createSnapIndicatorX(
@@ -1198,6 +1218,27 @@ export function createClipExtendHandle(): PlaylistClipExtendHandle {
  * host's veto, e.g. a one-time event whose width means nothing). O(1).
  * Fills and returns `out` when given (otherwise a new object).
  */
+/** Px from the visible left edge of a long clip to its level grip. */
+export const CLIP_LEVEL_GRIP_INSET = 40;
+
+/**
+ * Centre x (screen) of a clip's level grip on its top edge: the middle of a
+ * short clip, else CLIP_LEVEL_GRIP_INSET px into its VISIBLE part — a clip
+ * longer than the screen keeps a reachable grip (its own centre may be
+ * off-screen), clear of the extend grabber at the centre of the view.
+ * Pure arithmetic, O(1). Shared by the hit-test and the renderer.
+ */
+export function getClipLevelGripX(
+  view: PlaylistClipPresentation,
+  metrics: PlaylistMetrics,
+  viewportWidth: number,
+): number {
+  const left = Math.max(view.rect.x, metrics.trackHeaderWidth);
+  const right = Math.min(view.rect.x + view.rect.width, viewportWidth - metrics.scrollbarSize);
+  const width = Math.max(0, right - left);
+  return left + Math.min(width / 2, CLIP_LEVEL_GRIP_INSET);
+}
+
 export function getClipExtendHandle(
   presentation: PlaylistPresentation,
   canExtend?: (clipId: string) => boolean,

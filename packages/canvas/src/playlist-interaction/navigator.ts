@@ -17,6 +17,16 @@
 // motion, targets apply at once and momentum is skipped.
 import type { PlaylistCore } from "../playlist-core";
 
+// The user asked the system for less motion. Shared by the controller's
+// navigator and hosts that animate on their own (e.g. a morphing curve).
+export function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
 export interface NavigatorScheduler {
   request: (callback: (time: number) => void) => number;
   cancel: (id: number) => void;

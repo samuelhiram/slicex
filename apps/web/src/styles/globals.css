@@ -86,6 +86,14 @@ body,
   --fin-negative-text: #b91c1c;
   --fin-warning-text: #92400e;
 
+  /* UX-audit: H — placeholders read as hints, not values, and still meet
+     4.5:1 on every field surface (white 5.5, --surface-2 5.0, --surface-3
+     4.6). One focus ring for every control, fields included (UX-63):
+     2 px, ≥ 3:1 on its surfaces. */
+  --placeholder: #646978;
+  --focus-ring-color: var(--accent);
+  --focus-ring: 2px solid var(--focus-ring-color);
+
   --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 0 0 1px rgba(16, 24, 40, 0.03);
   /* Cards: soft and diffuse, never a hard outline. */
   --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.06);
@@ -138,6 +146,11 @@ body,
   --fin-warning-soft: rgba(245, 165, 36, 0.13);
   --fin-negative-text: var(--fin-negative);
   --fin-warning-text: var(--fin-warning);
+
+  /* UX-audit: H — 6.3:1 on --surface, 5.8 on --surface-2, 5.1 on --surface-3. */
+  --placeholder: #9696a1;
+  --focus-ring-color: var(--accent);
+  --focus-ring: 2px solid var(--focus-ring-color);
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.35),
@@ -776,12 +789,42 @@ button {
   gap: 8px;
 }
 
+/* UX-audit: H — one toggle for both states (UX-27): it stays put (absolute,
+   top right of the rail), the panel holds the header + body. */
+.playlist-inspector__panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.playlist-inspector__panel:focus {
+  outline: none;
+}
+
+.playlist-inspector__panel .playlist-inspector__header {
+  padding-right: 56px;
+}
+
+.playlist-inspector__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.playlist-inspector__toggle {
+  z-index: 1;
+}
+
 /* --- Modal (generic + the financial editor) ------------------------------ */
 .playlist-shell__modal-overlay {
   position: absolute;
   inset: 0;
   z-index: 20;
   display: grid;
+  /* UX-audit: H (UX-29) — a bounded track (not "auto"): a dialog's
+     max-width: 100% then means "the overlay", for every dialog. */
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   padding: 24px;
   background: var(--overlay);
@@ -789,8 +832,8 @@ button {
 }
 
 .playlist-shell__modal {
-  min-width: 320px;
-  max-width: min(560px, 92vw);
+  min-width: min(320px, 100%);
+  max-width: min(560px, 100%);
   max-height: calc(100% - 32px);
   overflow: auto;
   border: 1px solid var(--line);
@@ -917,6 +960,9 @@ button {
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
+  /* Clipped but never a scroll container: focus() or a layout change can't
+     scroll it (and fire a scroll that closes its menus). */
+  overflow: clip;
 }
 
 .fin-summary__brand {
@@ -924,7 +970,7 @@ button {
   flex: none;
   align-items: center;
   gap: 9px;
-  padding-right: 20px;
+  padding-right: 12px;
   border-right: 1px solid var(--line);
   height: 32px;
 }
@@ -945,23 +991,28 @@ button {
   letter-spacing: -0.02em;
 }
 
+/* UX-15: the numbers wrap instead of scrolling. One line is visible; a
+   number that does not fit moves WHOLE to the clipped second line (never
+   cut, never behind a fade) and "Más cifras" offers it. The row is exactly
+   one metric tall. */
 .fin-summary__metrics {
   display: flex;
   flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-content: flex-start;
   align-items: center;
-  gap: 4px;
+  /* 2 px above / below the line: room for focus rings; the row gap keeps
+     the second line fully out of the clipped box. */
+  gap: 8px 4px;
   min-width: 0;
-  /* The fade covers this padding when everything fits (invisible), and
-     the clipped metric when it does not. */
-  padding-right: 28px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  height: 56px;
+  padding: 2px 0;
+  overflow: hidden;
+  overflow: clip;
 }
 
-.fin-summary__metrics::-webkit-scrollbar {
-  display: none;
+.fin-summary__metrics > [data-overflow="true"] {
+  visibility: hidden;
 }
 
 .fin-summary__metric {
@@ -1075,19 +1126,22 @@ button {
   letter-spacing: 0;
 }
 
+/* UX-59: figures use the *-text tones (≥ 5.5:1 in light even on hover). */
 .fin-summary__metric[data-state="low"] .fin-summary__value {
-  color: var(--fin-warning);
+  color: var(--fin-warning-text);
 }
 
 .fin-summary__metric[data-state="negative"] .fin-summary__value {
-  color: var(--fin-negative);
+  color: var(--fin-negative-text);
 }
 
+/* UX-18: editable at rest — a dashed underline and a pencil, inside the
+   tinted "Punto de partida" group, so they never look like "Deuda hoy". */
 .fin-summary__input {
   width: 104px;
-  padding: 0;
+  padding: 0 1px;
   border: 0;
-  border-bottom: 1px dashed transparent;
+  border-bottom: 1px dashed var(--muted);
   border-radius: 0;
   background: transparent;
   color: var(--text);
@@ -1100,13 +1154,17 @@ button {
 }
 
 .fin-summary__input:hover {
-  border-bottom-color: var(--line-strong);
+  border-bottom-style: solid;
+  border-bottom-color: var(--text);
 }
 
+/* UX-63: the shared ring (2 px), not a 1 px underline. */
 .fin-summary__input:focus,
 .fin-summary__input:focus-visible {
-  outline: none;
-  border-bottom: 1px solid var(--accent);
+  outline: var(--focus-ring);
+  outline-offset: 0;
+  border-bottom-color: transparent;
+  border-radius: 4px;
 }
 
 /* Not a valid amount (yet): leaving the field puts the value back. */
@@ -1296,7 +1354,8 @@ button.fin-summary__chip:hover,
   font-size: 12px;
   line-height: 1.45;
   white-space: normal;
-  pointer-events: none;
+  /* UX-56 / WCAG 1.4.13: the card can be hovered (MetricHelp keeps it
+     open while the pointer is on it; leaving hides it after 300 ms). */
 }
 
 .fin-help__title {
@@ -1332,6 +1391,424 @@ button.fin-summary__chip:hover,
   font-size: 12px;
   line-height: 1.4;
   white-space: normal;
+}
+
+/* UX-audit: H — header (FinancialSummaryBar.tsx): plan menu (UX-48),
+   verdict (UX-14/19), exclusions (UX-03), numbers by priority + "Más
+   cifras" (UX-15), editable starting point + its visible error (UX-18),
+   branch strip (UX-19). */
+
+/* "Mi plan ▾": the brand is the plan menu. */
+.fin-plan__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  margin-left: -6px;
+  padding: 0 8px 0 6px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fin-plan__trigger:hover,
+.fin-plan__trigger[aria-expanded="true"] {
+  background: var(--hover);
+}
+
+.fin-plan__chevron,
+.fin-summary__more svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fin-plan__chevron {
+  color: var(--muted);
+}
+
+.fin-plan__menu {
+  min-width: min(300px, calc(100vw - 16px));
+}
+
+.fin-plan__item[aria-disabled="true"] {
+  cursor: default;
+}
+
+.fin-plan__item[aria-disabled="true"]:hover {
+  background: transparent;
+}
+
+.fin-plan__item[aria-disabled="true"] .fin-new__label {
+  color: var(--muted);
+}
+
+.fin-plan__item[data-danger="true"] .fin-new__label {
+  color: var(--fin-negative-text);
+}
+
+/* The verdict: first, largest, never clipped; the alerts ride with it. */
+.fin-verdict {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.fin-verdict__main {
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  min-width: 0;
+  height: 48px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fin-verdict__main:hover {
+  background: var(--hover);
+}
+
+.fin-verdict__title {
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+}
+
+.fin-verdict__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--fin-positive);
+  vertical-align: 2px;
+}
+
+.fin-verdict[data-tone="low"] .fin-verdict__dot {
+  background: var(--fin-warning);
+}
+
+.fin-verdict[data-tone="negative"] .fin-verdict__dot {
+  background: var(--fin-negative);
+}
+
+.fin-verdict[data-tone="low"] .fin-verdict__title {
+  color: var(--fin-warning-text);
+}
+
+.fin-verdict[data-tone="negative"] .fin-verdict__title {
+  color: var(--fin-negative-text);
+}
+
+.fin-verdict__tag {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.fin-verdict__detail {
+  overflow: hidden;
+  padding-left: 15px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+}
+
+/* "Sin alertas": the same button, inert-looking. */
+.fin-summary__chip[aria-disabled="true"] {
+  cursor: default;
+}
+
+button.fin-summary__chip[aria-disabled="true"]:hover {
+  box-shadow: none;
+}
+
+/* What is left out of the calculation (UX-03): a dashed "filter" chip. */
+.fin-exclusion {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 3px 0 10px;
+  border: 1px dashed var(--muted);
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fin-exclusion svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.fin-exclusion__text {
+  margin-right: 2px;
+}
+
+.fin-exclusion__button {
+  height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fin-exclusion__button:hover {
+  background: var(--surface-3);
+}
+
+.fin-summary__sim {
+  font-weight: 500;
+  text-decoration: none;
+}
+
+/* The starting point (editable): one tinted group. */
+.fin-summary__start {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 52px;
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+
+.fin-summary__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fin-summary__pencil {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Context (Al horizonte, Deuda hoy, Próximo pago): less weight. Click
+   shows / hides what the number means. */
+.fin-summary__metric--context {
+  cursor: pointer;
+}
+
+.fin-summary__metric--context:hover {
+  background: var(--hover);
+}
+
+.fin-summary__metric--context .fin-summary__value {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* "Más cifras": the numbers that do not fit, one click away. */
+.fin-summary__more {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fin-summary__more:hover,
+.fin-summary__more[aria-expanded="true"] {
+  background: var(--surface-3);
+}
+
+.fin-summary__more-count {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.fin-more {
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.fin-more__list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.fin-more__start {
+  display: flex;
+  flex-wrap: wrap;
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+
+.fin-more__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 0 10px;
+}
+
+.fin-more__label {
+  grid-column: 1;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.fin-more__value {
+  grid-column: 1;
+  margin: 0;
+  white-space: normal;
+}
+
+.fin-more__action {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  margin: 0;
+}
+
+.fin-more__action .fin-button {
+  height: 30px;
+}
+
+.fin-more__row[data-state="low"] .fin-summary__value {
+  color: var(--fin-warning-text);
+}
+
+.fin-more__row[data-state="negative"] .fin-summary__value {
+  color: var(--fin-negative-text);
+}
+
+/* The alerts' note sits outside the role="menu" (UX-57). */
+.fin-alerts [role="menu"] {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* An invalid amount says why, in sight, under the field (UX-18). */
+.fin-inline-error {
+  position: fixed;
+  z-index: 32;
+  display: grid;
+  gap: 2px;
+  max-width: min(300px, calc(100vw - 16px));
+  padding: 6px 10px;
+  border: 1px solid var(--fin-negative);
+  border-radius: 10px;
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.fin-inline-error__text {
+  color: var(--fin-negative-text);
+  font-weight: 600;
+}
+
+.fin-inline-error__hint {
+  color: var(--muted);
+}
+
+/* Outside the main plan (UX-19): a persistent strip under the header. */
+.fin-branch-strip {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 6px 4px 14px;
+  border-radius: var(--radius-card);
+  background: var(--accent-soft);
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.fin-branch-strip svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.fin-branch-strip__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.fin-branch-strip .fin-button {
+  flex: none;
+  height: 30px;
+}
+
+/* Narrow: the name and "Volver" stay; the explanation gives way. */
+@media (max-width: 720px) {
+  .fin-branch-strip__note {
+    display: none;
+  }
+
+  .fin-branch-strip {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .fin-branch-strip__text {
+    flex-basis: 140px;
+  }
 }
 
 /* "Nuevo" menu */
@@ -1562,6 +2039,110 @@ button.fin-summary__chip:hover,
   height: 32px;
 }
 
+/* UX-audit: C — "Comparar y pagar deudas" (UX-47): open, the rail is a
+   column BESIDE the stage that pushes the canvas (the renderer's
+   ResizeObserver follows; overlays stay aligned, they live in the stage);
+   on phones it covers the stage instead. Its title and sections are
+   headings (UX-58). */
+.playlist-shell__workspace {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.playlist-shell__workspace > .playlist-shell__stage {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.playlist-shell__side-slot {
+  display: flex;
+  flex: none;
+  min-height: 0;
+}
+
+.playlist-shell__side-slot:empty {
+  display: none;
+}
+
+.playlist-shell--finance .fin-side.fin-side--docked {
+  position: relative;
+  top: auto;
+  bottom: auto;
+  left: auto;
+  z-index: auto;
+  width: 340px;
+  height: 100%;
+  box-shadow: none;
+}
+
+.fin-side__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.fin-side__close svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.fin-side__tab[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The task name wraps in two short lines: the lane's title keeps its room. */
+.playlist-shell--finance .fin-side__tab {
+  height: auto;
+  min-height: 28px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 10px;
+  text-align: left;
+}
+
+.playlist-shell--finance .fin-side__tab-label {
+  max-width: 96px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.fin-side--docked .fin-section__toggle {
+  padding: 0 12px;
+}
+
+.fin-side--docked .fin-section__body {
+  padding: 2px 12px 16px;
+}
+
+.fin-section__heading {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font: inherit;
+}
+
+@media (max-width: 720px) {
+  .playlist-shell__side-slot {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 9;
+    width: min(100%, 360px);
+  }
+
+  .playlist-shell--finance .fin-side.fin-side--docked {
+    width: 100%;
+    box-shadow: var(--shadow-pop);
+  }
+}
+
 /* --- Collapsible sections + tables --------------------------------------- */
 .fin-section {
   border-bottom: 1px solid var(--line);
@@ -1734,6 +2315,59 @@ button.fin-summary__chip:hover,
 
 .fin-panel__button:hover {
   background: var(--hover);
+}
+
+/* UX-audit: C — the rail's one primary action per section (UX-21 / UX-55 /
+   UX-62), the trial comparison and today's avalanche payment. */
+.fin-panel__button--primary {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-weight: 600;
+}
+
+.fin-panel__button--primary:hover {
+  background: var(--ink-hover);
+}
+
+.fin-debt-action {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  margin: 8px 0 12px;
+}
+
+.fin-debt-action .fin-panel__note {
+  margin: 0;
+}
+
+.fin-scenario__compare {
+  margin-top: 10px;
+}
+
+.fin-scenario__select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fin-scenario__select select {
+  height: 30px;
+  padding: 0 26px 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface) var(--select-chevron) no-repeat right 8px center;
+  color: var(--text);
+  font: inherit;
+  appearance: none;
+}
+
+.fin-table th[scope="row"] {
+  font-weight: 500;
+  text-align: left;
 }
 
 /* --- Item editor (reuses .playlist-shell__modal*) ------------------------ */
@@ -2316,6 +2950,351 @@ label.fin-ends__option {
   background: var(--fin-negative-soft);
 }
 
+/* UX-audit: F — item editor + onboarding (FinancialEditorModal.tsx,
+   Onboarding.tsx): title and actions always in view while the body scrolls
+   (UX-36), help under fields (UX-59), the debt check lines (UX-01 / UX-08 /
+   UX-28), "Crear tarjeta…" (UX-24), the type switch (UX-31), the unsaved-
+   changes question (UX-51) and the onboarding's review step (UX-12). */
+/* Sized on the viewport, not on the overlay's auto grid track (a % there
+   resolves against the dialog's own width and never shrinks it). */
+.playlist-shell__modal.fin-editor,
+.playlist-shell__modal.fin-onboarding {
+  min-width: min(320px, calc(100vw - 16px));
+  max-width: min(560px, calc(100vw - 16px));
+}
+
+.playlist-shell__modal.fin-editor {
+  width: min(520px, calc(100vw - 16px));
+}
+
+.playlist-shell__modal.fin-onboarding {
+  width: min(560px, calc(100vw - 16px));
+}
+
+.fin-editor .fin-editor__header,
+.fin-onboarding .fin-onboarding__header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: 10px;
+  background: var(--raised);
+}
+
+h2.fin-editor__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+h3.fin-editor__section-title {
+  margin-top: 0;
+}
+
+.fin-editor .fin-editor__actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: grid;
+  gap: 8px;
+  background: var(--raised);
+}
+
+.fin-onboarding .fin-onboarding__actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  background: var(--raised);
+}
+
+.fin-editor__actions .fin-editor__error {
+  min-height: 0;
+  margin: 0;
+}
+
+.fin-editor__actions .fin-editor__error:empty {
+  display: none;
+}
+
+.fin-editor__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.fin-editor__field-label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fin-editor__field--muted input[type="text"] {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.fin-editor__link {
+  justify-self: start;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.fin-editor__link:hover {
+  color: var(--accent-hover);
+}
+
+.fin-editor__header .fin-editor__link {
+  flex: none;
+}
+
+.fin-editor__button--small {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.fin-editor__payday {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.fin-editor .fin-editor__payday select {
+  width: auto;
+}
+
+.fin-editor__calc {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.fin-editor__check-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.fin-editor__check-line[data-tone="positive"] {
+  color: var(--fin-positive);
+}
+
+.fin-editor__check-line[data-tone="warning"],
+.fin-editor__kind-confirm,
+.fin-editor__confirm,
+.fin-onboarding__verdict[data-tone="warning"] {
+  background: var(--fin-warning-soft);
+  color: var(--fin-warning-text);
+}
+
+.fin-editor__kind-confirm,
+.fin-editor__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.fin-editor__endcut {
+  gap: 12px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.fin-newcard {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.fin-newcard__title {
+  padding: 0 4px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fin-newcard__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.fin-newcard__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Onboarding: a day select per row (THE day control), "+ otra fila", the
+   debts block and the review step. */
+.fin-onboarding .fin-onboarding__row {
+  grid-template-columns: minmax(0, 1fr) 120px 104px;
+}
+
+.fin-onboarding__row .fin-editor__field-error,
+.fin-onboarding__debt .fin-editor__field-error {
+  grid-column: 1 / -1;
+}
+
+.fin-onboarding__debt {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+  padding-bottom: 6px;
+  font-size: 12px;
+}
+
+.fin-onboarding__debt > :nth-child(1),
+.fin-onboarding__debt > :nth-child(2) {
+  grid-column: span 3;
+}
+
+.fin-onboarding__debt > :nth-child(3),
+.fin-onboarding__debt > :nth-child(4),
+.fin-onboarding__debt > :nth-child(5) {
+  grid-column: span 2;
+}
+
+.fin-onboarding__debt-note {
+  align-self: center;
+  color: var(--muted);
+}
+
+.fin-onboarding__more {
+  margin-top: 8px;
+}
+
+.fin-onboarding__review-title {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.fin-onboarding__summary {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 14px;
+  padding-left: 18px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.fin-onboarding__reserve {
+  max-width: 280px;
+  margin-bottom: 14px;
+}
+
+.fin-onboarding__warn {
+  color: var(--fin-warning-text);
+}
+
+.fin-onboarding__suggestions {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+
+.fin-onboarding__suggestion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.fin-onboarding__why,
+.fin-onboarding__suggestion .fin-editor__field-error {
+  grid-column: 1 / -1;
+}
+
+.fin-onboarding__suggestion .fin-editor__check {
+  white-space: normal;
+}
+
+/* Wrapped on a phone, the main action stays on the right. */
+.fin-editor__buttons .fin-editor__button--primary {
+  margin-left: auto;
+}
+
+.fin-onboarding__amount {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+
+.fin-onboarding__verdict {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+@media (max-width: 480px) {
+  .fin-editor .fin-editor__grid,
+  .fin-editor .fin-editor__when,
+  .fin-newcard__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The expense's name gets the whole row (UX-36). */
+  .fin-onboarding .fin-onboarding__row {
+    grid-template-columns: minmax(0, 1fr) 104px;
+  }
+
+  .fin-onboarding__row .fin-onboarding__name {
+    grid-column: 1 / -1;
+  }
+
+  .fin-onboarding__debt > :nth-child(n) {
+    grid-column: 1 / -1;
+  }
+
+  .fin-onboarding__suggestion {
+    grid-template-columns: minmax(0, 1fr) 112px;
+  }
+}
+
+
 /* ==========================================================================
    Waves 2–4: valleys, futures, command bar, peeks, banners, Rec,
    onboarding, statements
@@ -2495,6 +3474,61 @@ kbd {
 
 .fin-valley__hint {
   margin-top: 10px;
+}
+
+/* UX-audit: C — each fix says what it costs (UX-06), the fix in view is
+   marked while its what-if is on the lane, "Dejar abierta" (UX-50). */
+.fin-valley__title:focus {
+  outline: none;
+}
+
+.fin-valley__title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.fin-valley__fix[data-in-view="true"] {
+  border-color: var(--accent);
+}
+
+.fin-valley__fix[data-risk="debt"] {
+  border-color: var(--fin-warning);
+}
+
+.fin-valley__fix-cost {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-valley__fix-warning {
+  margin-top: 2px;
+  color: var(--fin-warning-text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.fin-valley__effect {
+  margin: 8px 2px 0;
+}
+
+.fin-valley__keep {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+/* Never wider than the stage (phones). */
+.fin-valley {
+  width: min(360px, calc(100% - 16px));
+}
+
+@media (max-width: 480px) {
+  .fin-valley {
+    right: 8px;
+  }
 }
 
 /* --- Futures (branches) ------------------------------------------------------ */
@@ -2677,6 +3711,92 @@ kbd {
   line-height: 1.5;
 }
 
+/* UX-audit: C — futures in figures (UX-20) and the "Asomarte" chip. */
+.fin-futures__menu {
+  max-width: min(420px, calc(100vw - 16px));
+}
+
+.fin-futures__badge {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.fin-futures__meta,
+.fin-futures__delta {
+  font-variant-numeric: tabular-nums;
+  white-space: normal;
+}
+
+.fin-futures__delta {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.fin-compare {
+  position: absolute;
+  /* Inside the money lane, top left: where the curves it compares are. */
+  top: calc(var(--pl-ruler-h, 38px) + 6px);
+  left: calc(var(--pl-header-w, 216px) + 8px);
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - var(--pl-header-w, 216px) - 24px);
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  background: var(--raised);
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.fin-compare__text {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-compare__peek {
+  flex: none;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fin-compare__peek[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.fin-compare__peek:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+@media (pointer: coarse) {
+  .fin-compare__peek {
+    min-width: 44px;
+    height: 44px;
+  }
+}
+
+@media (max-width: 720px) {
+  .fin-compare {
+    left: 8px;
+    max-width: calc(100% - 16px);
+  }
+}
+
 /* "Escribir…" entry of the Nuevo menu */
 .fin-new__slash {
   display: grid;
@@ -2806,18 +3926,110 @@ kbd {
   font-size: 13px;
 }
 
-.fin-command__effect {
-  margin: 8px 12px 4px;
+/* UX-audit: C — the "/" bar opens BELOW the ruler + money lane, where its
+   preview is drawn (UX-53); it says what it understood, asks when it has
+   to (UX-05) and keeps its examples in sight (UX-45). */
+.playlist-shell--finance .fin-command {
+  top: calc(var(--pl-ruler-h, 38px) + var(--pl-lane-h, 0px) + 8px);
+  max-height: calc(100% - var(--pl-ruler-h, 38px) - var(--pl-lane-h, 0px) - 16px);
+  overflow-y: auto;
+}
+
+.fin-command:focus-within {
+  border-color: var(--accent);
+}
+
+.fin-command__examples {
+  margin: 2px 12px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fin-command__examples-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.fin-command__warning {
+  color: var(--fin-warning-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fin-command__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 8px 2px;
+}
+
+.fin-command__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.fin-command__option:hover {
+  background: var(--hover);
+}
+
+.fin-command__option--primary {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.fin-command__option--primary:hover {
+  background: var(--ink-hover);
+}
+
+.fin-command__option .fin-command__key {
+  opacity: 0.8;
+}
+
+@media (pointer: coarse) {
+  .fin-command__option {
+    min-height: 44px;
+  }
+}
+
+/* UX-audit: effect line — the "/" bar's line and <EffectLine> (EffectLine.tsx,
+   "Tu caja: mínimo A → B · al horizonte ±C") share one look; the host
+   places `.fin-effect`. */
+.fin-command__effect,
+.fin-effect {
   color: var(--muted);
   font-size: 13px;
   font-weight: 600;
 }
 
-.fin-command__effect[data-tone="positive"] {
+.fin-command__effect {
+  margin: 8px 12px 4px;
+}
+
+.fin-effect {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-command__effect[data-tone="positive"],
+.fin-effect[data-tone="positive"] {
   color: var(--fin-positive);
 }
 
-.fin-command__effect[data-tone="negative"] {
+.fin-command__effect[data-tone="negative"],
+.fin-effect[data-tone="negative"] {
   color: var(--fin-negative-text);
 }
 
@@ -2907,6 +4119,93 @@ kbd {
   opacity: 0.85;
 }
 
+/* UX-audit: announcer ----------------------------------------------------------
+   The result of a commit (ui/announcer.tsx): the peek's inverse ink pill at
+   the bottom centre of the stage, clear of the canvas' bottom scrollbar
+   like the banners (stage inset 8 px + 28 px). Never closes by itself.
+   Over the stage overlays (≤ 12), under the dialogs' overlay (20) and the
+   floating menus / help (30+). */
+.fin-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 36px;
+  z-index: 14;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 6px 6px 6px 16px;
+  border-radius: var(--radius-l);
+  background: var(--ink);
+  color: var(--on-ink);
+  box-shadow: var(--shadow-pop);
+  font-size: 13px;
+  line-height: 1.4;
+  transform: translateX(-50%);
+}
+
+.fin-toast__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0 8px 0 0;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.fin-toast__undo,
+.fin-toast__close {
+  flex: none;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.fin-toast__undo {
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.fin-toast__close {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  padding: 0;
+}
+
+.fin-toast__close svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.fin-toast__undo:hover,
+.fin-toast__close:hover {
+  background: color-mix(in srgb, var(--on-ink) 16%, transparent);
+}
+
+/* The accent ring is too faint on the ink pill (dark theme): ring in the
+   pill's own text colour. */
+.fin-toast :focus-visible {
+  outline-color: var(--on-ink);
+}
+
+/* While a notice shows, the banners (bottom left) step above it. */
+.playlist-shell:has(~ .fin-toast) .fin-banners {
+  bottom: 104px;
+}
+
 /* --- Banners (onboarding, Rec) ------------------------------------------------ */
 .fin-banners {
   position: absolute;
@@ -2976,6 +4275,43 @@ kbd {
 .fin-rec__intro {
   margin: 0 0 12px;
   color: var(--muted);
+}
+
+/* UX-audit: C — Rec says what it assumes and what changes (UX-22); the
+   dialogs' titles are headings (UX-58). */
+.fin-rec h2.fin-editor__title,
+.fin-statement h2.fin-editor__title {
+  margin: 0;
+}
+
+.fin-rec__assumed {
+  margin: 0 0 6px;
+  color: var(--text);
+}
+
+.fin-rec__result {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-rec__result[data-changed="true"] {
+  font-weight: 600;
+}
+
+.fin-rec__result-note {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* Never wider than the window (a % max-width resolves against the
+   overlay's auto track and does not clamp the 560 px). */
+.playlist-shell__modal.fin-rec,
+.playlist-shell__modal.fin-statement {
+  max-width: min(560px, calc(100vw - 16px));
 }
 
 .fin-rec__table {
@@ -3117,6 +4453,30 @@ kbd {
   color: var(--text);
 }
 
+/* UX-audit: C — what each row does is said by its section, not by colour
+   (UX-52): "Ya los debes" / "Cargos futuros", Cargo / Abono columns. */
+.fin-statement__section {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.fin-statement__heading {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fin-statement__section .fin-statement__effect {
+  margin-top: 4px;
+}
+
+.fin-statement__section .fin-statement__table {
+  max-height: 160px;
+  margin-top: 8px;
+}
+
 /* --- Timeline navigation (corner above the track names) ---------------------- */
 .fin-sr-only {
   position: absolute;
@@ -3200,6 +4560,55 @@ kbd {
 
 .fin-navctl__span:hover {
   border-color: var(--line-strong);
+}
+
+/* UX-audit: H — the range in words with − / + next to it (UX-46). Two rows
+   in the 216 × 52 corner, matching the two-tier ruler beside them:
+     ‹ [  Hoy  ] ›
+     − [≈ 2 meses ▾] + ?
+   DOM order = reading order (row by row). 24 px targets. */
+.fin-navctl {
+  top: calc((var(--pl-ruler-h, 52px) - 50px) / 2);
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 24px 24px;
+  grid-auto-rows: 24px;
+  align-items: stretch;
+}
+
+.fin-navctl > .fin-navctl__button,
+.fin-navctl > .fin-navctl__span {
+  height: 24px;
+  min-width: 0;
+}
+
+.fin-navctl > .fin-navctl__today {
+  grid-column: 2 / span 2;
+  font-size: 12px;
+}
+
+.fin-navctl > .fin-navctl__zoom--out {
+  grid-row: 2;
+  grid-column: 1;
+}
+
+.fin-navctl > .fin-navctl__span {
+  grid-row: 2;
+  grid-column: 2;
+}
+
+.fin-navctl > .fin-navctl__zoom--in {
+  grid-row: 2;
+  grid-column: 3;
+}
+
+.fin-navctl > .fin-navctl__help {
+  grid-row: 2;
+  grid-column: 4;
+}
+
+.fin-navctl__zoom svg {
+  width: 12px;
+  height: 12px;
 }
 
 .fin-navhelp {
@@ -3394,14 +4803,28 @@ kbd {
     display: none;
   }
 
-  /* Metrics take what is left (scrolling with a fade if it's tight). */
+  /* UX-15: the numbers take what is left; the ones that do not fit go to
+     "Más cifras" (right after them). The verdict and "Nuevo" never shrink. */
   .playlist-shell--finance .fin-summary__metrics {
     flex: 1 1 0;
+    height: 44px;
   }
 
-  .playlist-shell--finance .fin-summary__metric {
+  .playlist-shell--finance .fin-summary__metric,
+  .playlist-shell--finance .fin-summary__start {
     height: 40px;
     row-gap: 2px;
+  }
+
+  .playlist-shell--finance .fin-verdict__main {
+    height: 44px;
+  }
+
+  /* The tools shrink (and scroll sideways) before "Nuevo" could be pushed
+     out: the toolbar and the futures button have grown wide. */
+  .fin-summary > .playlist-shell__bar {
+    flex: 0 1 auto;
+    min-width: 0;
   }
 
   .fin-summary > .playlist-shell__bar,
@@ -3425,7 +4848,26 @@ kbd {
   }
 }
 
+@media (min-width: 1200px) and (max-width: 1599px) {
+  /* UX-15: the plan menu and "Más" keep their icon / short word (the words
+     stay in their names) — room for the starting point. */
+  .fin-plan__label,
+  .fin-summary__more-words {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 @media (min-width: 1200px) and (max-width: 1439px) {
+  .fin-verdict__title {
+    font-size: 15px;
+  }
+
   /* The future's name gives way first among the tools: truncated, and
      hidden altogether when the main plan is the only future (nothing to
      tell apart; it stays the button's accessible name). */
@@ -3560,4 +5002,745 @@ kbd {
 
 .fin-readout--lane .fin-readout__cell:nth-child(2) .fin-readout__label {
   display: none;
+}
+
+/* UX-audit: H — system rules: placeholders (UX-59), one focus ring for
+   fields and the "/" bar (UX-63), calendar days outside the month (UX-59),
+   floating surfaces that fit 320 px (UX-29), the shell at small sizes:
+   phones, 200 % / 400 % zoom (UX-29). */
+
+::placeholder {
+  color: var(--placeholder);
+  opacity: 1;
+}
+
+/* Fields used to change only a 1 px border with a faint halo: now the same
+   2 px ring as every other control (≥ 3:1 on their surfaces). */
+.fin-editor input[type="text"]:focus-visible,
+.fin-editor input[type="number"]:focus-visible,
+.fin-editor select:focus-visible,
+.fin-editor textarea:focus-visible,
+.fin-rec input[type="text"]:focus-visible,
+.fin-rec select:focus-visible,
+.fin-onboarding input[type="text"]:focus-visible,
+.fin-onboarding select:focus-visible,
+.fin-statement__input:focus-visible,
+.playlist-inspector__field input:focus-visible,
+.fin-navctl__span:focus-visible,
+.playlist-shell__snap-select:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* The "/" bar's input has no ring of its own (it fills the card): the card
+   shows it while the focus is inside. */
+.fin-command:focus-within {
+  box-shadow: var(--shadow-pop), 0 0 0 2px var(--focus-ring-color);
+}
+
+/* Days of the next / previous month are real buttons: full opacity, muted
+   text (Mantine dims them to 2.2:1). */
+.fin-cal__day[data-outside] {
+  opacity: 1;
+  color: var(--muted);
+}
+
+/* Negative figures elsewhere (readout of the day, tables): the -text tone. */
+.fin-readout[data-state="negative"] .fin-readout__cash,
+.fin-table__delta[data-tone="bad"] {
+  color: var(--fin-negative-text);
+}
+
+.fin-readout[data-state="low"] .fin-readout__cash {
+  color: var(--fin-warning-text);
+}
+
+/* Floating surfaces never wider than the window (320 px included); the
+   dialogs' own rule is with .playlist-shell__modal-overlay. */
+.fin-popover {
+  max-width: min(380px, calc(100vw - 16px));
+}
+
+.fin-popover,
+.fin-new__menu,
+.fin-futures__menu {
+  min-width: min(280px, calc(100vw - 16px));
+}
+
+@media (max-width: 480px) {
+  .playlist-shell__modal-overlay {
+    padding: 8px;
+  }
+}
+
+/* Rec on a phone: each row is a block (date · name · planned, then what
+   happened), so its selects never run off the dialog. */
+@media (max-width: 479px) {
+  .fin-rec__table thead {
+    display: none;
+  }
+
+  .fin-rec__table,
+  .fin-rec__table tbody {
+    display: block;
+  }
+
+  .fin-rec__table tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 4px 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .fin-rec__table td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+
+  .fin-rec__table td:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .fin-rec .fin-rec__actual select,
+  .fin-rec .fin-rec__actual input {
+    max-width: 100%;
+  }
+}
+
+/* Phones: brand + verdict + Nuevo on top, then the exclusions, the numbers
+   (+ "Más cifras") and the tools. The verdict wraps instead of being cut. */
+@media (max-width: 720px) {
+  .fin-plan__label,
+  .fin-summary__wordmark {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .playlist-shell--finance .fin-summary {
+    column-gap: 8px;
+  }
+
+  .fin-summary__brand {
+    padding-right: 6px;
+  }
+
+  /* Never narrower than a few words: below that the title would break (or
+     clip) letter by letter. The header wraps the rest instead. */
+  .fin-verdict {
+    flex: 1 1 0;
+    min-width: min(150px, 100%);
+  }
+
+  .fin-verdict__title {
+    font-size: 15px;
+  }
+
+  .fin-verdict__main {
+    flex: 1 1 auto;
+    min-width: min(120px, 100%);
+    height: auto;
+    min-height: 44px;
+    padding: 4px 8px;
+  }
+
+  .fin-verdict__title,
+  .fin-verdict__detail {
+    white-space: normal;
+  }
+
+  .playlist-shell--finance .fin-exclusion {
+    order: 3;
+  }
+
+  /* The verdict takes the room of the top row (not shared with the spacer). */
+  .playlist-shell--finance .fin-summary__spacer {
+    flex: 0 0 0;
+  }
+
+  .playlist-shell--finance .fin-summary__metrics {
+    flex: 1 1 0;
+  }
+
+  .playlist-shell--finance .fin-summary__more {
+    order: 4;
+  }
+}
+
+@media (max-width: 480px) {
+  .fin-new__trigger-words,
+  .fin-summary__more-words {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .fin-exclusion__text {
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* Very short windows (≤ 500 px: 200 % / 400 % zoom, phones on their side).
+   ONE header row — brand · verdict · "Más cifras" (every number) · tools ·
+   Nuevo —, the banners in the flow under the canvas (never over it), and
+   the page scrolls when even that does not fit (nothing is lost). The
+   canvas uses the "short" density (shell-metrics.ts). */
+@media (max-height: 500px) {
+  body {
+    overflow-y: auto;
+  }
+
+  /* The shell keeps its definite height (the canvas host needs it); what
+     does not fit overflows it and the page scrolls. */
+  .playlist-page,
+  .playlist-shell--finance {
+    overflow: visible;
+  }
+
+  .playlist-shell--finance {
+    --gap-card: 4px;
+  }
+
+  .playlist-shell--finance .fin-summary {
+    flex-wrap: nowrap;
+    gap: 8px;
+    min-height: 0;
+    padding: 2px 8px;
+  }
+
+  .playlist-shell--finance .fin-summary::after {
+    display: none;
+  }
+
+  /* Every number lives in "Más cifras". */
+  .playlist-shell--finance .fin-summary__metrics {
+    order: 0;
+    flex: 0 0 0;
+    width: 0;
+    height: 40px;
+    padding: 0;
+  }
+
+  .playlist-shell--finance .fin-summary__more,
+  .playlist-shell--finance .fin-exclusion,
+  .playlist-shell--finance .fin-summary__spacer,
+  .playlist-shell--finance .fin-summary__actions,
+  .fin-summary > .playlist-shell__bar {
+    order: 0;
+    height: auto;
+    padding: 0;
+  }
+
+  .fin-summary > .playlist-shell__bar {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .playlist-shell--finance .fin-summary__spacer {
+    flex: 1 1 0;
+  }
+
+  .fin-verdict {
+    flex: none;
+  }
+
+  .fin-verdict__main,
+  .playlist-shell--finance .fin-verdict__main {
+    height: 40px;
+    min-height: 0;
+    padding: 0 8px;
+  }
+
+  .fin-verdict__title {
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  .fin-verdict__detail {
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .playlist-shell--finance .playlist-shell__stage {
+    display: flex;
+    flex-direction: column;
+    min-height: 200px;
+  }
+
+  .playlist-shell--finance .playlist-shell__surface {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 0;
+  }
+
+  .playlist-shell--finance .fin-banners {
+    position: static;
+    flex: none;
+    order: 2;
+    max-width: none;
+    padding: 4px;
+    pointer-events: auto;
+  }
+
+  .playlist-shell--finance .fin-banner {
+    padding: 2px 4px 2px 12px;
+    box-shadow: none;
+    background: var(--surface-2);
+  }
+
+  .playlist-shell--finance .fin-banner .fin-button {
+    height: 28px;
+  }
+
+  /* The folded money lane holds its title row only: the day's readout
+     keeps its date, the cash / debt cells give way. */
+  .playlist-shell[data-density="short"] .fin-readout--lane .fin-readout__cell {
+    display: none;
+  }
+}
+
+/* Short AND narrow (320×256): row 1 = plan menu · verdict · Nuevo; row 2 =
+   alerts · exclusions · "Más" · tools (scrolling). The verdict wraps
+   rather than being cut. */
+@media (max-height: 500px) and (max-width: 480px) {
+  .playlist-shell--finance .fin-summary {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .playlist-shell--finance .fin-summary::after {
+    display: block;
+    order: 5;
+  }
+
+  .fin-verdict {
+    display: contents;
+  }
+
+  .fin-verdict__main,
+  .playlist-shell--finance .fin-verdict__main {
+    flex: 1 1 0;
+    min-width: min(150px, 100%);
+    height: auto;
+    min-height: 40px;
+    padding: 2px 6px;
+  }
+
+  .fin-verdict__title,
+  .fin-verdict__detail {
+    white-space: normal;
+  }
+
+  .playlist-shell--finance .fin-summary__actions {
+    order: 1;
+  }
+
+  .playlist-shell--finance .fin-summary__spacer {
+    display: none;
+  }
+
+  .fin-summary__warnings,
+  .playlist-shell--finance .fin-summary__more,
+  .playlist-shell--finance .fin-exclusion {
+    order: 6;
+  }
+
+  .fin-summary > .playlist-shell__bar {
+    order: 7;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+}
+
+/* UX-audit: V — canvas, tools and visual language (PlaylistShell.tsx
+   toolbar / context menu / mode pill, PlayheadReadout.tsx, NavControls.tsx
+   "Cómo moverte"). At the end of the file on purpose: it overrides the
+   late "every tool shows its icon" and readout rules above. */
+
+/* UX-16: the active tool reads at ≥ 3:1 in both themes (accent ring:
+   4.4:1 on --surface-2 light, 5.6:1 dark) and shows its name. */
+.playlist-shell__tool[data-active="true"] {
+  background: var(--accent-soft);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.playlist-shell__tool[data-active="true"] .playlist-shell__tool-label {
+  display: inline;
+}
+
+.playlist-shell__tool[data-active="true"] {
+  padding: 0 10px 0 9px;
+}
+
+/* UX-43: the key next to the icon where there is a keyboard. */
+@media (pointer: fine) {
+  .playlist-shell__tool-hotkey {
+    display: inline-grid;
+    place-items: center;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 3px;
+    border-radius: 4px;
+    background: var(--surface-3);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  .playlist-shell__tool[data-active="true"] .playlist-shell__tool-hotkey {
+    background: var(--surface);
+  }
+}
+
+/* UX-17: "Imán" is named at every width (it is not the visible range). */
+.playlist-shell__snap .playlist-shell__snap-label {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  clip-path: none;
+  white-space: nowrap;
+}
+
+/* UX-16: the mode of a tool other than Select, on the canvas, with its way
+   out; UX-45: the first-selection hint uses the same place. Bottom right
+   of the canvas, over the navigator: it never covers the clips you aim at
+   (top) nor the banners (bottom left). */
+.fin-mode {
+  position: absolute;
+  right: 56px;
+  bottom: 40px;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(640px, calc(100% - var(--pl-header-w, 216px) - 72px));
+  padding: 6px 6px 6px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  font-size: 13px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.fin-mode__text strong {
+  font-weight: 600;
+}
+
+.fin-mode[data-tool="delete"] .fin-mode__text strong {
+  color: var(--fin-negative-text);
+}
+
+.fin-mode__exit {
+  flex: none;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.fin-mode__exit:hover {
+  background: var(--surface-3);
+}
+
+/* UX-28: the menu's "Ver mi año sin esto" stays until "Listo". */
+.fin-peek--locked {
+  pointer-events: auto;
+}
+
+.fin-peek__done {
+  flex: none;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--on-ink);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* UX-11 / UX-58: the day's reading is the lane's legend — "▬ Caja" (the
+   thick line) and "─ Deuda" (the thin grey one), one per line. */
+.fin-readout--lane {
+  grid-template-columns: auto;
+  gap: 1px;
+}
+
+/* :nth-child(n) outranks the older rule that hid the cash label. */
+.fin-readout--lane .fin-readout__cell:nth-child(n) .fin-readout__label {
+  display: inline;
+}
+
+.fin-readout__swatch {
+  display: inline-block;
+  flex: none;
+  align-self: center;
+  width: 12px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--fin-positive);
+}
+
+.fin-readout[data-state="low"] .fin-readout__swatch--cash {
+  background: var(--fin-warning);
+}
+
+.fin-readout[data-state="negative"] .fin-readout__swatch--cash {
+  background: var(--fin-negative);
+}
+
+.fin-readout__swatch--debt {
+  height: 0;
+  border-top: 1.5px solid var(--muted);
+  border-radius: 0;
+  background: transparent;
+}
+
+/* UX-45: "Cómo moverte" in three sections; it scrolls when long. */
+.fin-navhelp {
+  max-height: min(80vh, 640px);
+  overflow: auto;
+}
+
+.fin-navhelp__section {
+  margin: 14px 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fin-banner--hint .fin-navhelp__body {
+  max-height: 40vh;
+  overflow: auto;
+}
+
+/* UX-audit: H — ONE header row from 1200 px (canon), whatever the tools
+   grew into. Order of giving way, after the numbers have gone to "Más
+   cifras": the tools' key hints (they stay in each button's title), the
+   verdict a point smaller, the "Imán" select narrower, tighter gaps; as a
+   last resort the tool row scrolls sideways (wheel) — the futures button
+   and "Nuevo" live outside it and never move. */
+@media (min-width: 1200px) and (max-width: 1599px) {
+  .fin-summary .playlist-shell__tool-hotkey,
+  .fin-summary .playlist-shell__tool[data-active="true"] .playlist-shell__tool-hotkey {
+    display: none;
+  }
+
+  .fin-verdict__title {
+    font-size: 15px;
+  }
+
+  .playlist-shell--finance .fin-summary {
+    gap: 10px;
+  }
+
+  .fin-summary .playlist-shell__snap-select {
+    max-width: 128px;
+  }
+}
+
+@media (min-width: 1200px) and (max-width: 1365px) {
+  .playlist-shell--finance .fin-summary {
+    gap: 8px;
+  }
+
+  .fin-summary__brand {
+    padding-right: 8px;
+  }
+
+  .fin-verdict__main {
+    padding: 0 8px;
+  }
+
+  /* "Más +5": the count says it all; the chevron gives way. */
+  .fin-summary__more {
+    padding: 0 8px;
+  }
+
+  .fin-summary__more svg {
+    display: none;
+  }
+}
+
+.fin-summary__actions .fin-futures {
+  flex: none;
+}
+
+/* UX-audit: H — "Comparar y pagar deudas" (C's rail toggle, collapsed):
+   one line on the "Caja" title row, right-aligned and 22 px tall, so it
+   ends above the day's readout (which starts 30 px under the ruler) at
+   every density and never covers its date. Same button, same behaviour.
+   Its visible name is the short "Pagar deudas" (SIDE_PANEL_TAB_LABEL): the
+   full title filled the row and touched "Caja"; the short one leaves ~60 px
+   of air between them. */
+.playlist-shell--finance .fin-side--collapsed {
+  top: calc(var(--pl-ruler-h, 38px) + 5px);
+  left: calc(var(--pl-header-w, 216px) - 8px);
+  transform: translateX(-100%);
+}
+
+.playlist-shell--finance .fin-side--collapsed .fin-side__tab {
+  height: 22px;
+  min-height: 22px;
+  padding: 0 8px 0 6px;
+  gap: 4px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.playlist-shell--finance .fin-side--collapsed .fin-side__tab-label {
+  max-width: none;
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* UX-audit: H — phones and very short windows: the futures button keeps its
+   icon (and count); its name stays its accessible name and, outside the
+   main plan, the strip under the header says it in full (UX-19). */
+@media (max-width: 720px), (max-height: 500px) {
+  .fin-summary__actions .fin-futures__name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .fin-summary__actions .fin-futures__trigger {
+    padding: 0 9px;
+  }
+}
+
+/* ==========================================================================
+   Formulario único (item-form-spec.ts): the editor's ONE skeleton for every
+   kind — Tipo · Nombre, then "Cuánto", "Cuándo" and "Detalles", each a
+   full-width block with its own two columns and a quiet title (the look the
+   "Cuándo" block already had), then the readback / effect line.
+   ========================================================================== */
+.fin-editor__section {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px 14px;
+  min-width: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* Tipo · Nombre: the head, no rule above it. */
+.fin-editor__section--head {
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* The readback and the effect line close the form, under the last section. */
+.fin-editor__section--outcome {
+  gap: 10px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.fin-editor__section--outcome:empty {
+  display: none;
+}
+
+/* "Después de [N] pagos" (a loan's Termina): a short count between words. */
+.fin-editor__prefix {
+  flex: none;
+  color: var(--muted);
+}
+
+.fin-editor .fin-editor__field--compact input[type="text"] {
+  width: 88px;
+  flex: none;
+}
+
+/* Read-only answers of the form ("Se repite: Cada mes", an MSI's Termina):
+   said in words, not shown as an amount. */
+.fin-editor__reading .fin-editor__computed-value {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+@media (max-width: 480px) {
+  .fin-editor .fin-editor__section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Hover-time indicator: while the pointer hovers the timeline, the lane's
+   reading shows that day (the ruler names it); its date reads as the
+   current subject instead of a muted caption. */
+.fin-readout--lane[data-source="hover"] .fin-readout__date {
+  color: var(--text);
+}
+
+/* Click-to-create: "what goes here?" at the clicked spot — the six kinds of
+   "Nuevo", same dot, name and example; the date it lands on as a title. */
+.playlist-shell__menu--create {
+  min-width: 260px;
+}
+
+.playlist-shell__menu-title {
+  padding: 4px 10px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.playlist-shell__menu--create .playlist-shell__menu-item {
+  justify-content: flex-start;
+  gap: 12px;
+  height: auto;
+  min-height: 44px;
+  padding: 6px 10px;
+}
+
+.playlist-shell__menu-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.playlist-shell__menu--create .playlist-shell__menu-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.playlist-shell__menu-hint {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
 }

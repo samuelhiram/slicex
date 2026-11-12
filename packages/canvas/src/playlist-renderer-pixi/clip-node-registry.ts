@@ -92,7 +92,7 @@ interface ClipNode {
   contentStart: number;
   contentPxPerBeat: number;
   // Host highlight the overlay was last drawn with.
-  highlighted: boolean;
+  highlighted: boolean | "danger";
   // Visual hash captures everything that would force a redraw. Position and
   // size are kept separate so we can skip a redraw when only x/y changed.
   hash: string;
@@ -182,10 +182,17 @@ export type ClipContentProvider = (
 export interface ClipNodeProviders {
   // Clips have a host "level" dragged from their top edge (see the
   // interaction controller's onClipLevelDrag): hovered clips show a grip.
+  // With levelGrip the renderer draws it instead (where getClipLevelGripX
+  // puts it, which follows the scroll): the node does not.
   levelHandles?: boolean;
-  // Host emphasis (e.g. "these payments cause the valley"): a warm ring.
-  // Called once per VISIBLE clip per frame: O(1), a plain boolean.
-  isClipHighlighted?: (clipId: string) => boolean;
+  levelGrip?: boolean;
+  // Host emphasis (e.g. "these payments cause the valley"): a warm ring;
+  // "danger" (e.g. a delete sweep will remove it): a red ring + wash.
+  // Called once per VISIBLE clip per frame: O(1), a primitive.
+  isClipHighlighted?: (clipId: string) => boolean | "danger";
+  // FL badges ("↻ offset" of a slipped clip, "×ratio" of a stretched one).
+  // Default true; a host without slip / stretch meaning turns them off.
+  badges?: boolean;
   getClipDetail?: ClipDetailProvider;
   getClipSparkline?: ClipSparklineProvider;
   getClipContent?: ClipContentProvider;
@@ -268,12 +275,24 @@ export function truncateClipDetail(text: string, width: number): string {
   );
 }
 
-// Title of a clip of `width` px (same pads as the detail line).
+// Title of a clip of `width` px (same pads as the detail line). Truncated
+// in the MIDDLE ("Pago T…Plata"): names that share a start ("Pago Tarjeta
+// Plata" / "Pago Tarjeta Oro") stay tellable apart.
 export function truncateClipTitle(text: string, width: number): string {
-  return truncateToChars(
+  return truncateMiddle(
     text,
     Math.floor((width - TITLE_PAD_X - CLIP_TEXT_RIGHT_PAD) / TITLE_CHAR_PX),
   );
+}
+
+export function truncateMiddle(text: string, maxChars: number): string {
+  if (maxChars <= 0) return "";
+  if (text.length <= maxChars) return text;
+  if (maxChars <= 4) return truncateToChars(text, maxChars);
+  const keep = maxChars - 1;
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return `${text.slice(0, head).trimEnd()}…${text.slice(text.length - tail).trimStart()}`;
 }
 
 function truncateToChars(text: string, maxChars: number): string {
@@ -291,6 +310,26 @@ const CONTENT_EVENT_ALPHA_NEG = 0.55;
 const CONTENT_LEVEL_FILL_ALPHA = 0.2;
 const CONTENT_LEVEL_LINE_ALPHA = 0.95;
 const MARK_DASH = 3;
+// Free space kept right of the accent bar: content never touches it.
+const ACCENT_CLEARANCE = 2;
+
+/** The card draws its accent bar at this size (drawClipBodyLocal). */
+function clipHasAccent(width: number, height: number): boolean {
+  return width >= 10 && height - CLIP_ACCENT_INSET * 2 >= 6;
+}
+
+/**
+ * Left edge of the content area (local x). The accent bar already marks the
+ * clip's start, so an event or a guide on the start day — drawn at the
+ * clip's left edge — would stack three lines there (border, bar, accent):
+ * content starts right of the accent instead and anything left of that is
+ * not drawn.
+ */
+function contentLeftPx(width: number, height: number): number {
+  return clipHasAccent(width, height)
+    ? CLIP_ACCENT_INSET - 1 + CLIP_ACCENT_WIDTH + ACCENT_CLEARANCE
+    : 1;
+}
 
 // Draws PlaylistClipContent in the body (local coords). Beats are absolute:
 // x = (beat - clip.start) * pxPerBeat. Only what falls inside the clip window
@@ -320,6 +359,7 @@ export function drawClipContent(
   const alphaScale = view.effectivelyMuted ? 0.45 : 1;
   // Content is drawn in the clip's own colour (the card is a tint of it).
   const ink = parseHexColor(clip.color, palette.text);
+  const left = contentLeftPx(width, height);
 
   // Guide marks (e.g. billing cuts): dashed vertical lines across the
   // content area, under the bars. Binary search to the first visible one.
@@ -330,7 +370,7 @@ export function drawClipContent(
       const beat = marks[i]!;
       if (beat > end + 1e-9) break;
       const x = Math.round((beat - start) * pxPerBeat) + 0.5;
-      if (x < 2 || x > width - 2) continue;
+      if (x < Math.max(2, left) || x > width - 2) continue;
       for (let y = top; y < bottom; y += MARK_DASH * 2) {
         body.moveTo(x, y).lineTo(x, Math.min(bottom, y + MARK_DASH));
       }
@@ -357,7 +397,9 @@ export function drawClipContent(
       const magnitude = Math.min(1, Math.abs(raw));
       const h = Math.max(1, Math.round(available * magnitude));
       const center = (beat - start) * pxPerBeat;
-      const x = Math.min(maxX, Math.max(1, Math.round(center - barWidth / 2)));
+      // On the accent (an event on the start day): the accent shows it.
+      if (Math.round(center - barWidth / 2) < left) continue;
+      const x = Math.min(maxX, Math.round(center - barWidth / 2));
       if (raw > 0) {
         body.rect(x, bottom - h, barWidth, h).fill({
           color: ink,
@@ -442,20 +484,24 @@ function drawClipBodyLocal(
     (muted ? CLIP_MUTED_TINT_SCALE : 1);
   // Card: the clip colour tinted onto the theme surface (opaque, so the
   // grid never shows through), plus an inset accent bar in the full colour.
-  body
-    .roundRect(0, 0, width, height, clipRadius(width, height))
-    .fill({ color: mixColor(surface, color, tint) });
-  const accentHeight = height - CLIP_ACCENT_INSET * 2;
-  if (width >= 10 && accentHeight >= 6) {
+  // A content `extent` (e.g. a one-day event drawn a week wide so its name
+  // fits): the real span is the card, the rest a faint tag.
+  const extentPx = contentExtentPx(view, content);
+  if (extentPx < width) {
     body
-      .roundRect(
-        CLIP_ACCENT_INSET - 1,
-        CLIP_ACCENT_INSET,
-        CLIP_ACCENT_WIDTH,
-        accentHeight,
-        CLIP_ACCENT_WIDTH / 2,
-      )
-      .fill({ color, alpha: muted ? 0.4 : 1 });
+      .roundRect(0, 0, width, height, clipRadius(width, height))
+      .fill({ color: mixColor(surface, color, tint * CLIP_TAG_TINT_SCALE) });
+    body
+      .roundRect(0, 0, extentPx, height, clipRadius(extentPx, height))
+      .fill({ color: mixColor(surface, color, Math.min(1, tint * CLIP_DAY_TINT_SCALE)) });
+  } else {
+    body
+      .roundRect(0, 0, width, height, clipRadius(width, height))
+      .fill({ color: mixColor(surface, color, tint) });
+  }
+  const accentHeight = height - CLIP_ACCENT_INSET * 2;
+  if (clipHasAccent(width, height)) {
+    drawAccent(body, accentHeight, color, muted ? 0.4 : 1, content?.accent ?? "solid");
   }
   if (muted) {
     const step = 8;
@@ -511,12 +557,56 @@ function clipRadius(width: number, height: number): number {
   return Math.max(0, Math.min(CLIP_RADIUS, width / 2, height / 2));
 }
 
+// The faint tag after a one-day extent, and how much stronger the day is.
+const CLIP_TAG_TINT_SCALE = 0.45;
+const CLIP_DAY_TINT_SCALE = 2.2;
+const CLIP_EXTENT_MIN_PX = 8;
+
+// px of the card that is the clip's real extent (content.extent, beats),
+// or the whole width.
+export function contentExtentPx(
+  view: PlaylistClipPresentation,
+  content: PlaylistClipContent | null,
+): number {
+  const width = view.rect.width;
+  if (!content || content.kind !== "events" || content.extent === undefined) return width;
+  const pxPerBeat = width / Math.max(view.clip.duration, 1e-9);
+  return Math.min(width, Math.max(CLIP_EXTENT_MIN_PX, content.extent * pxPerBeat));
+}
+
+// Accent bar in the clip colour; its shape tells kinds apart without colour.
+function drawAccent(
+  body: Graphics,
+  accentHeight: number,
+  color: number,
+  alpha: number,
+  shape: "solid" | "dashed" | "dotted",
+): void {
+  const x = CLIP_ACCENT_INSET - 1;
+  const top = CLIP_ACCENT_INSET;
+  if (shape === "solid") {
+    body
+      .roundRect(x, top, CLIP_ACCENT_WIDTH, accentHeight, CLIP_ACCENT_WIDTH / 2)
+      .fill({ color, alpha });
+    return;
+  }
+  const dash = shape === "dashed" ? 7 : 3;
+  const gap = shape === "dashed" ? 3 : 3;
+  for (let y = top; y < top + accentHeight; y += dash + gap) {
+    const h = Math.min(dash, top + accentHeight - y);
+    if (h < 2) break;
+    body.roundRect(x, y, CLIP_ACCENT_WIDTH, h, CLIP_ACCENT_WIDTH / 2);
+  }
+  body.fill({ color, alpha });
+}
+
 function drawClipOverlayLocal(
   overlay: Graphics,
   view: PlaylistClipPresentation,
   palette: PixiPaletteColors,
   levelHandles = false,
-  highlighted = false,
+  highlighted: boolean | "danger" = false,
+  extentPx: number = view.rect.width,
 ): void {
   overlay.clear();
   const width = view.rect.width;
@@ -525,8 +615,21 @@ function drawClipOverlayLocal(
   const color = parseHexColor(view.clip.color, palette.rowLine);
 
   // Selection: a soft halo + a crisp accent ring. Host highlight: a warm
-  // ring. Otherwise a hairline in the clip colour (stronger on hover).
-  if (highlighted && !view.selected) {
+  // ring ("danger": red ring + wash, it is about to go). Otherwise a
+  // hairline in the clip colour (stronger on hover) — around the real
+  // extent only for a one-day tag, unless hovered.
+  if (highlighted === "danger") {
+    const danger = palette.toneDanger ?? COLORS.toneDanger;
+    overlay
+      .roundRect(0, 0, width, height, radius)
+      .fill({ color: danger, alpha: 0.14 });
+    overlay
+      .roundRect(-3, -3, width + 6, height + 6, radius + 3)
+      .stroke({ color: danger, width: 4, alpha: 0.25 });
+    overlay
+      .roundRect(0, 0, width, height, radius)
+      .stroke({ color: danger, width: 2, alpha: 1 });
+  } else if (highlighted && !view.selected) {
     const warm = palette.toneWarning ?? COLORS.toneWarning;
     overlay
       .roundRect(-3, -3, width + 6, height + 6, radius + 3)
@@ -542,13 +645,16 @@ function drawClipOverlayLocal(
       .roundRect(0, 0, width, height, radius)
       .stroke({ color: palette.selected, width: 1.75, alpha: 1 });
   } else {
-    overlay.roundRect(0.5, 0.5, width - 1, height - 1, radius).stroke({
-      color,
-      width: 1,
-      alpha: view.hovered
-        ? 0.9
-        : (palette.clipBorderAlpha ?? COLORS.clipBorderAlpha),
-    });
+    const outline = view.hovered ? width : extentPx;
+    overlay
+      .roundRect(0.5, 0.5, outline - 1, height - 1, clipRadius(outline, height))
+      .stroke({
+        color,
+        width: 1,
+        alpha: view.hovered
+          ? 0.9
+          : (palette.clipBorderAlpha ?? COLORS.clipBorderAlpha),
+      });
   }
 
   // Resize affordance: two short grips, only while it is actionable. They
@@ -569,8 +675,9 @@ function drawClipOverlayLocal(
     overlay.roundRect(width - inset - 2, gripY, 2, gripHeight, 1).fill(grip);
   }
 
-  // Level grip: a short bar centred on the top edge of a hovered clip.
-  if (levelHandles && view.hovered && !view.isAutomation && width >= 40) {
+  // Level grip: a short bar centred on the top edge of a hovered (or, for
+  // touch, selected) clip.
+  if (levelHandles && (view.hovered || view.selected) && !view.isAutomation && width >= 40) {
     overlay
       .roundRect(width / 2 - 9, 1.5, 18, 3, 1.5)
       .fill({ color: palette.text, alpha: 0.4 });
@@ -673,8 +780,9 @@ export function createClipNodeRegistry(
   const getClipDetail = providers.getClipDetail;
   const getClipSparkline = providers.getClipSparkline;
   const getClipContent = providers.getClipContent;
-  const levelHandles = providers.levelHandles === true;
+  const levelHandles = providers.levelHandles === true && providers.levelGrip !== true;
   const isClipHighlighted = providers.isClipHighlighted;
+  const badges = providers.badges !== false;
 
   // Secondary line under the title bar. Created lazily ONCE per node (same
   // factory pattern as the title label), never per frame.
@@ -782,7 +890,7 @@ export function createClipNodeRegistry(
     }
 
     const ratio = view.clip.stretchRatio ?? 1;
-    if (Math.abs(ratio - 1) > 0.001 && width >= 60) {
+    if (badges && Math.abs(ratio - 1) > 0.001 && width >= 60) {
       const tagText = `×${ratio.toFixed(2).replace(/\.?0+$/, "")}`;
       const badge = ensureText(node, "ratioBadge", () =>
         new Text({
@@ -803,7 +911,7 @@ export function createClipNodeRegistry(
     }
 
     const offset = view.clip.contentOffset ?? 0;
-    if (Math.abs(offset) > 0.001 && width >= 80) {
+    if (badges && Math.abs(offset) > 0.001 && width >= 80) {
       const offsetText = `↻${offset.toFixed(2).replace(/\.?0+$/, "")}`;
       const badge = ensureText(node, "offsetBadge", () =>
         new Text({
@@ -929,7 +1037,14 @@ export function createClipNodeRegistry(
         node.contentPxPerBeat = contentPxPerBeat;
       }
       if (visualChanged) {
-        drawClipOverlayLocal(node.overlay, view, palette, levelHandles, highlighted);
+        drawClipOverlayLocal(
+          node.overlay,
+          view,
+          palette,
+          levelHandles,
+          highlighted,
+          contentExtentPx(view, content),
+        );
         node.highlighted = highlighted;
         node.hash = hash;
         node.width = view.rect.width;

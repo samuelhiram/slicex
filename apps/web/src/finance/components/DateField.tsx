@@ -27,6 +27,7 @@ import {
   shiftISODate,
   type DateYearPreference,
 } from "../format";
+import { useEscapeLayer } from "../../ui/use-overlay";
 import { FieldError, useEditableText, useFieldError } from "./form-kit";
 
 interface DateFieldBaseProps {
@@ -35,6 +36,11 @@ interface DateFieldBaseProps {
   value: string | undefined;
   /** Where a date typed without a year ("15 nov") takes its year from. */
   reference: string;
+  /**
+   * The real today, for "hoy", "mañana", "fin de mes" and a bare day ("el
+   * 15"); defaults to `reference`.
+   */
+  today?: string;
   prefer?: DateYearPreference;
   /** First valid day: ↓ stops there and the calendar disables the days before. */
   min?: string;
@@ -105,6 +111,7 @@ export function DateField(props: DateFieldProps) {
     label,
     value,
     reference,
+    today = reference,
     prefer = "nearest",
     min,
     disabled = false,
@@ -128,7 +135,7 @@ export function DateField(props: DateFieldProps) {
   const focusDayOnOpenRef = React.useRef(false);
 
   const minDate = min !== undefined && isISODate(min) ? min : undefined;
-  const parsed = parseDateInput(text, reference, prefer);
+  const parsed = parseDateInput(text, reference, prefer, today);
   const empty = text.trim() === "";
   const status = disabled ? "off" : parsed ? "ok" : empty ? "empty" : "invalid";
   const message =
@@ -139,11 +146,12 @@ export function DateField(props: DateFieldProps) {
         : parsed
           ? formatDateWeekday(parsed)
           : empty
-            ? "ej. 15/11/2026 o 15 nov"
-            : "No reconocida · ej. 15/11/2026";
+            ? "ej. 15/11/2026, 15 nov o «el 15»"
+            : "No reconocida · ej. 15/11/2026, 15 nov o «el 15»";
 
   const emitText = (raw: string) => {
-    const iso = parseDateInput(raw, reference, prefer) ?? (optional && raw.trim() === "" ? undefined : "");
+    const iso =
+      parseDateInput(raw, reference, prefer, today) ?? (optional && raw.trim() === "" ? undefined : "");
     if (emit(iso)) onChange(iso);
   };
 
@@ -177,15 +185,15 @@ export function DateField(props: DateFieldProps) {
     inputRef.current?.focus();
   };
 
-  // Escape closes the calendar — and only the calendar: the dialog's own
-  // Escape (a window listener) must not close the whole form.
-  const escapeCloses = (event: React.KeyboardEvent) => {
-    if (event.key !== "Escape" || !open) return false;
-    event.preventDefault();
-    event.stopPropagation();
+  // Escape closes the calendar — and only the calendar: while open it is the
+  // top layer of the Escape stack (ui/use-overlay), above the dialog it sits
+  // in, wherever the focus is (field, ▦ button or month). A focus inside the
+  // month goes back to the field (the month is gone: never <body>, UX-27).
+  useEscapeLayer(open, () => {
+    const inMonth = calendarRef.current?.contains(document.activeElement) ?? false;
     setOpen(false);
-    return true;
-  };
+    if (inMonth) inputRef.current?.focus();
+  });
 
   // Text that is not a date: the preview line already says so ("No
   // reconocida · ej. …") and the schema could only repeat it ("Fecha
@@ -222,7 +230,6 @@ export function DateField(props: DateFieldProps) {
         if (parsed) setText(formatDateInput(parsed));
       }}
       onKeyDown={(event) => {
-        if (escapeCloses(event)) return;
         if (event.key === "Enter" && open) {
           event.preventDefault();
           setOpen(false);
@@ -251,6 +258,7 @@ export function DateField(props: DateFieldProps) {
     <span
       ref={wrapperRef}
       className="fin-date__picker"
+      data-field-path={inline ? path : undefined}
       onBlur={(event) => {
         // Focus left the field (input, button and calendar): close.
         const next = event.relatedTarget as Node | null;
@@ -282,9 +290,6 @@ export function DateField(props: DateFieldProps) {
               aria-expanded={open}
               aria-controls={open ? `${id}-calendar` : undefined}
               disabled={disabled}
-              // Opened with the mouse, focus stays here: Escape still closes
-              // only the calendar.
-              onKeyDown={escapeCloses}
               onClick={(event) => {
                 if (open) setOpen(false);
                 // detail 0: Enter / Space (keyboard) → focus goes into the month.
@@ -301,7 +306,6 @@ export function DateField(props: DateFieldProps) {
           className="fin-cal"
           role="dialog"
           aria-label={`Calendario: ${label}`}
-          onKeyDown={escapeCloses}
           onMouseDown={(event) => {
             // A press on the calendar's background keeps the focus where it is
             // (else the field would lose it and close).
@@ -338,7 +342,10 @@ export function DateField(props: DateFieldProps) {
   }
 
   return (
-    <div className={wide ? "fin-editor__field fin-editor__field--wide fin-date" : "fin-editor__field fin-date"}>
+    <div
+      className={wide ? "fin-editor__field fin-editor__field--wide fin-date" : "fin-editor__field fin-date"}
+      data-field-path={path}
+    >
       <label className="fin-editor__label" htmlFor={id}>
         {label}
       </label>

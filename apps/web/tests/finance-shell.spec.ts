@@ -343,6 +343,20 @@ const stage = () => document.querySelector(".playlist-shell__stage")!;
 const toolRow = () => document.querySelector(".playlist-shell__bar")!;
 const summary = () => document.querySelector(".fin-summary")!;
 const dialog = () => document.querySelector<HTMLElement>(".fin-editor");
+/** The editor's name: its title heading (aria-labelledby, UX-58). */
+const dialogName = () => {
+  const id = dialog()?.getAttribute("aria-labelledby");
+  return id ? (document.getElementById(id)?.textContent ?? null) : null;
+};
+/** UX-30: a new item's amount is asked, never assumed — typed like a user. */
+function typeAmount(text: string) {
+  const input = document.querySelector<HTMLInputElement>('.fin-editor [data-field-path="amount"] input')!;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  act(() => {
+    setter.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
 
 describe("SYNC-12: no time-stretch on the finance playlist", () => {
   it("creates the core with stretchEnabled:false and hides the Str button", async () => {
@@ -378,7 +392,7 @@ describe("react-4 (shell): 'Nuevo → X' opens a create-mode editor on a draft",
     const before = bridge.getDocument().items.length;
     pickNew("income");
     expect(dialog()?.dataset.mode).toBe("create");
-    expect(dialog()?.getAttribute("aria-label")).toBe("Nuevo Ingreso");
+    expect(dialogName()).toBe("Nuevo Ingreso");
     expect(bridge.addItem).not.toHaveBeenCalled();
     click(buttonByText("Cancelar"));
     expect(dialog()).toBeNull();
@@ -386,6 +400,7 @@ describe("react-4 (shell): 'Nuevo → X' opens a create-mode editor on a draft",
     expect(bridge.getDocument().items.length).toBe(before);
 
     pickNew("expense");
+    typeAmount("500");
     click(buttonByText("Guardar"));
     expect(dialog()).toBeNull();
     expect(bridge.addItem).toHaveBeenCalledTimes(1);
@@ -404,7 +419,7 @@ describe("react-4 (shell): 'Nuevo → X' opens a create-mode editor on a draft",
       options.onCreateRequest!({ trackIndex: 40, start: 12, duration: null, templateClipId: null }),
     );
     expect(dialog()?.dataset.mode).toBe("create");
-    expect(dialog()?.getAttribute("aria-label")).toBe("Nuevo Gasto");
+    expect(dialogName()).toBe("Nuevo Gasto");
     expect(bridge.addItem).not.toHaveBeenCalled();
     click(buttonByText("Cancelar"));
     expect(bridge.getDocument().items.length).toBe(before);
@@ -413,7 +428,8 @@ describe("react-4 (shell): 'Nuevo → X' opens a create-mode editor on a draft",
     act(() =>
       options.onCreateRequest!({ trackIndex: 40, start: 12, duration: null, templateClipId: "fin-sueldo" }),
     );
-    expect(dialog()?.getAttribute("aria-label")).toBe("Nuevo Ingreso");
+    expect(dialogName()).toBe("Nuevo Ingreso");
+    typeAmount("1000");
     click(buttonByText("Guardar"));
     expect(bridge.addItem).toHaveBeenCalledTimes(1);
     expect(bridge.addItem.mock.calls[0]![1]).toEqual({ trackIndex: 40 });
@@ -477,10 +493,13 @@ describe("react-9: nothing covers the playhead readout", () => {
     const style = getComputedStyle(readout);
     expect(style.position).toBe("absolute");
     expect(style.top).toContain("--pl-ruler-h");
-    click(document.querySelector('[aria-label="Abrir análisis financiero"]'));
-    const rail = document.querySelector<HTMLElement>(".fin-side")!;
-    expect(rail.classList.contains("fin-side--collapsed")).toBe(false);
-    expect(getComputedStyle(rail).top).toContain("--pl-lane-h");
+    // UX-47: the open rail is a column BESIDE the stage (it pushes the
+    // canvas), so it can never cover the readout or the row headers.
+    click(document.querySelector(".fin-side__tab"));
+    const rail = document.querySelector<HTMLElement>(".fin-side:not(.fin-side--collapsed)")!;
+    expect(rail).not.toBeNull();
+    expect(rail.closest(".playlist-shell__stage")).toBeNull();
+    expect(rail.closest(".playlist-shell__side-slot")).not.toBeNull();
   });
 
   it("is compact: weekday date, cash and debt on one line", async () => {
@@ -572,8 +591,9 @@ describe("finance-native toolbar", () => {
     ).toEqual([
       ["Seleccionar", "E"],
       ["Dibujar", "P"],
-      ["Cortar", "C"],
-      ["Silenciar", "T"],
+      // UX-43: words that say what happens to the money (same keys).
+      ["Dividir", "C"],
+      ["Excluir", "T"],
       ["Borrar", "D"],
       ["Zoom", "Z"],
     ]);
@@ -601,19 +621,17 @@ describe("finance-native toolbar", () => {
     expect(tools().every((b) => b.getAttribute("aria-pressed") === "false")).toBe(true);
   });
 
-  it("'Ajustar a': Día / Semana / Quincena / Libre = beat / bar / axis / none", async () => {
+  it("'Imán' (UX-17): Cada día / Cada 7 días / Quincenas / Sin imán = beat / bar / axis / none", async () => {
     const { bridge } = await mountShell();
     const select = document.querySelector<HTMLSelectElement>(
       ".playlist-shell__snap-select",
     )!;
-    expect(document.querySelector(".playlist-shell__snap-label")!.textContent).toBe(
-      "Ajustar a",
-    );
+    expect(document.querySelector(".playlist-shell__snap-label")!.textContent).toBe("Imán");
     expect([...select.options].map((o) => [o.textContent, o.value])).toEqual([
-      ["Día", "beat"],
-      ["Semana", "bar"],
-      ["Quincena", "axis"],
-      ["Libre", "none"],
+      ["Cada día", "beat"],
+      ["Cada 7 días", "bar"],
+      ["Quincenas (1 y 16)", "axis"],
+      ["Sin imán", "none"],
     ]);
     expect(select.value).toBe("beat");
     const setter = Object.getOwnPropertyDescriptor(
@@ -661,7 +679,9 @@ describe("finance-native toolbar", () => {
     const rows = [...document.querySelector(".playlist-shell")!.children].map(
       (el) => el.className,
     );
-    expect(rows.indexOf("playlist-shell__stage")).toBe(rows.indexOf("fin-summary") + 1);
+    // UX-47: the stage sits in the workspace row (beside the analysis rail).
+    expect(rows.indexOf("playlist-shell__workspace")).toBe(rows.indexOf("fin-summary") + 1);
+    expect(document.querySelector(".playlist-shell__workspace > .playlist-shell__stage")).not.toBeNull();
   });
 });
 
@@ -674,12 +694,15 @@ describe("theme: one toggle drives the DOM tokens and the canvas palette", () =>
     const initial = callbacks.theme;
     expect(initial === "light" || initial === "dark").toBe(true);
     expect(document.documentElement.dataset.theme).toBe(initial);
+    // UX-48: the theme lives in "Mi plan ▾".
+    click(document.querySelector(".fin-plan__trigger"));
     const toggle = document.querySelector<HTMLButtonElement>("[data-theme-toggle]")!;
     click(toggle);
     const next = initial === "dark" ? "light" : "dark";
     expect(document.documentElement.dataset.theme).toBe(next);
     expect(renderer.setTheme).toHaveBeenLastCalledWith(next);
     expect(localStorage.getItem("slicex.theme")).toBe(next);
+    click(document.querySelector(".fin-plan__trigger"));
     click(document.querySelector("[data-theme-toggle]"));
     expect(document.documentElement.dataset.theme).toBe(initial);
     expect(renderer.setTheme).toHaveBeenLastCalledWith(initial);

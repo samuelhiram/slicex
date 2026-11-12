@@ -3,6 +3,7 @@ import {
   SCROLLBAR_EDGE_PX,
   createClipExtendHandle,
   getClipExtendHandle,
+  getClipLevelGripX,
   getTracksTop,
   pointInRect,
   type PlaylistAutomationClip,
@@ -104,6 +105,11 @@ function getAutomationPointHit(
 
 // Height (px) of the clip-level handle along a clip's top edge.
 export const CLIP_LEVEL_HANDLE_PX = 5;
+// Grip-only level handle (PlaylistHitOptions.clipLevelGrip): the hit target
+// around the visible grip centred on the top edge (24 px wide; 24 px tall
+// for a coarse pointer, CLIP_LEVEL_GRIP_FINE_PX otherwise).
+export const CLIP_LEVEL_GRIP_WIDTH = 24;
+export const CLIP_LEVEL_GRIP_FINE_PX = 7;
 
 export interface PlaylistHitOptions {
   // Clips expose a level handle on their top edge.
@@ -116,6 +122,27 @@ export interface PlaylistHitOptions {
   // resolves to the row header / clip / background under it. The right
   // button uses this, so a context menu opens wherever it is pressed.
   trackChrome?: boolean;
+  // The level handle is only the grip at the centre of the top edge (what
+  // is drawn), not the whole edge: a press elsewhere on the edge is the
+  // clip. `height` is the grip's hit height in px (≥ 24 for touch).
+  clipLevelGrip?: { height: number };
+  // Grow the hit box of the track header buttons (mute / solo / lock /
+  // grip) by this many px on each side, without changing their drawing,
+  // so each is at least 24 px to the pointer.
+  trackButtonSlop?: number;
+}
+
+function pointInRectSlop(
+  point: PlaylistPoint,
+  rect: { x: number; y: number; width: number; height: number },
+  slop: number,
+): boolean {
+  return (
+    point.x >= rect.x - slop &&
+    point.x <= rect.x + rect.width + slop &&
+    point.y >= rect.y - slop &&
+    point.y <= rect.y + rect.height + slop
+  );
 }
 
 // Scratch for the extend-grabber lookup (pointermove rate: no allocation).
@@ -188,9 +215,13 @@ export function hitTestPlaylist(
 
   const trackChrome = options.trackChrome !== false;
 
-  if (trackChrome && point.y > metrics.rulerHeight) {
-    // Track-resize handle spans the full width to mimic FL Studio: drag the
-    // divisor between two tracks at any x (header or timeline).
+  if (
+    trackChrome &&
+    point.y > metrics.rulerHeight &&
+    point.x < metrics.trackHeaderWidth
+  ) {
+    // Track-resize handle: only the divisor inside the header column. The
+    // grid lines over the timeline never resize a row.
     const resizeRow = trackRows.find((candidate) =>
       pointInRect(point, candidate.resizeHandleRect),
     );
@@ -207,30 +238,31 @@ export function hitTestPlaylist(
     const row = trackRows.find((candidate) =>
       pointInRect(point, candidate.headerRect),
     );
+    const slop = options.trackButtonSlop ?? 0;
 
     if (row && trackChrome) {
-      if (pointInRect(point, row.buttons.mute)) {
+      if (pointInRectSlop(point, row.buttons.mute, slop)) {
         return {
           kind: "track-mute-button",
           trackIndex: row.index,
           trackId: row.track.id,
         };
       }
-      if (pointInRect(point, row.buttons.solo)) {
+      if (pointInRectSlop(point, row.buttons.solo, slop)) {
         return {
           kind: "track-solo-button",
           trackIndex: row.index,
           trackId: row.track.id,
         };
       }
-      if (pointInRect(point, row.buttons.lock)) {
+      if (pointInRectSlop(point, row.buttons.lock, slop)) {
         return {
           kind: "track-lock-button",
           trackIndex: row.index,
           trackId: row.track.id,
         };
       }
-      if (pointInRect(point, row.reorderHandleRect)) {
+      if (pointInRectSlop(point, row.reorderHandleRect, slop)) {
         return {
           kind: "track-reorder-handle",
           trackIndex: row.index,
@@ -286,10 +318,17 @@ export function hitTestPlaylist(
       };
     }
 
+    const grip = options.clipLevelGrip;
     if (
       options.clipLevel === true &&
       !clipView.isAutomation &&
-      point.y <= clipView.rect.y + CLIP_LEVEL_HANDLE_PX
+      (grip
+        ? point.y <= clipView.rect.y + grip.height &&
+          Math.abs(
+            point.x - getClipLevelGripX(clipView, metrics, presentation.state.viewport.width),
+          ) <=
+            CLIP_LEVEL_GRIP_WIDTH / 2
+        : point.y <= clipView.rect.y + CLIP_LEVEL_HANDLE_PX)
     ) {
       return {
         kind: "clip-level",

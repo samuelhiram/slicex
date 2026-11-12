@@ -15,14 +15,28 @@ export const KIND_LABELS: Readonly<Record<FinancialItemKind, string>> = {
 
 // Mid-luminance hues that read on both the light and the dark theme: the
 // canvas tints clip cards with them and uses them at full strength for the
-// accent bar, the content and the track dot.
+// accent bar, the content and the track dot. Each one is ≥ 3:1 against its
+// own card fill and the canvas in BOTH themes (ux-canvas.spec.ts checks it
+// from palette.ts). MSI is in its card's blue family: it used to share the
+// income's green (1.001:1 fills — two incomes at a glance).
 export const KIND_COLORS: Readonly<Record<FinancialItemKind, string>> = {
-  income: "#1f9d55",
-  expense: "#e5484d",
+  income: "#18864a",
+  expense: "#d93d42",
   loan: "#8e4ec6",
   "credit-card": "#3e63dd",
-  "card-purchase": "#f76b15",
-  "installment-plan": "#0d9b8a",
+  "card-purchase": "#c2520a",
+  "installment-plan": "#2f74b5",
+};
+
+// Shape of the accent bar per kind: with the "+" / "−" of every amount,
+// kinds tell apart without colour (grayscale, colour blindness).
+export const KIND_ACCENT: Readonly<Record<FinancialItemKind, "solid" | "dashed" | "dotted">> = {
+  income: "solid",
+  expense: "solid",
+  loan: "solid",
+  "credit-card": "solid",
+  "card-purchase": "dotted",
+  "installment-plan": "dashed",
 };
 
 export const KIND_ORDER: ReadonlyArray<FinancialItemKind> = [
@@ -43,12 +57,13 @@ export const FREQUENCY_LABELS: Readonly<Record<RecurrenceFrequency, string>> = {
   monthly: "Mensual",
 };
 
+// Every number keeps its unit: no made-up abbreviations ("/quinc", "/14d").
 export const FREQUENCY_SHORT: Readonly<Record<RecurrenceFrequency, string>> = {
   once: "única",
   daily: "/día",
-  weekly: "/sem",
-  biweekly: "/14d",
-  semimonthly: "/quinc",
+  weekly: "/semana",
+  biweekly: "/14 días",
+  semimonthly: "/quincena",
   monthly: "/mes",
 };
 
@@ -87,4 +102,15 @@ export function displayRowLabel(label: string): string {
 /** Automatic name of a row holding `events` events. */
 export function autoRowName(events: number): string {
   return events >= 2 ? ROW_NAME_MANY : ROW_NAME_ONE;
+}
+
+/**
+ * Title of a row the person never named, DERIVED LIVE from what it holds
+ * (never stored): its main item, "+N" for the others ("Sueldo", "Pago
+ * Tarjeta Plata +1"). Empty rows keep the automatic "Línea de evento".
+ */
+export function derivedRowTitle(names: readonly string[]): string | null {
+  const first = names.find((name) => name.trim() !== "");
+  if (first === undefined) return null;
+  return names.length > 1 ? `${first.trim()} +${names.length - 1}` : first.trim();
 }

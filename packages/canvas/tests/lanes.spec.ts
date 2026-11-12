@@ -363,7 +363,16 @@ describe("Draw tool with a host create flow (onCreateRequest)", () => {
     up(xAt(20), yAt(2));
     controller.destroy();
     expect(core.getState().clips.map((clip) => clip.id)).toEqual(["a"]);
-    expect(requests).toEqual([{ trackIndex: 2, start: 20, duration: null, templateClipId: null }]);
+    expect(requests).toEqual([
+      {
+        trackIndex: 2,
+        start: 20,
+        duration: null,
+        templateClipId: null,
+        point: { x: xAt(20), y: yAt(2) },
+        clickCount: 2,
+      },
+    ]);
   });
 
   it("a drag previews the range on the lane it would take and asks on release", () => {
@@ -385,7 +394,17 @@ describe("Draw tool with a host create flow (onCreateRequest)", () => {
     controller.destroy();
     expect(core.getState().clips.length).toBe(1);
     expect(lanesOf(core.getState(), "t0")).toBe(1); // closed again
-    expect(requests).toEqual([{ trackIndex: 0, start: 0.5, duration: 4.5, templateClipId: null }]);
+    expect(requests).toEqual([
+      {
+        trackIndex: 0,
+        start: 0.5,
+        duration: 4.5,
+        templateClipId: null,
+        point: { x: xAt(0.5), y: yAt(0) },
+        lane: 1,
+        clickCount: 1,
+      },
+    ]);
   });
 
   it("a plain click asks nothing", () => {
@@ -399,5 +418,103 @@ describe("Draw tool with a host create flow (onCreateRequest)", () => {
     controller.destroy();
     expect(requests).toEqual([]);
     expect(core.getState().clips).toEqual([]);
+  });
+});
+
+// clickToCreate: a click (no drag) on empty space asks the host "what goes
+// here?" — Select and Draw alike — at the cell under the pointer, with the
+// press point and the lane a new clip would take there.
+describe("click-to-create (clickToCreate)", () => {
+  const withRequests = (clips: ClipSeed[], extra: Record<string, unknown> = {}) => {
+    const requests: PlaylistCreateRequest[] = [];
+    const drag = setupDrag(clips, {
+      onCreateRequest: (request: PlaylistCreateRequest) => requests.push(request),
+      clickToCreate: true,
+      ...extra,
+    });
+    return { ...drag, requests };
+  };
+
+  it("Select: a click on empty space asks at that cell (not snapped), on the lane free there", () => {
+    const { core, controller, down, up, requests } = withRequests([
+      { id: "a", trackId: "t0", start: 3, duration: 4 },
+    ]);
+    down(xAt(9.4), yAt(0));
+    up(xAt(9.4), yAt(0));
+    controller.destroy();
+    expect(core.getState().clips.length).toBe(1);
+    expect(requests).toEqual([
+      {
+        trackIndex: 0,
+        start: 9,
+        duration: null,
+        templateClipId: null,
+        point: { x: xAt(9.4), y: yAt(0) },
+        lane: 0,
+        clickCount: 1,
+      },
+    ]);
+  });
+
+  it("Select: a click that clears a selection only clears it; a marquee drag never asks", () => {
+    const { core, controller, down, move, up, requests } = withRequests([
+      { id: "a", trackId: "t0", start: 0, duration: 4 },
+    ]);
+    core.setSelection({ clipIds: ["a"], automationPointIds: [] });
+    down(xAt(20), yAt(1));
+    up(xAt(20), yAt(1));
+    expect(core.getState().selection.clipIds).toEqual([]);
+    expect(requests).toEqual([]);
+    down(xAt(20), yAt(1));
+    move(xAt(30), yAt(2));
+    up(xAt(30), yAt(2));
+    controller.destroy();
+    expect(requests).toEqual([]);
+  });
+
+  it("Draw: a click asks too (the selected clip as the template)", () => {
+    const { core, controller, down, up, requests } = withRequests([
+      { id: "a", trackId: "t0", start: 0, duration: 4 },
+    ]);
+    core.setTool("draw");
+    core.setSelection({ clipIds: ["a"], automationPointIds: [] });
+    down(xAt(12.2), yAt(1));
+    up(xAt(12.2), yAt(1));
+    controller.destroy();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ trackIndex: 1, start: 12, duration: null, templateClipId: "a", clickCount: 1 });
+    expect(core.getState().clips.length).toBe(1);
+  });
+
+  it("the second press of a double-click asks again with clickCount 2", () => {
+    const { controller, down, up, requests } = withRequests([]);
+    down(xAt(8), yAt(0), 1);
+    up(xAt(8), yAt(0));
+    down(xAt(8), yAt(0), 2);
+    up(xAt(8), yAt(0));
+    controller.destroy();
+    expect(requests.map((request) => request.clickCount)).toEqual([1, 2]);
+  });
+
+  it("without the option a Select click asks nothing (as before)", () => {
+    const requests: PlaylistCreateRequest[] = [];
+    const { controller, down, up } = setupDrag([], {
+      onCreateRequest: (request: PlaylistCreateRequest) => requests.push(request),
+    });
+    down(xAt(8), yAt(0));
+    up(xAt(8), yAt(0));
+    controller.destroy();
+    expect(requests).toEqual([]);
+  });
+
+  it("the open \"what goes here?\" menu shows its spot as a creating ghost; closing it clears it", () => {
+    const { core, controller } = withRequests([]);
+    core.openCreateMenu({ time: 6, duration: null, trackIndex: 1, lane: 0, position: { x: 300, y: 200 } });
+    const view = core.getPresentation().dragPreviewView;
+    expect(view?.creating).toBe(true);
+    expect(view?.rects).toHaveLength(1);
+    core.closeContextMenu();
+    expect(core.getPresentation().dragPreviewView).toBeNull();
+    controller.destroy();
   });
 });

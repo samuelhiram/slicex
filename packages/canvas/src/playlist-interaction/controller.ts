@@ -5,6 +5,7 @@ import {
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
   getTrackHeightByIndex,
+  getTrackTopByIndex,
   getHorizontalContentExtent,
   getTrackIdByIndex,
   getTrackLaneCount,
@@ -33,10 +34,15 @@ export type { PlaylistCreateRequest } from "./tools/types";
 import {
   createViewportNavigator,
   createWheelClassifier,
+  prefersReducedMotion,
   wheelDeltaScale,
   type ViewportNavigator,
 } from "./navigator";
-import { hitTestPlaylist, type PlaylistHit } from "./hit-test";
+import {
+  CLIP_LEVEL_GRIP_FINE_PX,
+  hitTestPlaylist,
+  type PlaylistHit,
+} from "./hit-test";
 import { getTool, zoomToolApplyOut } from "./tools";
 import { createTouchTracker } from "./touch";
 
@@ -52,6 +58,56 @@ export interface PlaylistClipLevelEvent {
   phase: "start" | "move" | "end";
   // Pointer travel since the press, in px; positive = upwards.
   deltaY: number;
+  // Shift held: the host may use a finer step.
+  fine?: boolean;
+}
+
+/**
+ * A document edit the controller just COMMITTED (on release / on the key),
+ * never reported per pointermove: the host can name it and offer undo
+ * ("Borrados 2 · Deshacer"). Labels are the clips' labels at that moment.
+ */
+export type PlaylistEditEvent =
+  | { kind: "delete"; clipIds: string[]; labels: string[] }
+  | {
+      kind: "slice";
+      time: number;
+      clipIds: string[];
+      labels: string[];
+      newClipIds: string[];
+    }
+  | {
+      // A keyboard move (arrows) of the selection, reported once the burst
+      // of key presses settles (nudgeFeedbackMs).
+      kind: "nudge";
+      clipIds: string[];
+      labels: string[];
+      fromStart: number;
+      toStart: number;
+      deltaTracks: number;
+    };
+
+/** Clips a gesture in progress WILL affect on release (delete / slice). */
+export interface PlaylistPendingClips {
+  kind: "delete" | "slice";
+  clipIds: ReadonlySet<string>;
+}
+
+/** What a keyboard move of the selection did so far (see describeNudge). */
+export interface PlaylistNudgeInfo {
+  clipId: string;
+  label: string;
+  fromStart: number;
+  toStart: number;
+  deltaTracks: number;
+}
+
+/** Plain-language names of the track header buttons ([off, on] states). */
+export interface PlaylistTrackButtonHints {
+  mute: readonly [string, string];
+  solo: readonly [string, string];
+  lock: readonly [string, string];
+  reorder?: string;
 }
 
 export interface PlaylistInteractionOptions {
@@ -88,6 +144,109 @@ export interface PlaylistInteractionOptions {
   // over the ruler / overview lane move time). Zoom and trackpad pan are
   // the same in both.
   mouseWheel?: "time" | "rows";
+
+  // --- Host semantics. Every default keeps FL parity; a host declares
+  // what its gestures mean (docs/fl-playlist-parity-spec.md).
+
+  // What the Slice tool (release) and Insert cut. "all" (default, FL):
+  // every clip crossing the time. "target": the clip pressed on (or the
+  // selection it belongs to); Insert cuts the selection; Shift (held on
+  // release / with Insert) cuts every clip at that time.
+  sliceScope?: "all" | "target";
+  // Text of the slice guide's tooltip while dragging (e.g. "Partir Sueldo
+  // el 23 dic"); called only when the snapped time or the targets change.
+  describeSlice?: (clipIds: readonly string[], time: number) => string | null;
+  // The Delete tool (and the right-button sweeps) mark what they touch and
+  // delete it all on release, in one step, instead of at once.
+  deferDelete?: boolean;
+  // Clips the gesture in progress will affect (null when it ends). Called
+  // only when that set changes, never per move: e.g. to highlight them.
+  onPendingChange?: (pending: PlaylistPendingClips | null) => void;
+  // A destructive edit was committed (delete / slice / keyboard move).
+  onEdit?: (event: PlaylistEditEvent) => void;
+  // Escape puts any tool other than Select back to Select.
+  escapeSelectsTool?: boolean;
+  // CSS cursor per tool over the timeline (default: each tool's own).
+  toolCursors?: Partial<Record<PlaylistToolId, string>>;
+  // Arrow-key moves of the selection: the burst of presses is ONE undo
+  // entry (a gesture, so the host's effect pill shows) and a tooltip names
+  // the move ("Gasto: 24 nov → 27 nov") until it settles this many ms.
+  // 0 / absent: plain nudges (one undo entry each, no tooltip).
+  nudgeFeedbackMs?: number;
+  // Tooltip text of a keyboard move (default "label: from → to").
+  describeNudge?: (info: PlaylistNudgeInfo) => string;
+  // Hovering a clip this long (ms) shows its info card (a "clip" tooltip;
+  // the renderer asks getClipInfo for its lines); a tap shows it at once
+  // on touch. Escape closes it. Absent: no card.
+  hoverCardDelayMs?: number;
+  // Hover-time indicator: while the pointer rests over the timeline columns
+  // (ruler, overview lane, rows) and no gesture runs, state.hoverTime holds
+  // the beat cell under it — the renderer draws a faint line there and names
+  // the day on the ruler. It replaces the floating time tooltip of the ruler
+  // / lane hover, which covered the curve next to the pointer.
+  hoverTimeIndicator?: boolean;
+  // With onCreateRequest: a click (no drag) on empty space also asks the
+  // host — Select and Draw alike — at the cell under the pointer (not
+  // snapped: the cell the hover line names), with the press point and the
+  // lane a new clip would take (`point`, `lane`), so the host can ask "what
+  // goes here?" at that spot. A click that clears a selection only clears
+  // it; Ctrl / Shift clicks never ask. The second press of a double-click
+  // asks again with `clickCount: 2`.
+  clickToCreate?: boolean;
+  // Names of the track header buttons, shown as a tooltip on hover.
+  trackButtonHints?: PlaylistTrackButtonHints;
+  // Extra px of hit area around each track header button (see hit-test).
+  trackButtonSlop?: number;
+  // The level handle is the visible grip only (24 px wide, taller for a
+  // coarse pointer), and a drag from it that starts mostly horizontal
+  // moves the clip instead of changing its level (axis lock).
+  clipLevelGrip?: boolean;
+  // Alt+← / Alt+→ moved the keyboard focus (the selection) to this clip.
+  onClipFocus?: (clipId: string) => void;
+}
+
+// Keyboard object roving (Alt+← / Alt+→): clips in date order, then row,
+// then lane. O(n log n) per key press — never per frame.
+function clipsInDateOrder(
+  state: import("../playlist-core").PlaylistState,
+): import("../playlist-core").PlaylistClip[] {
+  const rowOf = new Map<string, number>();
+  state.tracks.forEach((track, index) => rowOf.set(track.id, index));
+  return [...state.clips].sort(
+    (a, b) =>
+      a.start - b.start ||
+      (rowOf.get(a.trackId) ?? 0) - (rowOf.get(b.trackId) ?? 0) ||
+      (a.lane ?? 0) - (b.lane ?? 0),
+  );
+}
+
+function hitClipId(hit: PlaylistHit): string | null {
+  switch (hit.kind) {
+    case "clip":
+    case "resize-left":
+    case "resize-right":
+    case "clip-level":
+    case "clip-extend":
+    case "automation-body":
+      return hit.clip.id;
+    default:
+      return null;
+  }
+}
+
+function sameIdSet(a: ReadonlySet<string>, b: readonly string[]): boolean {
+  if (a.size !== b.length) return false;
+  for (const id of b) if (!a.has(id)) return false;
+  return true;
+}
+
+function isTrackButtonHit(hit: PlaylistHit): boolean {
+  return (
+    hit.kind === "track-mute-button" ||
+    hit.kind === "track-solo-button" ||
+    hit.kind === "track-lock-button" ||
+    hit.kind === "track-reorder-handle"
+  );
 }
 
 type PlaylistInteractionHost = HTMLElement & {
@@ -123,6 +282,8 @@ function setCursor(
   hit: PlaylistHit | null,
   active: ActiveGesture | null,
   toolId: PlaylistToolId,
+  // Host cursors per tool (PlaylistInteractionOptions.toolCursors).
+  cursors?: Partial<Record<PlaylistToolId, string>>,
 ): void {
   if (active?.kind === "pan" || active?.kind === "clip-drag") {
     host.style.cursor = "grabbing";
@@ -171,7 +332,7 @@ function setCursor(
     active?.kind === "slip-drag" ||
     active?.kind === "slice-drag"
   ) {
-    host.style.cursor = getTool(toolId).cursor;
+    host.style.cursor = (cursors?.[toolId] ?? getTool(toolId).cursor);
     return;
   }
 
@@ -270,7 +431,7 @@ function setCursor(
     return;
   }
 
-  host.style.cursor = getTool(toolId).cursor;
+  host.style.cursor = (cursors?.[toolId] ?? getTool(toolId).cursor);
 }
 
 function selectClipsInMarquee(core: PlaylistCore, additive: boolean): void {
@@ -495,7 +656,15 @@ function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
     return;
   }
 
-  if (hit.kind === "track-header") {
+  // The header's own buttons (and the row divider) belong to the row: the
+  // buttons only show on a hovered row, so hovering one must keep them.
+  if (
+    hit.kind === "track-header" ||
+    hit.kind === "track-mute-button" ||
+    hit.kind === "track-solo-button" ||
+    hit.kind === "track-lock-button" ||
+    hit.kind === "track-reorder-handle"
+  ) {
     core.setHover({
       kind: "track",
       trackId: getTrackIdByIndex(core.getState(), hit.trackIndex),
@@ -525,6 +694,193 @@ export function createPlaylistInteractionController(
   const onOverviewHover = options.onOverviewHover;
   const onCreateRequest = options.onCreateRequest;
   const wheelScrollsRows = options.mouseWheel === "rows";
+  // Host semantics (read once).
+  const toolCursors = options.toolCursors;
+  const sliceTargeted = options.sliceScope === "target";
+  const deferDelete = options.deferDelete === true;
+  const onPendingChange = options.onPendingChange;
+  const onEdit = options.onEdit;
+  const nudgeFeedbackMs = Math.max(0, options.nudgeFeedbackMs ?? 0);
+  const hoverCardDelayMs = options.hoverCardDelayMs;
+  const hoverTimeIndicator = options.hoverTimeIndicator === true;
+  const clickToCreate = options.clickToCreate === true;
+  // The press that may become a click-to-create (plain fields: no
+  // allocation per pointerdown).
+  let createPressX = 0;
+  let createPressY = 0;
+  let createPressCount = 0;
+  let createPressAsks = false;
+  const trackButtonHints = options.trackButtonHints;
+  const levelGrip = options.clipLevelGrip === true;
+  // A coarse pointer (touch) gets a 24 px level grip; read once.
+  const coarsePointer =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse)").matches;
+
+  // Labels of clips by id, read before they change (delete / slice).
+  const labelsOf = (ids: readonly string[]): string[] => {
+    const wanted = new Set(ids);
+    const labels: string[] = [];
+    for (const clip of core.getState().clips) if (wanted.has(clip.id)) labels.push(clip.label);
+    return labels;
+  };
+
+  // Pending set reported to the host (onPendingChange): only on change.
+  let pendingKind: PlaylistPendingClips["kind"] | null = null;
+  let pendingIds: ReadonlySet<string> = new Set<string>();
+  const reportPending = (kind: PlaylistPendingClips["kind"] | null, ids: readonly string[]): void => {
+    if (!onPendingChange) return;
+    if (kind === null || ids.length === 0) {
+      if (pendingKind === null) return;
+      pendingKind = null;
+      pendingIds = new Set<string>();
+      onPendingChange(null);
+      return;
+    }
+    if (kind === pendingKind && sameIdSet(pendingIds, ids)) return;
+    pendingKind = kind;
+    pendingIds = new Set(ids);
+    onPendingChange({ kind, clipIds: pendingIds });
+  };
+
+  // What a slice at the guide would cut: with sliceScope "target", the
+  // pressed clip (or the selection it belongs to), else the selection;
+  // Shift (or the FL default scope) = every clip crossing the time.
+  const sliceTargets = (
+    gesture: Extract<ActiveGesture, { kind: "slice-drag" }>,
+    time: number,
+    all: boolean,
+  ): string[] => {
+    const state = core.getState();
+    let only: Set<string> | null = null;
+    if (sliceTargeted && !all) {
+      const selected = state.selection.clipIds;
+      const target = gesture.targetClipId ?? null;
+      only = new Set(
+        target === null ? selected : selected.includes(target) ? selected : [target],
+      );
+    }
+    const locked = new Set<string>();
+    for (const track of state.tracks) if (track.locked === true) locked.add(track.id);
+    const ids: string[] = [];
+    for (const clip of state.clips) {
+      if (only !== null && !only.has(clip.id)) continue;
+      if (clip.noSlice === true || locked.has(clip.trackId)) continue;
+      if (time > clip.start + 1e-6 && time < clip.start + clip.duration - 1e-6) ids.push(clip.id);
+    }
+    return ids;
+  };
+
+  const commitSlice = (time: number, ids: readonly string[] | undefined): void => {
+    const only = ids ? new Set(ids) : null;
+    const cut = sliceTargetsAll(time).filter((id) => only === null || only.has(id));
+    if (cut.length === 0) return;
+    const labels = labelsOf(cut);
+    const newClipIds = core.sliceClipsAtTime(time, ids);
+    if (newClipIds.length > 0) {
+      onEdit?.({ kind: "slice", time, clipIds: cut, labels, newClipIds });
+    }
+  };
+  const sliceTargetsAll = (time: number): string[] => {
+    const state = core.getState();
+    const locked = new Set<string>();
+    for (const track of state.tracks) if (track.locked === true) locked.add(track.id);
+    return state.clips
+      .filter(
+        (clip) =>
+          clip.noSlice !== true &&
+          !locked.has(clip.trackId) &&
+          time > clip.start + 1e-6 &&
+          time < clip.start + clip.duration - 1e-6,
+      )
+      .map((clip) => clip.id);
+  };
+
+  // Keyboard moves (arrows) of the selection, as one gesture per burst
+  // (nudgeFeedbackMs): one undo entry, the host's effect pill under a
+  // tooltip naming the move, reported once it settles.
+  let nudge: {
+    primaryId: string;
+    clipIds: string[];
+    labels: string[];
+    fromStart: number;
+    fromTrack: number;
+    timer: ReturnType<typeof setTimeout> | null;
+  } | null = null;
+  const trackIndexOfClip = (clipId: string): number => {
+    const state = core.getState();
+    const clip = state.clips.find((candidate) => candidate.id === clipId);
+    return clip ? state.tracks.findIndex((track) => track.id === clip.trackId) : -1;
+  };
+  const closeNudge = (): void => {
+    const session = nudge;
+    if (!session) return;
+    nudge = null;
+    if (session.timer !== null) clearTimeout(session.timer);
+    const tooltip = core.getState().tooltip;
+    if (tooltip && tooltip.kind === "hint") core.clearTooltip();
+    core.endGesture();
+    const clip = core.getState().clips.find((candidate) => candidate.id === session.primaryId);
+    if (!clip) return;
+    const deltaTracks = trackIndexOfClip(clip.id) - session.fromTrack;
+    if (Math.abs(clip.start - session.fromStart) < 1e-9 && deltaTracks === 0) return;
+    onEdit?.({
+      kind: "nudge",
+      clipIds: session.clipIds,
+      labels: session.labels,
+      fromStart: session.fromStart,
+      toStart: clip.start,
+      deltaTracks,
+    });
+  };
+  const showNudgeTooltip = (): void => {
+    const session = nudge;
+    if (!session) return;
+    const state = core.getState();
+    const clip = state.clips.find((candidate) => candidate.id === session.primaryId);
+    if (!clip) return;
+    const info: PlaylistNudgeInfo = {
+      clipId: clip.id,
+      label: clip.label,
+      fromStart: session.fromStart,
+      toStart: clip.start,
+      deltaTracks: trackIndexOfClip(clip.id) - session.fromTrack,
+    };
+    const text = options.describeNudge
+      ? options.describeNudge(info)
+      : `${clip.label}: ${core.formatTime(session.fromStart)} → ${core.formatTime(clip.start)}`;
+    const view = core.getPresentation().clipViewsById.get(clip.id);
+    const anchor = view
+      ? { x: Math.max(metrics.trackHeaderWidth, view.rect.x), y: view.rect.y }
+      : { x: metrics.trackHeaderWidth + 12, y: getTracksTop(metrics) + 24 };
+    core.setTooltip({ kind: "hint", text, anchor });
+  };
+
+  // Tooltip text of the slice guide, recomputed only when it changes.
+  let sliceLabel = "";
+
+  // Info card of a hovered clip (hoverCardDelayMs): one timer, armed when
+  // the hovered clip changes (never per move), cleared on leave / press.
+  let hoverCardClipId: string | null = null;
+  let hoverCardTimer: ReturnType<typeof setTimeout> | null = null;
+  let hoverCardPoint: PlaylistPoint = { x: 0, y: 0 };
+  const cancelHoverCard = (): void => {
+    if (hoverCardTimer !== null) {
+      clearTimeout(hoverCardTimer);
+      hoverCardTimer = null;
+    }
+    hoverCardClipId = null;
+  };
+  const clearCardTooltip = (): void => {
+    const tooltip = core.getState().tooltip;
+    if (tooltip && (tooltip.kind === "clip" || tooltip.kind === "hint")) core.clearTooltip();
+  };
+  const showClipCard = (clipId: string, point: PlaylistPoint): void => {
+    const clip = core.getState().clips.find((candidate) => candidate.id === clipId);
+    if (!clip) return;
+    core.setTooltip({ kind: "clip", text: clip.label, anchor: { ...point }, clipId });
+  };
 
   // Lane of row `trackIndex` under screen `y` for a dragged clip, and the
   // free lane that row opens (stacked lanes, lanes.ts). A row with other
@@ -592,6 +948,10 @@ export function createPlaylistInteractionController(
   const hitOptions = {
     clipLevel: onClipLevelDrag !== undefined,
     clipExtend: options.clipExtend,
+    clipLevelGrip: levelGrip
+      ? { height: coarsePointer ? 24 : CLIP_LEVEL_GRIP_FINE_PX }
+      : undefined,
+    trackButtonSlop: options.trackButtonSlop,
   };
   // The right button ignores the thin track chrome (divisor, row buttons):
   // a press on a row line still opens the menu of what is under it.
@@ -600,10 +960,7 @@ export function createPlaylistInteractionController(
     hitTestPlaylist(core.getPresentation(), point, metrics, opts);
   // Viewport motion (smooth wheel, zoom, momentum, edge auto-scroll).
   const navigator = createViewportNavigator(core, {
-    reducedMotion: () =>
-      typeof window !== "undefined" &&
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    reducedMotion: prefersReducedMotion,
   });
   const classifyWheel = createWheelClassifier();
   // Hold Space to pan with the left button (tap Space still plays).
@@ -719,11 +1076,25 @@ export function createPlaylistInteractionController(
     host.focus();
     // A new press always takes over: no glide / momentum fights the hand.
     navigator.stop();
+    // …and closes a keyboard move in progress, the info card / hint.
+    closeNudge();
+    cancelHoverCard();
+    clearCardTooltip();
 
     const state = core.getState();
     const point = resolvePoint(host, event);
     const rawHit = hitAt(point, event.button === 2 ? menuHitOptions : hitOptions);
     const clickCount = pressClickCount(event, point);
+    createPressX = point.x;
+    createPressY = point.y;
+    createPressCount = clickCount;
+    // A click that clears a selection only clears it; Ctrl / Shift add to it.
+    createPressAsks =
+      clickToCreate &&
+      event.button === 0 &&
+      !(event.ctrlKey || event.metaKey || event.shiftKey) &&
+      state.selection.clipIds.length === 0 &&
+      state.selection.automationPointIds.length === 0;
     // The level handle belongs to Select / Draw; every other tool sees the
     // clip itself.
     const levelTool = core.getState().tool === "select" || core.getState().tool === "draw";
@@ -764,7 +1135,7 @@ export function createPlaylistInteractionController(
         startScrollY: state.viewport.scrollY,
       };
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture, state.tool);
+      setCursor(host, hit, activeGesture, state.tool, toolCursors);
       event.preventDefault();
       return;
     }
@@ -819,16 +1190,18 @@ export function createPlaylistInteractionController(
       ) {
         const deletedClipIds = new Set<string>([hit.clip.id]);
         core.beginGesture();
-        core.deleteClips([hit.clip.id]);
+        if (deferDelete) reportPending("delete", [hit.clip.id]);
+        else core.deleteClips([hit.clip.id]);
         activeGesture = {
           kind: "delete-drag",
           pointerId: event.pointerId,
           lastPoint: { ...point },
           deletedClipIds,
           skipAutomation: true,
+          deferred: deferDelete,
         };
         host.setPointerCapture?.(event.pointerId);
-        setCursor(host, hit, activeGesture, state.tool);
+        setCursor(host, hit, activeGesture, state.tool, toolCursors);
         event.preventDefault();
         return;
       }
@@ -925,7 +1298,7 @@ export function createPlaylistInteractionController(
           beatsPerPx,
         };
         host.setPointerCapture?.(event.pointerId);
-        setCursor(host, hit, activeGesture, state.tool);
+        setCursor(host, hit, activeGesture, state.tool, toolCursors);
         event.preventDefault();
         return;
       }
@@ -962,7 +1335,7 @@ export function createPlaylistInteractionController(
         travel,
       };
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture, state.tool);
+      setCursor(host, hit, activeGesture, state.tool, toolCursors);
       event.preventDefault();
       return;
     }
@@ -996,7 +1369,7 @@ export function createPlaylistInteractionController(
         travel,
       };
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture, state.tool);
+      setCursor(host, hit, activeGesture, state.tool, toolCursors);
       event.preventDefault();
       return;
     }
@@ -1034,7 +1407,7 @@ export function createPlaylistInteractionController(
       };
       core.beginGesture();
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture, state.tool);
+      setCursor(host, hit, activeGesture, state.tool, toolCursors);
       event.preventDefault();
       return;
     }
@@ -1048,7 +1421,7 @@ export function createPlaylistInteractionController(
       };
       core.beginGesture();
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture, state.tool);
+      setCursor(host, hit, activeGesture, state.tool, toolCursors);
       event.preventDefault();
       return;
     }
@@ -1071,7 +1444,7 @@ export function createPlaylistInteractionController(
         };
         core.beginGesture();
         host.setPointerCapture?.(event.pointerId);
-        setCursor(host, hit, activeGesture, state.tool);
+        setCursor(host, hit, activeGesture, state.tool, toolCursors);
         event.preventDefault();
         return;
       }
@@ -1083,13 +1456,18 @@ export function createPlaylistInteractionController(
         pointerId: event.pointerId,
         clipId: hit.clipId,
         startY: point.y,
+        startX: point.x,
+        // Grip mode decides the axis on the first moves (axis lock).
+        vertical: !levelGrip,
       };
       core.setClipSelection([hit.clipId]);
       core.beginGesture();
-      const text = onClipLevelDrag({ clipId: hit.clipId, phase: "start", deltaY: 0 });
-      if (text) core.setTooltip({ kind: "time", text, anchor: point });
+      if (!levelGrip) {
+        const text = onClipLevelDrag({ clipId: hit.clipId, phase: "start", deltaY: 0 });
+        if (text) core.setTooltip({ kind: "time", text, anchor: point });
+      }
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture, state.tool);
+      setCursor(host, hit, activeGesture, state.tool, toolCursors);
       event.preventDefault();
       return;
     }
@@ -1120,7 +1498,7 @@ export function createPlaylistInteractionController(
         time: core.endTooltipBeat(hit.clip.start + hit.clip.duration),
       });
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture, state.tool);
+      setCursor(host, hit, activeGesture, state.tool, toolCursors);
       event.preventDefault();
       return;
     }
@@ -1134,7 +1512,7 @@ export function createPlaylistInteractionController(
         pointerId: event.pointerId,
       };
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture, state.tool);
+      setCursor(host, hit, activeGesture, state.tool, toolCursors);
       event.preventDefault();
       return;
     }
@@ -1194,6 +1572,7 @@ export function createPlaylistInteractionController(
         event,
         clickCount,
         onCreateRequest,
+        deferDelete,
       });
     } finally {
       if (!gesture || !gestureMutatesDoc(gesture)) {
@@ -1203,7 +1582,10 @@ export function createPlaylistInteractionController(
     if (gesture) {
       activeGesture = gesture;
       host.setPointerCapture?.(event.pointerId);
-      setCursor(host, hit, activeGesture, state.tool);
+      setCursor(host, hit, activeGesture, state.tool, toolCursors);
+      if (gesture.kind === "delete-drag" && gesture.deferred) {
+        reportPending("delete", [...gesture.deletedClipIds]);
+      }
     }
     event.preventDefault();
   };
@@ -1276,6 +1658,8 @@ export function createPlaylistInteractionController(
     const point = resolvePoint(host, event);
     if (activeGesture && activeGesture.pointerId === event.pointerId) {
       lastGestureMove = event;
+      // A drag has its own guides (snap line, time tooltip): no hover line.
+      if (hoverTimeIndicator) core.setHoverTime(null);
       updateEdgeScroll(activeGesture, point);
     }
 
@@ -1298,6 +1682,26 @@ export function createPlaylistInteractionController(
     if (!activeGesture) {
       const hit = hitAt(point);
       setHoverFromHit(core, hit);
+      // Info card: armed when the hovered clip changes (mouse / pen only;
+      // a tap shows it on touch), so a steady hover costs nothing.
+      const overClip = hitClipId(hit);
+      if (hoverCardDelayMs !== undefined && event.pointerType !== "touch") {
+        if (overClip !== hoverCardClipId) {
+          cancelHoverCard();
+          if (overClip !== null) {
+            hoverCardClipId = overClip;
+            hoverCardPoint = point;
+            hoverCardTimer = setTimeout(() => {
+              hoverCardTimer = null;
+              if (activeGesture || hoverCardClipId !== overClip) return;
+              showClipCard(overClip, hoverCardPoint);
+            }, hoverCardDelayMs);
+          }
+        } else if (overClip !== null && hoverCardTimer !== null) {
+          // Still waiting: the card opens where the pointer rests.
+          hoverCardPoint = point;
+        }
+      }
       if (onOverviewHover) {
         const inLane =
           hit.kind === "ruler" &&
@@ -1307,11 +1711,25 @@ export function createPlaylistInteractionController(
           inLane ? Math.max(0, Math.floor(screenXToTime(state, point.x, metrics))) : null,
         );
       }
+      // Hover-time indicator: the beat cell under the pointer over the
+      // timeline columns (SET_HOVER_TIME is idempotent: one notify per cell).
+      if (hoverTimeIndicator) {
+        const viewport = state.viewport;
+        const overTimeline =
+          point.x >= metrics.trackHeaderWidth &&
+          point.x < viewport.width - metrics.scrollbarSize &&
+          point.y >= 0 &&
+          point.y < viewport.height - metrics.scrollbarSize &&
+          hit.kind !== "scrollbar-horizontal" &&
+          hit.kind !== "scrollbar-vertical";
+        core.setHoverTime(overTimeline ? screenXToTime(state, point.x, metrics) : null);
+      }
       // F3: hover on the ruler emits a B.B.T tooltip; everywhere else the
       // tooltip is cleared. setTooltip short-circuits when the value
       // doesn't change, so calling clearTooltip every pointermove is free
-      // when no tooltip was active.
-      if (hit.kind === "ruler" || hit.kind === "play-position-marker") {
+      // when no tooltip was active. With the hover-time indicator the ruler
+      // names the day itself: no tooltip over the curve.
+      if (!hoverTimeIndicator && (hit.kind === "ruler" || hit.kind === "play-position-marker")) {
         const tooltipBeats = Math.max(
           0,
           screenXToTime(state, point.x, metrics),
@@ -1322,10 +1740,47 @@ export function createPlaylistInteractionController(
           anchor: point,
           time: tooltipBeats,
         });
+      } else if (trackButtonHints && isTrackButtonHit(hit)) {
+        // What the header button does, anchored under the button (a fixed
+        // anchor: SET_TOOLTIP stays idempotent while the pointer rests).
+        const row = core
+          .getPresentation()
+          .trackRowsByIndex.get((hit as { trackIndex: number }).trackIndex);
+        const track = row?.track;
+        let text: string | undefined;
+        let rect = row?.reorderHandleRect;
+        if (hit.kind === "track-mute-button") {
+          text = trackButtonHints.mute[track?.muted === true ? 1 : 0];
+          rect = row?.buttons.mute;
+        } else if (hit.kind === "track-solo-button") {
+          text = trackButtonHints.solo[track?.soloed === true ? 1 : 0];
+          rect = row?.buttons.solo;
+        } else if (hit.kind === "track-lock-button") {
+          text = trackButtonHints.lock[track?.locked === true ? 1 : 0];
+          rect = row?.buttons.lock;
+        } else {
+          text = trackButtonHints.reorder;
+        }
+        if (text && rect) {
+          core.setTooltip({
+            kind: "hint",
+            text,
+            anchor: { x: rect.x - 4, y: rect.y + rect.height + 30 },
+          });
+        } else {
+          core.clearTooltip();
+        }
       } else {
-        core.clearTooltip();
+        // The info card stays while the pointer is over its clip.
+        const tooltip = state.tooltip;
+        const keepCard =
+          tooltip !== null &&
+          tooltip.kind === "clip" &&
+          overClip !== null &&
+          tooltip.clipId === overClip;
+        if (!keepCard) core.clearTooltip();
       }
-      setCursor(host, hit, null, state.tool);
+      setCursor(host, hit, null, state.tool, toolCursors);
       return;
     }
 
@@ -1336,10 +1791,59 @@ export function createPlaylistInteractionController(
     const gesture = activeGesture;
 
     if (gesture.kind === "clip-level") {
+      if (!gesture.vertical) {
+        // Axis lock: decided on the first 6 px. Mostly horizontal = a plain
+        // move of the clip (what a press on its body does); vertical = the
+        // host level drag.
+        const dx = point.x - gesture.startX;
+        const dy = point.y - gesture.startY;
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 6) {
+          event.preventDefault();
+          return;
+        }
+        if (Math.abs(dx) > Math.abs(dy)) {
+          const clip = state.clips.find((candidate) => candidate.id === gesture.clipId);
+          const drag = clip
+            ? getTool("select").onPointerDown({
+                core,
+                metrics,
+                point: { x: gesture.startX, y: gesture.startY },
+                hit: { kind: "clip", clip, clipId: clip.id },
+                // The press modifiers are not a clone / toggle here.
+                event: {
+                  pointerId: event.pointerId,
+                  ctrlKey: false,
+                  metaKey: false,
+                  shiftKey: false,
+                  altKey: event.altKey,
+                  detail: 1,
+                } as PointerEvent,
+                clickCount: 1,
+              })
+            : null;
+          if (drag && drag.kind === "clip-drag") {
+            activeGesture = drag;
+            setCursor(host, null, drag, state.tool, toolCursors);
+            handlePointerMove(event);
+          } else {
+            event.preventDefault();
+          }
+          return;
+        }
+        gesture.vertical = true;
+        const first = onClipLevelDrag?.({
+          clipId: gesture.clipId,
+          phase: "start",
+          deltaY: 0,
+          fine: event.shiftKey,
+        });
+        if (first) core.setTooltip({ kind: "time", text: first, anchor: point });
+      }
       const text = onClipLevelDrag?.({
         clipId: gesture.clipId,
         phase: "move",
         deltaY: gesture.startY - point.y,
+        fine: event.shiftKey,
       });
       if (text) core.setTooltip({ kind: "time", text, anchor: point });
       else core.clearTooltip();
@@ -1597,9 +2101,19 @@ export function createPlaylistInteractionController(
       // clearDragOverlays. `visible` stays true regardless of snap mode —
       // this marks where the cut lands, it's not just a snap hint.
       core.setSnapHint({ time: snapped, visible: true });
+      // What the cut will split (host scope): named in the tooltip and
+      // reported as pending, only when the time or the scope changes.
+      const all = !sliceTargeted || event.shiftKey;
+      if (gesture.lastTime !== snapped || gesture.lastAll !== all) {
+        gesture.lastTime = snapped;
+        gesture.lastAll = all;
+        const targets = sliceTargets(gesture, snapped, all);
+        reportPending("slice", targets);
+        sliceLabel = options.describeSlice ? options.describeSlice(targets, snapped) ?? "" : "";
+      }
       core.setTooltip({
         kind: "time",
-        text: core.formatTime(snapped),
+        text: sliceLabel || core.formatTime(snapped),
         anchor: point,
         time: snapped,
       });
@@ -1749,7 +2263,9 @@ export function createPlaylistInteractionController(
         gesture.skipAutomation === true,
       );
       if (ids.length > 0) {
-        core.deleteClips(ids);
+        // Deferred: only marked (the set only grows: one report per new clip).
+        if (gesture.deferred) reportPending("delete", [...gesture.deletedClipIds]);
+        else core.deleteClips(ids);
       }
       gesture.lastPoint = { ...point };
       event.preventDefault();
@@ -1828,7 +2344,7 @@ export function createPlaylistInteractionController(
 
     // Host-owned creation: the previewed range becomes a request (the host
     // decides what, if anything, is added). Asked after the overlays clear.
-    const createRequest: PlaylistCreateRequest | null =
+    let createRequest: PlaylistCreateRequest | null =
       activeGesture.kind === "clip-create-drag" &&
       activeGesture.hostCreate &&
       activeGesture.hostCreate.end !== null
@@ -1837,16 +2353,56 @@ export function createPlaylistInteractionController(
             start: activeGesture.startSnappedStart,
             duration: activeGesture.hostCreate.end - activeGesture.startSnappedStart,
             templateClipId: activeGesture.hostCreate.templateClipId,
+            point: { x: createPressX, y: createPressY },
+            lane: creationLane(
+              core.getState(),
+              activeGesture.startTrackIndex,
+              activeGesture.startSnappedStart,
+              activeGesture.hostCreate.end,
+            ),
+            clickCount: 1,
           }
         : null;
+    // Click-to-create: a click (no drag) on empty space — Select's marquee
+    // that never grew, Draw's create that never reached a length.
+    if (
+      createRequest === null &&
+      onCreateRequest &&
+      clickToCreate &&
+      !pressDragged &&
+      ((activeGesture.kind === "marquee" && createPressAsks) ||
+        (activeGesture.kind === "clip-create-drag" &&
+          activeGesture.hostCreate !== undefined &&
+          activeGesture.hostCreate.end === null))
+    ) {
+      const state = core.getState();
+      const trackIndex = screenYToTrackIndex(state, createPressY, metrics);
+      const start = Math.max(0, Math.floor(screenXToTime(state, createPressX, metrics)));
+      createRequest = {
+        trackIndex,
+        start,
+        duration: null,
+        templateClipId:
+          activeGesture.kind === "clip-create-drag"
+            ? (activeGesture.hostCreate?.templateClipId ?? null)
+            : null,
+        point: { x: createPressX, y: createPressY },
+        lane: creationLane(state, trackIndex, start, start + 1),
+        clickCount: createPressCount,
+      };
+    }
 
     if (activeGesture.kind === "clip-level") {
       const point = resolvePoint(host, event);
-      onClipLevelDrag?.({
-        clipId: activeGesture.clipId,
-        phase: "end",
-        deltaY: activeGesture.startY - point.y,
-      });
+      // Grip mode: a press that never proved vertical started nothing.
+      if (activeGesture.vertical) {
+        onClipLevelDrag?.({
+          clipId: activeGesture.clipId,
+          phase: "end",
+          deltaY: activeGesture.startY - point.y,
+          fine: event.shiftKey,
+        });
+      }
       core.endGesture();
     }
 
@@ -1863,7 +2419,35 @@ export function createPlaylistInteractionController(
         state,
       );
       if (time > 0) {
-        core.sliceClipsAtTime(time);
+        // Host scope "target": the pressed clip / selection (Shift: all).
+        const all = !sliceTargeted || event.shiftKey;
+        commitSlice(time, all ? undefined : sliceTargets(activeGesture, time, false));
+      }
+      sliceLabel = "";
+      reportPending(null, []);
+    }
+
+    // Delete sweep: deferred = delete everything marked now (inside the
+    // gesture, one undo entry); either way the host hears what went.
+    if (activeGesture.kind === "delete-drag") {
+      const marked = [...activeGesture.deletedClipIds];
+      if (activeGesture.deferred) {
+        const labelById = new Map<string, string>();
+        for (const clip of core.getState().clips) labelById.set(clip.id, clip.label);
+        const ids = marked.filter((id) => labelById.has(id));
+        if (ids.length > 0) core.deleteClips(ids);
+        const after = new Set(core.getState().clips.map((clip) => clip.id));
+        const gone = ids.filter((id) => !after.has(id));
+        reportPending(null, []);
+        if (gone.length > 0) {
+          onEdit?.({
+            kind: "delete",
+            clipIds: gone,
+            labels: gone.map((id) => labelById.get(id) ?? ""),
+          });
+        }
+      } else if (marked.length > 0 && onEdit) {
+        onEdit({ kind: "delete", clipIds: marked, labels: [] });
       }
     }
 
@@ -1889,10 +2473,18 @@ export function createPlaylistInteractionController(
     // in the list above, but it still sets snap/tooltip.
     clearDragOverlays(core);
 
+    const tappedClipId =
+      hoverCardDelayMs !== undefined &&
+      event.pointerType === "touch" &&
+      !pressDragged &&
+      activeGesture.kind === "clip-drag"
+        ? activeGesture.primaryClipId
+        : null;
     activeGesture = null;
     host.releasePointerCapture?.(event.pointerId);
-    setCursor(host, hitAt(resolvePoint(host, event)), null, core.getState().tool);
+    setCursor(host, hitAt(resolvePoint(host, event)), null, core.getState().tool, toolCursors);
     if (createRequest) onCreateRequest?.(createRequest);
+    if (tappedClipId !== null) showClipCard(tappedClipId, resolvePoint(host, event));
   };
 
   // Pointer wheel / trackpad.
@@ -1979,9 +2571,161 @@ export function createPlaylistInteractionController(
     navigator.scrollBy(notch * step, 0);
   };
 
+  // Brings a clip into view: its day (glide) and its row.
+  const revealClip = (clipId: string): void => {
+    const state = core.getState();
+    const clip = state.clips.find((candidate) => candidate.id === clipId);
+    if (!clip) return;
+    navigator.reveal(clip.start, { align: "nearest", margin: 96 });
+    const index = state.tracks.findIndex((track) => track.id === clip.trackId);
+    if (index < 0) return;
+    const top = getTrackTopByIndex(state, index, metrics);
+    const height = getTrackHeightByIndex(state, index, metrics);
+    const visible = Math.max(
+      1,
+      state.viewport.height - getTracksTop(metrics) - metrics.scrollbarSize,
+    );
+    const scrollY = state.viewport.scrollY;
+    if (top < scrollY) navigator.scrollTo({ scrollY: Math.max(0, top - 8) });
+    else if (top + height > scrollY + visible) {
+      navigator.scrollTo({ scrollY: Math.max(0, top + height - visible + 8) });
+    }
+  };
+
+  // Alt+← / Alt+→: the keyboard focus (= the selection) walks the clips in
+  // date order; with nothing selected it starts at the playhead. At an end
+  // it stays (and is reported again, so a screen reader hears where it is).
+  const focusAdjacentClip = (dir: 1 | -1): void => {
+    const state = core.getState();
+    const ordered = clipsInDateOrder(state);
+    if (ordered.length === 0) return;
+    const current = state.selection.clipIds[0];
+    const index = current ? ordered.findIndex((clip) => clip.id === current) : -1;
+    let next: number;
+    if (index >= 0) {
+      next = Math.max(0, Math.min(ordered.length - 1, index + dir));
+    } else {
+      const time = state.playPosition.time;
+      if (dir > 0) {
+        next = ordered.findIndex((clip) => clip.start >= time - 1e-9);
+        if (next < 0) next = ordered.length - 1;
+      } else {
+        next = 0;
+        for (let i = ordered.length - 1; i >= 0; i -= 1) {
+          if (ordered[i]!.start < time) {
+            next = i;
+            break;
+          }
+        }
+      }
+    }
+    const clip = ordered[next]!;
+    core.setClipSelection([clip.id]);
+    revealClip(clip.id);
+    options.onClipFocus?.(clip.id);
+  };
+
+  // Shift+F10 / the Menu key: the menu of the selected clip (at the clip),
+  // else the background menu at the playhead on the first row.
+  const openMenuFromKeyboard = (): void => {
+    const state = core.getState();
+    const width = state.viewport.width;
+    const clampX = (x: number) =>
+      Math.max(metrics.trackHeaderWidth + 4, Math.min(width - 240, x));
+    const clampY = (y: number) =>
+      Math.max(getTracksTop(metrics) + 4, Math.min(state.viewport.height - 40, y));
+    const id = state.selection.clipIds[0];
+    if (id) {
+      revealClip(id);
+      const view = core.getPresentation().clipViewsById.get(id);
+      const point = view
+        ? {
+            x: clampX(Math.max(metrics.trackHeaderWidth, view.rect.x) + 16),
+            y: clampY(view.rect.y + view.rect.height - 4),
+          }
+        : { x: clampX(metrics.trackHeaderWidth + 24), y: clampY(getTracksTop(metrics) + 24) };
+      core.openClipContextMenu(id, point);
+      return;
+    }
+    const time = Math.max(0, Math.floor(state.playPosition.time));
+    const point = {
+      x: clampX(core.getPresentation().timeToScreenX(time)),
+      y: clampY(getTracksTop(metrics) + 24),
+    };
+    core.openBackgroundContextMenu(time, 0, point);
+  };
+
+  const isArrowKey = (key: string): boolean =>
+    key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown";
+
   const handleKeyDown = (event: KeyboardEvent): void => {
     const cmd = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
+
+    // A keyboard move burst goes on only with more arrows (a bare modifier
+    // press — e.g. Shift for ×4 — doesn't end it); anything else settles it
+    // first (one undo entry, reported), then does its own thing.
+    if (
+      nudge &&
+      !(isArrowKey(event.key) && !event.altKey) &&
+      event.key !== "Shift" &&
+      event.key !== "Control" &&
+      event.key !== "Meta" &&
+      event.key !== "Alt"
+    ) {
+      closeNudge();
+    }
+
+    if (event.key === "Escape") {
+      let handled = false;
+      const tooltip = core.getState().tooltip;
+      if (tooltip && (tooltip.kind === "clip" || tooltip.kind === "hint")) {
+        cancelHoverCard();
+        core.clearTooltip();
+        handled = true;
+      } else if (options.escapeSelectsTool && core.getState().tool !== "select") {
+        core.setTool("select");
+        // The tool's cursor goes with it (the next move refines it).
+        if (!activeGesture) host.style.cursor = "default";
+        handled = true;
+      }
+      if (handled) event.preventDefault();
+      return;
+    }
+
+    // Keyboard objects: Alt+← / Alt+→ walk them (before the nudge arrows:
+    // Alt+arrow used to nudge too). Enter opens the selected one, like a
+    // double-click; Shift+F10 / Menu opens its menu.
+    if (
+      event.altKey &&
+      !cmd &&
+      !event.shiftKey &&
+      (event.key === "ArrowLeft" || event.key === "ArrowRight")
+    ) {
+      focusAdjacentClip(event.key === "ArrowRight" ? 1 : -1);
+      event.preventDefault();
+      return;
+    }
+
+    if (event.key === "Enter" && !cmd && !event.altKey && !event.shiftKey) {
+      const ids = core.getState().selection.clipIds;
+      if (ids.length === 1) {
+        host.dispatchEvent(
+          new CustomEvent("playlist-clip-open", { detail: { clipId: ids[0] }, bubbles: true }),
+        );
+        event.preventDefault();
+      }
+      return;
+    }
+
+    if (
+      event.key === "ContextMenu" ||
+      (event.key === "F10" && event.shiftKey && !cmd && !event.altKey)
+    ) {
+      openMenuFromKeyboard();
+      event.preventDefault();
+      return;
+    }
 
     if (cmd && key === "z") {
       if (event.shiftKey) {
@@ -2065,7 +2809,20 @@ export function createPlaylistInteractionController(
     }
 
     if (event.key === "Delete") {
+      const before = core.getState();
+      const selected = before.selection.clipIds;
+      const labelById = new Map<string, string>();
+      if (onEdit && selected.length > 0) {
+        for (const clip of before.clips) labelById.set(clip.id, clip.label);
+      }
       core.removeSelected();
+      if (onEdit && selected.length > 0) {
+        const after = new Set(core.getState().clips.map((clip) => clip.id));
+        const gone = selected.filter((id) => labelById.has(id) && !after.has(id));
+        if (gone.length > 0) {
+          onEdit({ kind: "delete", clipIds: gone, labels: gone.map((id) => labelById.get(id)!) });
+        }
+      }
       event.preventDefault();
       return;
     }
@@ -2119,9 +2876,16 @@ export function createPlaylistInteractionController(
       }
     }
 
-    // Insert: slice every visible clip at the playhead.
+    // Insert: slice every visible clip at the playhead (FL). With the host
+    // scope "target": the selection only; Shift+Insert = every clip.
     if (event.key === "Insert") {
-      core.sliceClipsAtTime(core.getState().playPosition.time);
+      const state = core.getState();
+      const time = state.playPosition.time;
+      if (sliceTargeted && !event.shiftKey) {
+        if (state.selection.clipIds.length > 0) commitSlice(time, state.selection.clipIds);
+      } else {
+        commitSlice(time, undefined);
+      }
       event.preventDefault();
       return;
     }
@@ -2172,10 +2936,38 @@ export function createPlaylistInteractionController(
       const dir =
         event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
       const hasSelection = core.getState().selection.clipIds.length > 0;
+      // Host feedback: a burst of moves is one gesture with a tooltip.
+      const nudgeWithFeedback = (deltaBeats: number, deltaTracks: number): void => {
+        if (nudgeFeedbackMs <= 0) {
+          core.nudgeSelection(deltaBeats, deltaTracks);
+          return;
+        }
+        if (!nudge) {
+          const state = core.getState();
+          const ids = [...state.selection.clipIds];
+          const primary = state.clips.find((clip) => clip.id === ids[0]);
+          if (!primary) return;
+          core.beginGesture();
+          nudge = {
+            primaryId: primary.id,
+            clipIds: ids,
+            labels: labelsOf(ids),
+            fromStart: primary.start,
+            fromTrack: trackIndexOfClip(primary.id),
+            timer: null,
+          };
+        }
+        const session = nudge;
+        core.nudgeSelection(deltaBeats, deltaTracks);
+        revealClip(session.primaryId);
+        showNudgeTooltip();
+        if (session.timer !== null) clearTimeout(session.timer);
+        session.timer = setTimeout(closeNudge, nudgeFeedbackMs);
+      };
       if (horizontal) {
         const step = cmd ? metrics.beatsPerBar : event.shiftKey ? 4 : 1;
         if (hasSelection) {
-          core.nudgeSelection(dir * step, 0);
+          nudgeWithFeedback(dir * step, 0);
         } else {
           core.nudgePlayPositionBy(dir * step);
           // Keep the playhead in sight as it walks.
@@ -2184,7 +2976,7 @@ export function createPlaylistInteractionController(
       } else {
         // Vertical arrows only make sense with a selection.
         if (hasSelection) {
-          core.nudgeSelection(0, dir);
+          nudgeWithFeedback(0, dir);
         }
       }
       event.preventDefault();
@@ -2269,13 +3061,34 @@ export function createPlaylistInteractionController(
     event.preventDefault();
   };
 
+  // A hover tooltip (date of the ruler / lane, info card, button hint) only
+  // lives while the pointer is over the canvas: leaving it — e.g. onto a
+  // menu or popover in a portal over the canvas, or a dialog's backdrop —
+  // must not leave it painted (it lingered as an empty-looking box under
+  // the blurred backdrop until the next move). The label of a keyboard
+  // move in progress stays.
+  const clearHoverTooltip = (): void => {
+    const tooltip = core.getState().tooltip;
+    if (!tooltip) return;
+    if (nudge && tooltip.kind === "hint") return;
+    core.clearTooltip();
+  };
+
   const handleBlur = (): void => {
     spaceHeld = false;
     spacePanned = false;
+    closeNudge();
+    cancelHoverCard();
+    if (!activeGesture) clearHoverTooltip();
   };
 
   const handlePointerLeave = (): void => {
-    if (!activeGesture) reportOverviewHover(null);
+    cancelHoverCard();
+    core.setHoverTime(null);
+    if (activeGesture) return;
+    reportOverviewHover(null);
+    clearHoverTooltip();
+    core.setHover(null);
   };
 
   const handlePointerCancel = (event: PointerEvent): void => {
@@ -2298,6 +3111,8 @@ export function createPlaylistInteractionController(
     navigator,
     destroy() {
       activeGesture = null;
+      closeNudge();
+      cancelHoverCard();
       navigator.destroy();
       host.style.cursor = "";
       touchTracker.destroy();

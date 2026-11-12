@@ -24,7 +24,12 @@ import type {
   PlaylistOverviewData,
   PlaylistTrackMeta,
 } from "../playlist-core";
-import { createClipExtendHandle, getClipExtendHandle } from "../playlist-core";
+import {
+  createClipExtendHandle,
+  getClipExtendHandle,
+  getClipLevelGripX,
+  type PlaylistPresentation,
+} from "../playlist-core";
 import { createClipNodeRegistry } from "./clip-node-registry";
 import {
   COLORS,
@@ -50,6 +55,7 @@ import { drawTimelineOverlay } from "./layers/overlay";
 import { drawClipExtendHandle } from "./layers/extend-handle";
 import { createNavigatorLayer, drawScrollbars } from "./layers/scrollbars";
 import { drawSnapIndicator } from "./layers/snap-indicator";
+import { drawHoverTime } from "./layers/hover-time";
 import { drawDropGhost } from "./layers/drop-ghost";
 import { drawTooltip } from "./layers/tooltip";
 
@@ -61,13 +67,27 @@ export interface PlaylistRendererCallbacks {
   // Hovered clips show the level grip on their top edge (pair with the
   // interaction controller's onClipLevelDrag).
   clipLevelHandles?: boolean;
+  // The grip is a fixed target (pair with the controller's clipLevelGrip):
+  // drawn on the hovered and the selected clip where the hit-test expects
+  // it (getClipLevelGripX), in the per-frame overlay — at most two shapes.
+  clipLevelGrip?: boolean;
   // The selected clip shows the extend grabber (pair with the interaction
   // controller's clipExtend, passing the SAME predicate). Called once per
   // frame for the selected clip: O(1), a plain boolean.
   clipExtend?: (clipId: string) => boolean;
-  // Host emphasis per clip (warm ring). Called once per VISIBLE clip per
-  // frame: O(1), a plain boolean; call invalidate() when it changes.
-  getClipHighlight?: (clipId: string) => boolean;
+  // Host emphasis per clip: true = warm ring, "danger" = a red ring and a
+  // dimmed card (e.g. what a delete sweep will remove). Called once per
+  // VISIBLE clip per frame: O(1), a primitive; call invalidate() when it
+  // changes.
+  getClipHighlight?: (clipId: string) => boolean | "danger";
+  // Lines of a clip's info card (a "clip" tooltip, see the interaction
+  // controller's hoverCardDelayMs), "\n"-separated. Called once per frame
+  // while the card shows: O(1) cached, the SAME string while unchanged.
+  getClipInfo?: (clipId: string) => string | null;
+  // Show the FL slip / stretch badges ("↻ offset", "×ratio") on clips.
+  // Default true; a host whose clips have no such meaning turns them off.
+  // Read once.
+  clipBadges?: boolean;
   // A second line under the date of a time tooltip (e.g. the cash that
   // day). Called once per frame while such a tooltip shows: O(1) cached,
   // the SAME string while unchanged; null = no line.
@@ -151,7 +171,9 @@ export function createPlaylistRenderer(
     COLORS,
     {
       levelHandles: callbacks.clipLevelHandles === true,
+      levelGrip: callbacks.clipLevelGrip === true,
       isClipHighlighted: callbacks.getClipHighlight,
+      badges: callbacks.clipBadges !== false,
       getClipDetail: callbacks.getClipDetail,
       getClipSparkline: callbacks.getClipSparkline,
       getClipContent: callbacks.getClipContent,
@@ -190,6 +212,25 @@ export function createPlaylistRenderer(
     ? createTrackLabelFormatter(callbacks.formatTrackLabel)
     : null;
   const overlayGraphics = new Graphics();
+  const levelGrip = callbacks.clipLevelGrip === true;
+  // The level grip of one clip (O(1): a map lookup + a rounded rect).
+  const drawLevelGripOf = (presentation: PlaylistPresentation, clipId: string): void => {
+    const view = presentation.clipViewsById.get(clipId);
+    if (!view || !view.isVisible || view.isAutomation || view.trackLocked) return;
+    if (view.rect.width < 24 || view.rect.height < 12) return;
+    const x = getClipLevelGripX(view, presentation.metrics, presentation.state.viewport.width);
+    overlayGraphics
+      .roundRect(x - 9, view.rect.y + 1.5, 18, 3.5, 1.75)
+      .fill({ color: view.selected ? COLORS.selected : COLORS.text, alpha: view.selected ? 0.9 : 0.45 });
+  };
+  const drawLevelGrips = (presentation: PlaylistPresentation): void => {
+    const state = presentation.state;
+    const hover = state.hover;
+    const hovered = hover && hover.kind === "clip" ? hover.clipId : null;
+    if (hovered) drawLevelGripOf(presentation, hovered);
+    const selected = state.selection.clipIds;
+    if (selected.length === 1 && selected[0] !== hovered) drawLevelGripOf(presentation, selected[0]!);
+  };
   // Extend grabber: one reusable handle (no per-frame allocation).
   const clipExtend = callbacks.clipExtend;
   const extendHandle = createClipExtendHandle();
@@ -215,6 +256,12 @@ export function createPlaylistRenderer(
   trackRowsContainer.mask = trackRowsMask;
   let trackRowsMaskKey = "";
   // Navigator track + miniature (cached layer under the scrollbar thumbs).
+  // Hover-time indicator (state.hoverTime): the line + the ruler pill, above
+  // the money lane so it crosses it. The label is cached per cell.
+  const hoverTimeGraphics = new Graphics();
+  const hoverTimeTextLayer = new Container();
+  let hoverLabelTime: number | null = null;
+  let hoverLabel: string | null = null;
   const navigatorGraphics = new Graphics();
   const navigatorLayer = createNavigatorLayer(navigatorGraphics);
   const foregroundGraphics = new Graphics();
@@ -245,6 +292,7 @@ export function createPlaylistRenderer(
   });
   const getDragAnnotation = callbacks.getDragAnnotation;
   const getTooltipDetail = callbacks.getTooltipDetail;
+  const getClipInfo = callbacks.getClipInfo;
 
   let destroyed = false;
   let ready = false;
@@ -290,6 +338,8 @@ export function createPlaylistRenderer(
     // Above the chrome so track headers scrolled up under the lane never
     // bleed into it; below the scrollbars / tooltip.
     overviewContainer,
+    hoverTimeGraphics,
+    hoverTimeTextLayer,
     navigatorGraphics,
     foregroundGraphics,
     foregroundTextLayer,
@@ -335,6 +385,8 @@ export function createPlaylistRenderer(
     clearTextLayer(foregroundTextLayer);
     tooltipBackground.clear();
     clearTextLayer(tooltipTextLayer);
+    hoverTimeGraphics.clear();
+    clearTextLayer(hoverTimeTextLayer);
 
     drawSceneBackground(sceneGraphics, presentation);
     drawTrackRowsBackground(sceneGraphics, presentation);
@@ -374,6 +426,7 @@ export function createPlaylistRenderer(
       presentation.metrics.trackHeaderWidth,
     );
     drawTimelineOverlay(overlayGraphics, presentation);
+    if (levelGrip) drawLevelGrips(presentation);
     if (clipExtend) {
       const handle = getClipExtendHandle(presentation, clipExtend, extendHandle);
       if (handle) drawClipExtendHandle(overlayGraphics, handle);
@@ -411,6 +464,13 @@ export function createPlaylistRenderer(
         : null;
     overviewLane.sync(presentation, overviewData);
 
+    const hoverTime = presentation.state.hoverTime ?? null;
+    if (hoverTime !== hoverLabelTime) {
+      hoverLabelTime = hoverTime;
+      hoverLabel = hoverTime === null ? null : core.formatTime(hoverTime);
+    }
+    drawHoverTime(hoverTimeGraphics, hoverTimeTextLayer, presentation, hoverLabel);
+
     navigatorLayer.sync(presentation, overviewData);
     drawScrollbars(foregroundGraphics, presentation);
 
@@ -426,10 +486,15 @@ export function createPlaylistRenderer(
     }
 
     const tooltipView = presentation.tooltipView;
-    const tooltipDetail =
-      tooltipView && tooltipView.time !== null && getTooltipDetail
-        ? getTooltipDetail(tooltipView.time)
-        : null;
+    const tooltipDetail = !tooltipView
+      ? null
+      : tooltipView.kind === "clip"
+        ? tooltipView.clipId && getClipInfo
+          ? getClipInfo(tooltipView.clipId)
+          : null
+        : tooltipView.time !== null && getTooltipDetail
+          ? getTooltipDetail(tooltipView.time)
+          : null;
     const tooltipHeight = drawTooltip(
       {
         container: tooltipContainer,
@@ -608,6 +673,7 @@ export function createPlaylistRenderer(
       refreshTextLayer(overviewFrameText);
       refreshTextLayer(overviewCurveText);
       refreshTextLayer(dragAnnotationTextLayer);
+      refreshTextLayer(hoverTimeTextLayer);
       clipNodeRegistry.refreshText();
       requestRender();
     },
@@ -663,6 +729,7 @@ export function createPlaylistRenderer(
       disposeTextLayer(foregroundTextLayer);
       tooltipBackground.clear();
       disposeTextLayer(tooltipTextLayer);
+      disposeTextLayer(hoverTimeTextLayer);
       overviewLane.dispose();
       dragAnnotation.dispose();
       disposeApp();

@@ -155,15 +155,19 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
   (`bridge.addItem(item, { trackIndex })`); el menú de la línea no tiene "borrar".
 - **Nombre en producto: "línea de evento" (ES) / "slot" (EN)**, nunca "track" ni "fila" en
   textos visibles (2026-11-09). El motor sigue diciendo `track` en código (renombrarlo es un
-  cambio aparte). **Nombre automático:** una línea que la persona no nombró se llama "Línea de
-  evento" (vacía o con un evento) y "Línea de eventos" con dos o más; la app nunca bautiza
-  líneas con el nombre de un ítem o de un tipo ("Sueldo", "Gastos únicos": quedaban mal en
-  cuanto se apilaba otra cosa). "Renombrar…" pone un nombre propio que gana siempre; vacío (o
-  el automático) lo devuelve a automático. En el modelo, automático = etiqueta vacía o el
-  "Track N" del motor (`isAutoRowLabel`, `apps/web/src/finance/labels.ts`); el renderer lo
-  muestra con `formatTrackLabel` y el plural llega por `PlaylistTrackMeta.title`. Al cargar un
+  cambio aparte). **Título derivado en vivo, nunca persistido (2026-11-11, UX-44; sustituye a
+  "nueve veces 'Línea de evento'"):** una línea que la persona no nombró se titula por lo que
+  contiene, calculado en cada revisión y nunca guardado en su etiqueta: su objeto principal
+  (mayor impacto en caja) y "+N" por los demás ("Sueldo", "Pago Tarjeta Plata +1";
+  `derivedRowTitle` en `apps/web/src/finance/labels.ts`, vía `PlaylistTrackMeta.title`). Así el
+  título nunca miente cuando se apila otra cosa (el motivo por el que antes no se bautizaban
+  líneas con un ítem: ese nombre quedaba escrito). Una línea vacía sigue llamándose "Línea de
+  evento". "Renombrar…" pone un nombre propio que gana siempre; vacío (o el automático) lo
+  devuelve al título derivado. En el modelo, automático = etiqueta vacía o el "Track N" del
+  motor (`isAutoRowLabel`); el renderer muestra las vacías con `formatTrackLabel`. Al cargar un
   plan guardado, las etiquetas que puso la app se vuelven automáticas (`appGivenRowLabel` en
-  `mapping.ts`).
+  `mapping.ts`). La cabecera ya no lleva el medidor de 3 px sin rótulo (se leía como un fader);
+  el subtítulo dice el peso de la línea en palabras.
 - **Carriles apilados dentro de una línea** (`packages/canvas/src/playlist-core/lanes.ts`, port
   del schedule de postalhub-dashboard `ShiftPlanner/shiftCalendarLayout.ts`): clips que se pisan
   en el tiempo nunca se tapan; cada uno tiene `clip.lane` y la línea `track.lanes`, y mide

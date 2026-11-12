@@ -13,6 +13,7 @@ import {
   type PlaylistTrackMeta,
   type PlaylistTrackRowPresentation,
 } from "../../playlist-core";
+import { truncateMiddle } from "../clip-node-registry";
 import { COLORS, parseHexColor } from "../palette";
 import { addText } from "../text-pool";
 
@@ -86,7 +87,8 @@ function displayName(label: string, maxChars: number): string {
   }
   let display = byLabel.get(label);
   if (display === undefined) {
-    display = truncateText(label, maxChars);
+    // Middle ellipsis: a derived title keeps its "+N" ("Pago Tar… +1").
+    display = truncateMiddle(label, maxChars);
     byLabel.set(label, display);
   }
   return display;

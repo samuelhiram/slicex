@@ -60,6 +60,27 @@ describe("persistence", () => {
     expect(parsePlan(JSON.stringify({ v: 1, branches: [{ id: "x", name: "x", doc: {} }] }))).toBeNull();
   });
 
+  it("keeps a 'Probar cambios' trial across a reload, and drops a dangling one", () => {
+    const doc = createDemoFinancialDocument(SAVED_ON);
+    const plan: SavedPlan = {
+      v: 1,
+      activeId: "prueba",
+      compareId: MAIN_BRANCH_ID,
+      branches: [
+        { id: MAIN_BRANCH_ID, name: "Plan principal", forkDate: null, doc },
+        { id: "prueba", name: "Prueba", forkDate: SAVED_ON, doc, trialOf: MAIN_BRANCH_ID },
+        { id: "huerfana", name: "Huérfana", forkDate: SAVED_ON, doc, trialOf: "ya-no-existe" },
+      ],
+      ledger: [],
+    };
+    const parsed = parsePlan(JSON.stringify(plan))!;
+    expect(parsed.branches.find((b) => b.id === "prueba")!.trialOf).toBe(MAIN_BRANCH_ID);
+    expect(parsed.branches.find((b) => b.id === "huerfana")!.trialOf).toBeUndefined();
+    const { bridge } = setup(doc);
+    const futures = new Futures(bridge, parsed);
+    expect(futures.toSaved().branches.find((b) => b.id === "prueba")!.trialOf).toBe(MAIN_BRANCH_ID);
+  });
+
   it("repairs a dangling active / compare id", () => {
     const plan = savedPlan(createDemoFinancialDocument(SAVED_ON));
     const parsed = parsePlan(JSON.stringify({ ...plan, activeId: "nope", compareId: "nope" }))!;
@@ -111,11 +132,10 @@ describe("Rec: corrections keep later edits", () => {
     expect(bridge.getDocument().minimumCashReserve).toBe(7777);
     expect(ledger.find((e) => e.eventId === expense.eventId)?.status).toBe("skipped");
 
+    // UX-02: the real balance typed is today's cash, absolute — never added
+    // as a difference on top of earlier corrections.
     applyRecCorrections(bridge, boot.rec!, TODAY, [], 1234);
-    expect(bridge.getDocument().initialCash).toBeCloseTo(
-      cashBefore - expense.cashDelta + (1234 - cashBefore),
-      2,
-    );
+    expect(bridge.getDocument().initialCash).toBe(1234);
   });
 });
 
@@ -452,7 +472,7 @@ describe("row names: 'Línea de evento' by default, '… de eventos' with 2+, re
     expect(autoRowName(2)).toBe("Línea de eventos");
   });
 
-  it("a first visit names no row after an item; a row with 2+ events says so", () => {
+  it("a first visit stores no item name as a row label; the title is derived live (UX-44)", () => {
     const doc = createDemoFinancialDocument(TODAY);
     const { core, bridge } = setup(doc);
     const state = core.getState();
@@ -460,8 +480,11 @@ describe("row names: 'Línea de evento' by default, '… de eventos' with 2+, re
     for (const track of state.tracks) {
       const count = state.clips.filter((clip) => clip.trackId === track.id).length;
       const meta = bridge.getTrackMeta(track.id);
-      // 2+ events: the header's name is the plural one; else the label's.
-      expect(meta?.title).toBe(count >= 2 ? "Línea de eventos" : undefined);
+      // Titled after what it holds (live, never stored): "Sueldo",
+      // "Pago Tarjeta Plata +1"; an empty row keeps the automatic name.
+      if (count === 0) expect(meta?.title).toBeUndefined();
+      else if (count >= 2) expect(meta?.title?.endsWith(` +${count - 1}`)).toBe(true);
+      else expect(meta?.title).toMatch(/^[^+]+$/);
     }
   });
 
@@ -478,7 +501,7 @@ describe("row names: 'Línea de evento' by default, '… de eventos' with 2+, re
     const reloaded = createFinancialPlaylistState(bridge.getDocument(), bridge.getTrackLayout());
     expect(reloaded.tracks.find((track) => track.id === trackId)!.label).toBe("Imprevistos");
     core.renameTrack(busy, "");
-    expect(bridge.getTrackMeta(trackId)?.title).toBe("Línea de eventos");
+    expect(bridge.getTrackMeta(trackId)?.title).toMatch(/ \+\d+$/);
   });
 
   it("rows the app named in a saved plan become automatic; the person's names stay", () => {

@@ -141,6 +141,14 @@ export interface FinancialBridgeApi {
   /** Host highlight of a clip (e.g. it causes the valley being inspected). */
   isHighlighted(clipId: string): boolean;
   /**
+   * Lines of a clip's info card (hover / tap): kind and amount with its
+   * cadence, next payment, how it ends. "
+"-separated; cached per
+   * revision and playhead day (the SAME string while unchanged). Optional:
+   * a host without info cards (test doubles) may leave it out.
+   */
+  getClipInfo?(clipId: string): string | null;
+  /**
    * Lines under the date of a time tooltip: "Caja $12,000" (end of that
    * day) and that day's movements ("+$9,000 Sueldo", "−$7,500 Préstamo"),
    * "\n"-separated. Cached: the same string while unchanged.
@@ -158,9 +166,15 @@ export interface FinancialBridgeApi {
 
   /**
    * Amount by hand (vertical drag on a clip's top edge, wired to the
-   * interaction controller's onClipLevelDrag). Returns the tooltip text.
+   * interaction controller's onClipLevelDrag). Returns the tooltip text
+   * ("−$2,050 (antes $2,000)"). `fine` (Shift): a slower hand, whole pesos.
    */
-  levelDrag(clipId: string, phase: "start" | "move" | "end", deltaY: number): string | null;
+  levelDrag(
+    clipId: string,
+    phase: "start" | "move" | "end",
+    deltaY: number,
+    fine?: boolean,
+  ): string | null;
   /** The valley the day falls in, explained, with up to 3 fixes (cached per revision). */
   valleyAt(day: number): ValleyInsight | null;
   /** Applies a fix (one undo entry). */

@@ -559,6 +559,8 @@ ResizeObserver) y **están obligadas a ser idempotentes en el reducer**:
 
 - `ADVANCE_PLAY_POSITION`
 - `SET_HOVER`
+- `SET_HOVER_TIME` (indicador de hover: la celda bajo el puntero; misma
+  `state` mientras el puntero no cruce a otra celda)
 - `SET_PLAY_POSITION`
 - `SET_PLAY_RUNNING`
 - `SET_VIEWPORT_SIZE`
@@ -608,6 +610,7 @@ a esta lista y a los tests de `perf-budget.spec.ts`.
 | Mask / grid solo redibujan al cambiar sus deps | sí |
 | hover / playhead / viewport conservan `state.clips` y `state.tracks` (1000 clips) | misma referencia |
 | 1000 cambios de hover con 1000 clips | < 30 ms |
+| `setHoverTime` × 500 dentro de la misma celda | 0 notifies, mismo `state` |
 | Overview lane: rebuilds de geometría en 100 frames de hover / playhead / selección | == 0 |
 | Overview lane: geometría emitida para una ventana visible de una serie de 1000 vs 100 000 steps | idéntica (O(log n + visibles)), < 1000 `lineTo` |
 | Overview lane: 100 rebuilds por scroll (serie de 1000 y de 100 000 steps) | < 150 ms c/u (medido ≈ 26 ms aislado) |

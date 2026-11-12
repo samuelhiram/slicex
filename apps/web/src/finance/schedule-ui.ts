@@ -103,6 +103,63 @@ export function nthPayment(rule: FinancialRecurrence, n: number): ISODate | null
   return dates[Math.ceil(n) - 1] ?? null;
 }
 
+/**
+ * The first payment that really happens (inside the window), or null. A
+ * window may start before its first payday (the onboarding's pay starts
+ * "today" with the next pay on the 25th; a clip cropped from the left keeps
+ * its paydays): this is the date people mean by "primer pago" (UX-34).
+ */
+export function firstPayment(rule: FinancialRecurrence): ISODate | null {
+  if (!isISODate(rule.startDate)) return null;
+  const first = nthPayment(rule, 1);
+  if (first === null) return null;
+  return rule.endDate !== undefined && isISODate(rule.endDate) && first > rule.endDate ? null : first;
+}
+
+/**
+ * The window starting ON its first payment: the same payments (nothing
+ * happens between the old start and the first payday), shown as "Primer
+ * pago". The anchor is kept, so the paydays never move.
+ */
+export function startOnFirstPayment(rule: FinancialRecurrence): FinancialRecurrence {
+  if (rule.frequency === "once") return rule;
+  const first = firstPayment(rule);
+  if (first === null || first === rule.startDate) return rule;
+  const next: FinancialRecurrence = { ...rule, startDate: first };
+  // Monthly / daily / weekly rules phase on the anchor (default: the start):
+  // pin it before the start moves so the paydays stay where they were.
+  if (next.anchorDate === undefined && rule.frequency !== "semimonthly") next.anchorDate = rule.startDate;
+  return next;
+}
+
+/**
+ * "Día de pago" of a monthly rule: pays on `day` (1..30, or LAST_DAY) every
+ * month, the first time on the first such day on or after the current start
+ * (never earlier: "renta el día 1" from the 11th starts on the next 1st). The
+ * number of payments, when the rule ends, is kept.
+ */
+export function withPayday(rule: FinancialRecurrence, day: number): FinancialRecurrence {
+  if (!isISODate(rule.startDate)) return rule;
+  const target = Math.min(LAST_DAY, Math.max(1, Math.round(day)));
+  let [y, m] = parts(rule.startDate);
+  let startDate = clampedDayOfMonth(y, m, target);
+  if (startDate < rule.startDate) {
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+    startDate = clampedDayOfMonth(y, m, target);
+  }
+  const next: FinancialRecurrence = {
+    ...rule,
+    startDate,
+    anchorDate: target >= LAST_DAY ? a31stFrom(startDate) : startDate,
+  };
+  const count = paymentCount(rule);
+  return count === null ? next : withPaymentCount(next, Math.max(1, count));
+}
+
 /** Ends on the date of the n-th payment (the last one that happens). */
 export function withPaymentCount(rule: FinancialRecurrence, n: number): FinancialRecurrence {
   const last = nthPayment(rule, Math.max(1, Math.floor(n)));

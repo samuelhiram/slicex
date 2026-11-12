@@ -851,7 +851,9 @@ describe("FinancialBridge — Ola 1 renderer providers", () => {
     expect(nu?.subtitle).toMatch(/Libre|No se liquida/);
     const salary = bridge.getTrackMeta(trackOf("fin-sueldo"));
     expect(salary?.subtitle?.startsWith("+")).toBe(true);
-    expect(salary?.meter).toBe(1);
+    // UX-44: no unlabelled meter; the row is titled after what it holds.
+    expect(salary?.meter).toBeUndefined();
+    expect(salary?.title).toBe("Sueldo");
     expect(bridge.getTrackMeta(trackOf("fin-sueldo"))).toBe(salary);
   });
 
@@ -862,7 +864,8 @@ describe("FinancialBridge — Ola 1 renderer providers", () => {
     core.setPlayPosition(200);
     const later = bridge.getClipDetail("fin-nu");
     expect(later).not.toBe(today);
-    expect(later).toContain("Debes");
+    // UX-40: away from today it says which day it describes.
+    expect(later).toMatch(/^Al \d{1,2} [a-z]{3}: debes \$/);
     core.setPlayPosition(200.7);
     expect(bridge.getClipDetail("fin-nu")).toBe(later);
   });

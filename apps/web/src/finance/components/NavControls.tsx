@@ -7,11 +7,11 @@
 // motion jumps). The visible range is announced to screen readers.
 import * as React from "react";
 import { useFitInViewport } from "../../ui/fit-in-viewport";
-import { useDismiss } from "../../ui/use-dismiss";
+import { useOverlay } from "../../ui/use-overlay";
 import { createPortal } from "react-dom";
 import type { PlaylistCore, ViewportNavigator } from "@slicex/canvas";
 import type { FinancialBridgeApi } from "../bridge-api";
-import { formatDateLong } from "../format";
+import { formatDateLong, formatDateShort } from "../format";
 import { horizonBeat } from "../mapping";
 
 export interface NavControlsProps {
@@ -28,6 +28,42 @@ const SPANS: ReadonlyArray<{ value: string; label: string; days: number | "all" 
   { value: "year", label: "Año", days: 366 },
   { value: "all", label: "Todo", days: "all" },
 ];
+
+/** Zoom step of the − / + buttons (the same as the − / + keys). */
+const ZOOM_STEP = 1.6;
+
+/**
+ * UX-46: the visible span in words, never "118 d": "9 días", "≈ 3 semanas",
+ * "≈ 2 meses", "≈ 1 año", "≈ 1.5 años".
+ */
+export function describeSpanDays(days: number): string {
+  const d = Math.max(1, Math.round(days));
+  if (d <= 10) return d === 1 ? "1 día" : `${d} días`;
+  if (d < 45) {
+    const weeks = Math.round(d / 7);
+    return weeks === 1 ? "≈ 1 semana" : `≈ ${weeks} semanas`;
+  }
+  if (d < 335) {
+    const months = Math.round(d / 30.44);
+    return months === 1 ? "≈ 1 mes" : `≈ ${months} meses`;
+  }
+  const years = Math.round((d / 365.25) * 2) / 2;
+  return years === 1 ? "≈ 1 año" : `≈ ${String(years)} años`;
+}
+
+/**
+ * The preset the visible days match ("" = none): "all" when the whole plan
+ * is in view from its first day (what "0" and "Todo" do), else the calendar
+ * span within 15 %.
+ */
+export function matchSpan(from: number, to: number, horizon: number): string {
+  if (from <= 0 && to >= horizon) return "all";
+  const span = Math.max(1, to - from);
+  return (
+    SPANS.find((option) => option.days !== "all" && Math.abs(span - option.days) / option.days < 0.15)
+      ?.value ?? ""
+  );
+}
 
 function timelineWidth(core: PlaylistCore): number {
   const { viewport } = core.getState();
@@ -66,9 +102,9 @@ export function NavControls({ core, navigator, bridge }: NavControlsProps) {
   const helpPopoverRef = React.useRef<HTMLDivElement | null>(null);
   useFitInViewport(helpPopoverRef, help !== null, [help]);
   const span = Math.max(1, to - from);
-  const current =
-    SPANS.find((option) => option.days !== "all" && Math.abs(span - option.days) / option.days < 0.15)
-      ?.value ?? "";
+  const horizon = horizonBeat(bridge.getDocument());
+  const current = matchSpan(from, to, horizon);
+  const rangeDates = `Del ${formatDateShort(bridge.dateAtBeat(from))} al ${formatDateShort(bridge.dateAtBeat(to))}`;
 
   const playheadAnchor = (): number => {
     const { viewport, playPosition } = core.getState();
@@ -88,7 +124,16 @@ export function NavControls({ core, navigator, bridge }: NavControlsProps) {
   };
 
   // Pressing inside the help (text, rows) keeps it open; outside closes.
-  useDismiss(help !== null, [helpRef, helpPopoverRef], () => setHelp(null), { escape: true });
+  // UX-27 / UX-57: it is a dialog, so it takes the focus when it opens and
+  // gives it back to "?" on Escape / close.
+  useOverlay({
+    open: help !== null,
+    onClose: () => setHelp(null),
+    kind: "popover",
+    containerRef: helpPopoverRef,
+    triggerRef: helpRef,
+    autoFocus: true,
+  });
 
   return (
     <div className="fin-navctl" role="group" aria-label="Navegar el tiempo">
@@ -125,16 +170,28 @@ export function NavControls({ core, navigator, bridge }: NavControlsProps) {
           <path d="M6 3.5 10.5 8 6 12.5" />
         </svg>
       </button>
+      {/* UX-46: the range in words, with − / + next to it. */}
+      <button
+        type="button"
+        className="fin-navctl__button fin-navctl__zoom fin-navctl__zoom--out"
+        aria-label="Alejar"
+        title="Alejar: ver más días (−)"
+        onClick={() => navigator.zoomBy(1 / ZOOM_STEP, playheadAnchor())}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M4 8h8" />
+        </svg>
+      </button>
       <select
         className="fin-navctl__span"
         aria-label="Rango visible"
-        title="Rango visible (+ / − para zoom, 0 para ver todo)"
+        title={`${rangeDates} · − / + para zoom, 0 para ver todo`}
         value={current}
         onChange={(event) => setSpan(event.target.value)}
       >
         {current === "" ? (
           <option value="" disabled>
-            {span} d
+            {describeSpanDays(span)}
           </option>
         ) : null}
         {SPANS.map((option) => (
@@ -143,6 +200,17 @@ export function NavControls({ core, navigator, bridge }: NavControlsProps) {
           </option>
         ))}
       </select>
+      <button
+        type="button"
+        className="fin-navctl__button fin-navctl__zoom fin-navctl__zoom--in"
+        aria-label="Acercar"
+        title="Acercar: ver menos días (+)"
+        onClick={() => navigator.zoomBy(ZOOM_STEP, playheadAnchor())}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M4 8h8M8 4v8" />
+        </svg>
+      </button>
       <button
         ref={helpRef}
         type="button"
@@ -170,10 +238,11 @@ export function NavControls({ core, navigator, bridge }: NavControlsProps) {
               ref={helpPopoverRef}
               className="fin-popover fin-navhelp"
               role="dialog"
-              aria-label="Cómo moverte"
+              aria-labelledby="fin-navhelp-title"
+              tabIndex={-1}
               style={{ top: help.top, left: help.left }}
             >
-              <NavHelp />
+              <NavHelp titleId="fin-navhelp-title" />
             </div>,
             document.body,
           )
@@ -206,7 +275,12 @@ function LiveRange({
   return <>{text}</>;
 }
 
-export const NAV_GESTURES: ReadonlyArray<{ keys: string; what: string }> = [
+export interface HelpRow {
+  keys: string;
+  what: string;
+}
+
+export const NAV_GESTURES: ReadonlyArray<HelpRow> = [
   { keys: "Rueda", what: "Sube y baja entre líneas de evento" },
   { keys: "Shift + rueda", what: "Avanza o regresa en el tiempo (también la rueda sobre la regla o la Caja)" },
   { keys: "Ctrl + rueda · pellizca", what: "Zoom donde está el cursor" },
@@ -214,24 +288,69 @@ export const NAV_GESTURES: ReadonlyArray<{ keys: string; what: string }> = [
   { keys: "Espacio + arrastra · botón de la rueda", what: "La mano: suelta con impulso" },
   { keys: "Minimapa (abajo)", what: "Arrastra la ventana; sus bordes cambian el zoom; doble clic: todo" },
   { keys: "Arrastrar cerca del borde", what: "El tiempo se desplaza solo mientras cargas un pago" },
-  { keys: "← →", what: "Mueve el día del playhead (Shift: 4 días)" },
+  { keys: "← →", what: "Sin nada seleccionado: mueve el día marcado (la línea roja; Shift: 4 días)" },
   { keys: "RePág · AvPág", what: "Una pantalla atrás / adelante" },
   { keys: "Inicio · Fin", what: "Hoy · el final" },
   { keys: "+ · − · 0", what: "Acercar · alejar · ver todo" },
 ];
 
-export function NavHelp() {
+// UX-45: every gesture that changes money, with its consequence.
+export const EDIT_GESTURES: ReadonlyArray<HelpRow> = [
+  { keys: "Arrastrar un objeto", what: "Cambia su fecha (y la de todos sus pagos). Alt: sin imán" },
+  { keys: "Shift + arrastrar", what: "Hace una copia en la fecha donde la sueltas" },
+  { keys: "Borde derecho", what: "Cambia cuándo termina. En una deuda calcula el pago para quedar libre ese día" },
+  { keys: "Barrita de arriba", what: "Sube o baja el monto (Shift: paso fino, al peso)" },
+  { keys: "Agarrador central", what: "Alarga o acorta un objeto seleccionado aunque su final no se vea" },
+  { keys: "Doble clic · Enter", what: "Abre el objeto para editarlo" },
+  { keys: "Ctrl+V sobre una tarjeta", what: "Pega su estado de cuenta: actualiza saldo y compras" },
+  { keys: "Dividir (C)", what: "Parte un objeto en dos el día que elijas, para cambiar el monto desde ahí. Shift: todos los de ese día" },
+  { keys: "Excluir (T)", what: "¿Y si no pasara? Lo saca de tus cifras sin borrarlo" },
+];
+
+// UX-45 / UX-04 / UX-38: the keyboard, shortcuts included.
+export const SHORTCUTS: ReadonlyArray<HelpRow> = [
+  { keys: "Alt + ← →", what: "Recorre los objetos en orden de fecha (los selecciona)" },
+  { keys: "← → con un objeto", what: "Mueve su fecha un día (Shift: 4 días); ↑ ↓ lo cambia de línea" },
+  { keys: "Shift+F10 · Menú", what: "Abre el menú del objeto seleccionado" },
+  { keys: "Supr", what: "Borra lo seleccionado (puedes deshacer)" },
+  { keys: "Ctrl+Z · Ctrl+Y", what: "Deshacer · rehacer" },
+  { keys: "Mantén A", what: "Tu año sin el objeto bajo el cursor (también en su menú)" },
+  { keys: "Mantén Q", what: "Asómate a tu otro futuro" },
+  { keys: "/", what: "Escribe un movimiento: «renta 8000 el 1»" },
+  { keys: "E · P · C · T · D · Z", what: "Seleccionar · Dibujar · Dividir · Excluir · Borrar · Zoom" },
+  { keys: "Esc", what: "Vuelve a Seleccionar; cierra la tarjeta del objeto" },
+  { keys: "Insert", what: "Divide lo seleccionado en el día marcado" },
+  { keys: "Retroceso", what: "Activa o quita el imán" },
+];
+
+function HelpList({ rows }: { rows: ReadonlyArray<HelpRow> }) {
+  return (
+    <dl className="fin-navhelp__list">
+      {rows.map((row) => (
+        <div key={row.keys} className="fin-navhelp__row">
+          <dt>{row.keys}</dt>
+          <dd>{row.what}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+export function NavHelp({ titleId, full = true }: { titleId?: string; full?: boolean } = {}) {
   return (
     <div className="fin-navhelp__body">
-      <p className="fin-navhelp__title">Cómo moverte</p>
-      <dl className="fin-navhelp__list">
-        {NAV_GESTURES.map((gesture) => (
-          <div key={gesture.keys} className="fin-navhelp__row">
-            <dt>{gesture.keys}</dt>
-            <dd>{gesture.what}</dd>
-          </div>
-        ))}
-      </dl>
+      <h2 className="fin-navhelp__title" id={titleId}>
+        Cómo moverte
+      </h2>
+      <HelpList rows={NAV_GESTURES} />
+      {full ? (
+        <>
+          <h3 className="fin-navhelp__section">Editar con la mano</h3>
+          <HelpList rows={EDIT_GESTURES} />
+          <h3 className="fin-navhelp__section">Atajos</h3>
+          <HelpList rows={SHORTCUTS} />
+        </>
+      ) : null}
     </div>
   );
 }

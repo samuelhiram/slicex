@@ -210,6 +210,7 @@ export function cloneState(
         }
       : null,
     hover: state.hover ? { ...state.hover } : null,
+    ...(state.hoverTime !== undefined ? { hoverTime: state.hoverTime } : {}),
     playPosition: { ...state.playPosition },
     tool: state.tool ?? "select",
     clipboard: state.clipboard

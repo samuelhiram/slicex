@@ -101,9 +101,10 @@ publicado), con `schemaResolver` nativo (Standard Schema; Zod 3.25 lo implementa
 - **Estado de cuenta** (`StatementDialog`): Mantine Form controlado; un texto sin movimientos es
   error del textarea (`aria-invalid` + `aria-describedby`), validado al escribir con un solo parseo
   compartido entre la vista previa y el esquema.
-- **Encabezado** (`InlineNumberInput`): valida con el esquema compartido del documento
-  (`initialCash` admite sobregiro, `minimumCashReserve` no); el inválido se marca mientras se
-  escribe y se revierte al confirmar, como un campo numérico de herramienta de diseño.
+- **Encabezado** (`InlineNumberInput`): `useField` de Mantine + el esquema compartido del documento
+  (`initialCash` admite sobregiro, `minimumCashReserve` no). Un valor inválido **no se descarta**:
+  Enter o salir del campo no lo guardan, el campo se queda con lo escrito, en rojo, con el motivo
+  anunciado (`role="alert"`) y como tooltip, hasta corregirlo; Escape devuelve el valor guardado.
 - **Bugs corregidos**:
   - el editor llamaba hooks después de su `return null` (ítem borrado con el editor abierto →
     "Rendered fewer hooks than expected");

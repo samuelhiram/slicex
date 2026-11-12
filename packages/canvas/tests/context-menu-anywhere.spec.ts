@@ -1,6 +1,6 @@
 // The right button opens a context menu wherever it is pressed: the thin
-// track chrome (the full-width row divisor, the mute / solo / lock buttons,
-// the reorder grip) never swallows it silently.
+// track chrome (the row divisor in the header column, the mute / solo /
+// lock buttons, the reorder grip) never swallows it silently.
 import { describe, expect, it } from "vitest";
 import {
   createDemoPlaylistState,
@@ -61,8 +61,18 @@ function divisorPoint(core: ReturnType<typeof setup>["core"], x: number) {
 describe("right button on the track chrome", () => {
   it("the row divisor is still the resize handle for the left button", () => {
     const { core } = setup();
-    const p = divisorPoint(core, 600);
+    const p = divisorPoint(core, 40);
     expect(hitTestPlaylist(core.getPresentation(), p, M).kind).toBe("track-resize-handle");
+  });
+
+  it("only the header column resizes a row: the grid line over the timeline does not", () => {
+    const { core } = setup();
+    const edge = divisorPoint(core, M.trackHeaderWidth - 1);
+    expect(hitTestPlaylist(core.getPresentation(), edge, M).kind).toBe("track-resize-handle");
+    for (const x of [M.trackHeaderWidth, M.trackHeaderWidth + 1, 600]) {
+      const p = divisorPoint(core, x);
+      expect(hitTestPlaylist(core.getPresentation(), p, M).kind).not.toBe("track-resize-handle");
+    }
   });
 
   it("on the divisor over the timeline: the background menu opens", () => {

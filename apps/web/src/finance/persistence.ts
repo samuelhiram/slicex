@@ -18,6 +18,8 @@ export interface SavedBranch {
   doc: FinancialDocument;
   /** The playlist rows of this future (empty ones too) and who sits where. */
   layout?: FinancialTrackLayout | null;
+  /** "Probar cambios" (UX-21): the future this temporary trial was made from. */
+  trialOf?: string;
 }
 
 export interface SavedPlan {
@@ -84,12 +86,20 @@ export function parsePlan(raw: string | null): SavedPlan | null {
       activeId,
       compareId,
       branches: branches.map((branch) => {
-        const { layout: rawLayout, ...rest } = branch;
+        const { layout: rawLayout, trialOf: rawTrialOf, ...rest } = branch;
         const layout = parseTrackLayout(rawLayout);
+        // A trial survives a reload only while the future it came from does.
+        const trialOf =
+          typeof rawTrialOf === "string" &&
+          rawTrialOf !== branch.id &&
+          branches.some((other) => other.id === rawTrialOf)
+            ? rawTrialOf
+            : undefined;
         return {
           ...rest,
           forkDate: typeof branch.forkDate === "string" ? branch.forkDate : null,
           ...(layout ? { layout } : {}),
+          ...(trialOf !== undefined ? { trialOf } : {}),
         };
       }),
       ledger: Array.isArray(value.ledger) ? value.ledger : [],

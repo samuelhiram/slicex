@@ -136,13 +136,32 @@ export function formatSignedMoneyWhole(n: number): string {
   return formatSignedMoney(Math.round(n) || 0);
 }
 
+/** "12 mil" / "8 mil 500" / "mil" once spaces are gone ("12mil", "8mil500"). */
+const THOUSANDS_RE = /^(-?\d+(?:\.\d+)?)?mil(\d{1,3})?$/;
+/** "12k" / "1.5k". */
+const KILO_RE = /^(-?\d+(?:\.\d+)?)k$/;
+
 /**
  * Lenient money/number parser for text inputs: accepts "12,000", "$12000",
- * " 1 234.5 ". Empty → `null`; garbage → NaN.
+ * " 1 234.5 ", and the words the "/" bar understands: "12 mil", "8 mil 500",
+ * "mil", "12k", "1.5k", with or without "pesos" / "mxn". Rounded to cents
+ * when a multiplier is involved. Empty → `null`; garbage → NaN.
  */
 export function parseNumberInput(raw: string): number | null {
-  const cleaned = raw.replace(/[\s$,]/g, "").replace(/−/g, "-");
+  const cleaned = raw
+    .toLowerCase()
+    .replace(/−/g, "-")
+    .replace(/[\s$,]/g, "")
+    .replace(/(pesos?|mxn)$/, "");
   if (cleaned === "") return null;
+  const thousands = THOUSANDS_RE.exec(cleaned);
+  if (thousands) {
+    const base = thousands[1] === undefined ? 1 : Number(thousands[1]);
+    const extra = thousands[2] === undefined ? 0 : Number(thousands[2]);
+    return roundCents(base * 1000 + (base < 0 ? -extra : extra));
+  }
+  const kilo = KILO_RE.exec(cleaned);
+  if (kilo) return roundCents(Number(kilo[1]) * 1000);
   return Number(cleaned);
 }
 
@@ -283,20 +302,66 @@ function resolveYear(
   return best;
 }
 
+/** Words for a day relative to today ("pasado mañana" folded, single-spaced). */
+const RELATIVE_DAYS: Readonly<Record<string, number>> = {
+  hoy: 0,
+  manana: 1,
+  "pasado manana": 2,
+  ayer: -1,
+};
+
+/** "fin de mes", "fin del mes", "último día", "último día del mes" (folded). */
+const MONTH_END_RE = /^(?:fin|final|ultimo dia)(?: del?(?: este)? mes)?$/;
+/** A bare day of the month: "15", "día 15" ("el" already dropped). */
+const BARE_DAY_RE = /^(?:dia )?(\d{1,2})$/;
+
+/** Last day of `iso`'s month. */
+function monthEnd(iso: ISODate): ISODate {
+  const year = Number(iso.slice(0, 4));
+  const month = Number(iso.slice(5, 7));
+  return `${iso.slice(0, 7)}-${pad2(daysInMonth(year, month))}`;
+}
+
+/** The first date on or after `from` whose day of the month is `day` (months lacking it are skipped). */
+function nextDayOfMonthOnOrAfter(from: ISODate, day: number): ISODate | null {
+  if (!Number.isInteger(day) || day < 1 || day > 31) return null;
+  let year = Number(from.slice(0, 4));
+  let month = Number(from.slice(5, 7));
+  for (let i = 0; i < 13; i += 1) {
+    const candidate = buildISO(year, month, day);
+    if (candidate !== null && candidate >= from) return candidate;
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+  return null;
+}
+
 /**
  * Lenient es-MX date entry → ISO date, or null when the text is not a real
  * calendar date. Day always comes before month (never US mm/dd). Accepts:
  *   "15/11/2026", "15-11-2026", "15.11.26", "2026-11-15", "2026/11/15",
  *   "15 nov", "15 nov 2026", "15 de noviembre de 2026", "nov 15 2026",
  *   "15/11" and an optional leading weekday ("sáb 15 nov 2026", which is
- *   what `formatDateWeekday` prints). Accents and case are ignored.
+ *   what `formatDateWeekday` prints). Accents and case are ignored; a
+ *   leading "el" / "día" is too ("el 15 de diciembre").
+ * The words the "/" bar understands (UX-35):
+ *   - "hoy", "mañana", "pasado mañana", "ayer": relative to `today`;
+ *   - "fin de mes" / "último día [del mes]": the last day of `today`'s month;
+ *   - a bare day ("15", "el 15", "día 15"): the next date with that day, on
+ *     or after `today` — or on or after `reference` when `prefer` is
+ *     "on-or-after" (an end date typed relative to its start).
  * A date typed without a year takes it from `reference` (see
- * DateYearPreference). Pure: never reads the clock.
+ * DateYearPreference). `today` defaults to `reference`. Pure: never reads
+ * the clock.
  */
 export function parseDateInput(
   raw: string,
   reference: ISODate,
   prefer: DateYearPreference = "nearest",
+  today: ISODate = reference,
 ): ISODate | null {
   const text = raw
     .normalize("NFD")
@@ -304,8 +369,22 @@ export function parseDateInput(
     .toLowerCase()
     .trim();
   if (text === "" || !/^[a-z0-9\s/.,-]+$/.test(text)) return null;
+
+  // Relative words and a bare day: one phrase, single-spaced, without "el".
+  const phrase = text.replace(/\s+/g, " ").replace(/^(?:para )?(?:el |la )/, "");
+  const relative = RELATIVE_DAYS[phrase];
+  if (relative !== undefined) {
+    return isISODate(today) ? shiftISODate(today, relative) : null;
+  }
+  if (MONTH_END_RE.test(phrase)) return isISODate(today) ? monthEnd(today) : null;
+  const bareDay = BARE_DAY_RE.exec(phrase);
+  if (bareDay) {
+    const from = prefer === "on-or-after" ? reference : today;
+    return isISODate(from) ? nextDayOfMonthOnOrAfter(from, Number(bareDay[1])) : null;
+  }
+
   const tokens = (text.match(/[a-z]+|\d+/g) ?? []).filter(
-    (token) => token !== "de" && token !== "del",
+    (token) => token !== "de" && token !== "del" && token !== "el" && token !== "dia",
   );
   const words = tokens.filter((token) => !isNumberToken(token));
   const numberCount = tokens.length - words.length;

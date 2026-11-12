@@ -62,8 +62,16 @@ export function drawTooltip(
   for (let i = 0; i < lines.length; i += 1) chars = Math.max(chars, lines[i]!.length);
   const pillWidth = chars * TOOLTIP_CHAR_WIDTH + TOOLTIP_PADDING_X * 2;
   const height = TOOLTIP_HEIGHT + lines.length * TOOLTIP_DETAIL_HEIGHT;
-  const x = Math.round(view.x + TOOLTIP_OFFSET_X);
-  const y = Math.round(view.y + TOOLTIP_OFFSET_Y);
+  // Kept inside the canvas: near the right edge it flips to the left of
+  // the anchor; a tall card (info card, detail lines) rises to fit.
+  const viewport = presentation.state.viewport;
+  let x = Math.round(view.x + TOOLTIP_OFFSET_X);
+  if (x + pillWidth > viewport.width - 4 && view.x - TOOLTIP_OFFSET_X - pillWidth >= 4) {
+    x = Math.round(view.x - TOOLTIP_OFFSET_X - pillWidth);
+  }
+  let y = Math.round(view.y + TOOLTIP_OFFSET_Y);
+  if (y + height > viewport.height - 4) y = Math.round(viewport.height - 4 - height);
+  if (y < 2) y = 2;
   // High-contrast chip (inverse of the surface), like a native tooltip.
   ctx.background
     .roundRect(x, y, pillWidth, height, 6)

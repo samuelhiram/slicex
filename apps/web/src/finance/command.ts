@@ -35,9 +35,10 @@
 //
 // Judgement calls (see tests):
 // - "el N" with no other frequency means monthly on day N (renta 8000 el 1).
-// - MSI with no date: first installment next month, same day (the purchase is
-//   today; the first charge lands a month later). A date said explicitly is
-//   the first installment.
+// - MSI: the date is the PURCHASE date (today when none is said), exactly
+//   like the editor's draft; the engine derives the first installment from
+//   the card's payment day (UX-33: "/" and the editor give the same first
+//   installment for the same purchase).
 // - End bounds (hasta…, N meses) snap to the LAST occurrence inside the bound,
 //   so the item ends on its last payment (same occurrences either way).
 // - Monthly on day 29-31 starts on the first clamped occurrence (Nov 30 for
@@ -1196,6 +1197,26 @@ function parseCommandUnsafe(text: string, ctx: CommandContext): ParsedCommand | 
       w.use(second.start, second.end);
     }
   }
+  // A card's smaller amount is what you pay each month ("tarjeta nu 20000
+  // pago 2000 al mes"); "totalero" / "pago el total" pays each statement.
+  let cardPayment: number | null = null;
+  let cardStatement = false;
+  if (kind === "credit-card") {
+    if (hits.length > 1) {
+      const second = hits[1]!;
+      if (second.value > 0 && second.value < main.value) {
+        cardPayment = second.value;
+        w.use(second.start, second.end);
+      }
+    }
+    for (let i = 0; i < w.length; i += 1) {
+      const t = w.at(i);
+      if (t === "totalero" || t === "totalera" || (t === "total" && /^(el|pago|pagar|todo)$/.test(w.at(i - 1)))) {
+        cardStatement = true;
+        w.use(t === "total" && w.at(i - 1) === "el" && /^(pago|pagar)$/.test(w.at(i - 2)) ? i - 2 : i, i + 1);
+      }
+    }
+  }
 
   // 10. Name: what is left, edge stopwords trimmed.
   const nameWords = w.remaining().filter((tok) => /[\p{L}\p{N}]/u.test(tok.norm) && !CURRENCY.has(tok.norm));
@@ -1256,7 +1277,9 @@ function parseCommandUnsafe(text: string, ctx: CommandContext): ParsedCommand | 
   } else if (startBound !== null) {
     startDate = startBound;
   } else if (kind === "installment-plan") {
-    startDate = addMonths(today, 1);
+    // The purchase is today; the engine pays the installments on the
+    // card's payment days from there (same as the editor's draft).
+    startDate = today;
     assume("fecha");
   } else {
     startDate = today;
@@ -1316,6 +1339,8 @@ function parseCommandUnsafe(text: string, ctx: CommandContext): ParsedCommand | 
         dueDay: dueDay ?? (cutDay !== null ? ((cut + 10 - 1) % 28) + 1 : base.dueDay),
         minimumPayment: minimumPayment ?? base.minimumPayment,
       };
+      if (cardStatement) item.paymentMode = "statement";
+      else if (cardPayment !== null) item.paymentAmount = cardPayment;
       break;
     }
     case "installment-plan": {
@@ -1336,7 +1361,184 @@ function parseCommandUnsafe(text: string, ctx: CommandContext): ParsedCommand | 
     }
   }
 
-  return { item, summary: summarize(item, today, cards), assumed };
+  return { item, summary: summarize(item, today, cards, doc), assumed };
+}
+
+/** What a fixed-payment card pays each month (the engine's `paymentAmount ?? minimumPayment`). */
+export function cardMonthlyPayment(card: Extract<FinancialItem, { kind: "credit-card" }>): number {
+  const value = card.paymentAmount ?? card.minimumPayment;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * UX-01 (same rule as the editor): a card with a balance that pays $0 a
+ * month never gets paid off — the projection would assume it is never paid.
+ * True for a fixed-payment card with balance > 0 and no payment.
+ */
+export function cardNeverPaidOff(item: FinancialItem): boolean {
+  return (
+    item.kind === "credit-card" &&
+    item.paymentMode !== "statement" &&
+    item.balance > 0 &&
+    cardMonthlyPayment(item) <= 0
+  );
+}
+
+/**
+ * Day the engine pays an MSI plan's first installment: the card's payment
+ * day on/after the purchase (the anchor's day without a card), never before
+ * the plan's start. Same rule as the projection (payoff.ts installmentInput).
+ */
+export function firstInstallmentDate(
+  item: Extract<FinancialItem, { kind: "installment-plan" }>,
+  doc: FinancialDocument | undefined,
+): ISODate {
+  const rec = item.recurrence;
+  const from = doc && isISODate(doc.startDate) && doc.startDate > rec.startDate ? doc.startDate : rec.startDate;
+  const card = item.cardId
+    ? doc?.items.find((other) => other.kind === "credit-card" && other.id === item.cardId)
+    : undefined;
+  const day =
+    card && card.kind === "credit-card"
+      ? card.dueDay
+      : ymd(rec.anchorDate !== undefined && isISODate(rec.anchorDate) ? rec.anchorDate : rec.startDate)[2];
+  return domOnOrAfter(from, Math.min(31, Math.max(1, Math.floor(day)))).date;
+}
+
+// ---------------------------------------------------------------------------
+// Intent (UX-05): not every sentence is a new item. "tengo 11400 en el
+// banco" is today's balance, "pagué la tarjeta nu 3000" pays a card, "gasté
+// 300 en uber ayer" already happened, and a sentence whose kind was only
+// guessed must not be added without a choice.
+
+/** What the sentence asks for. */
+export type CommandIntent =
+  /** Today's real cash ("tengo / me quedan / saldo / en el banco" + amount). */
+  | { type: "balance"; amount: number }
+  /** A payment to a card of the plan, today or in the past. */
+  | { type: "card-payment"; cardId: string; cardName: string; amount: number; date: ISODate }
+  /**
+   * A new item. `past`: a one-off dated before today (today's cash should
+   * already include it). `needsKind`: the kind was only guessed ("tipo").
+   */
+  | { type: "item"; parsed: ParsedCommand; past: boolean; needsKind: boolean };
+
+const BALANCE_WORDS = new Set([
+  "tengo", "tenemos", "traigo", "quedan", "queda", "saldo", "banco", "cuenta",
+  "liquidez", "efectivo", "disponible",
+]);
+/** Words that make a balance-looking sentence something else. */
+const NOT_BALANCE_WORDS = new Set([
+  ...CARD_WORDS, ...LOAN_WORDS, ...LOAN_NOUNS, "msi", "que",
+  ...SEMIMONTHLY_ADJ, ...MONTHLY_ADJ, ...WEEKLY_ADJ, ...BIWEEKLY_ADJ,
+]);
+const PAID_VERBS = new Set([...PAY_VERBS, "abone", "pagamos", "abonamos", "liquide"]);
+/** Before a card name, these make it a purchase ("con nu"), not a payment. */
+const PURCHASE_PREPS = new Set(["con", "en", "cargo", "cargar", "cargado", "cargada"]);
+
+function amountsOf(w: Words): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < w.length; i += 1) {
+    const hit = readAmount(w, i);
+    if (!hit) continue;
+    if (hit.value > 0) out.push(hit.value);
+    i = hit.end - 1;
+  }
+  return out;
+}
+
+function isBalanceSentence(w: Words, cards: CardInfo[]): boolean {
+  let balanceWord = false;
+  for (let i = 0; i < w.length; i += 1) {
+    const t = w.at(i);
+    if (NOT_BALANCE_WORDS.has(t) || INCOME_NOUNS.has(t) || EXPENSE_NOUNS.has(t)) return false;
+    if (INCOME_VERBS.has(t) || EXPENSE_VERBS.has(t) || PAID_VERBS.has(t)) return false;
+    if (t === "me" && (INCOME_ME_VERBS.has(w.at(i + 1)) || EXPENSE_ME_VERBS.has(w.at(i + 1)))) return false;
+    if (BALANCE_WORDS.has(t)) balanceWord = true;
+  }
+  // "saldo de nu": a card's balance, not today's cash.
+  if (cards.some((card) => card.words.some((word) => w.remaining().some((tok) => tok.norm === word)))) {
+    return false;
+  }
+  return balanceWord;
+}
+
+/** "pagué la tarjeta nu", "abono a nu", "pago bbva": the card paid, or null. */
+function paidCard(w: Words, cards: CardInfo[]): CardInfo | null {
+  let paid = false;
+  for (let i = 0; i < w.length; i += 1) if (PAID_VERBS.has(w.at(i))) paid = true;
+  if (!paid) return null;
+  for (let i = 0; i < w.length; i += 1) {
+    const named = matchCardName(w, i, cards);
+    if (!named) continue;
+    let k = i - 1;
+    while (k >= 0 && (CARD_ARTICLES.has(w.at(k)) || CARD_WORDS.has(w.at(k)) || w.at(k) === "de" || w.at(k) === "credito")) {
+      k -= 1;
+    }
+    if (PURCHASE_PREPS.has(w.at(k))) return null;
+    return cards.find((card) => card.id === named.id) ?? null;
+  }
+  return null;
+}
+
+/**
+ * The sentence's intent, or null when it holds no amount (see
+ * `explainNoAmount`). Pure and total, like `parseCommand`.
+ */
+export function interpretCommand(text: string, ctx: CommandContext): CommandIntent | null {
+  try {
+    if (typeof text !== "string" || !ctx || !isISODate(ctx.today)) return null;
+    const w = new Words(tokenize(text));
+    if (w.length === 0) return null;
+    const cards = cardsOf(ctx.doc);
+    const amounts = amountsOf(w);
+    if (amounts.length === 0) return null;
+    const amount = Math.max(...amounts);
+
+    if (isBalanceSentence(w, cards)) return { type: "balance", amount };
+
+    const parsed = parseCommand(text, ctx);
+    if (!parsed) return null;
+    const rec = parsed.item.recurrence;
+    const once = rec.frequency === "once";
+
+    const card = paidCard(new Words(tokenize(text)), cards);
+    if (card && once && rec.startDate <= ctx.today) {
+      return { type: "card-payment", cardId: card.id, cardName: card.name, amount, date: rec.startDate };
+    }
+
+    const past =
+      once &&
+      rec.startDate < ctx.today &&
+      (parsed.item.kind === "expense" || parsed.item.kind === "income" || parsed.item.kind === "card-purchase");
+    return { type: "item", parsed, past, needsKind: parsed.assumed.includes("tipo") };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Why a sentence without an amount does nothing, in the person's terms
+ * (UX-45): "deshacer", "borra netflix" or "ayuda" are not movements.
+ */
+export function explainNoAmount(text: string): string {
+  const words = fold(typeof text === "string" ? text : "")
+    .split(/[^a-z0-9?]+/)
+    .filter(Boolean);
+  const has = (...candidates: string[]) => candidates.some((word) => words.includes(word));
+  if (has("deshacer", "deshaz", "undo", "regresa", "revertir")) {
+    return "Para deshacer usa Ctrl+Z. Aquí solo se agregan movimientos.";
+  }
+  if (has("borra", "borrar", "elimina", "eliminar", "quita", "quitar", "cancela", "cancelar")) {
+    return "Desde aquí solo se agregan movimientos: selecciona el objeto y pulsa Supr.";
+  }
+  if (has("cambia", "cambiar", "mueve", "mover", "edita", "editar")) {
+    return "Para cambiar un objeto, haz doble clic en él. Aquí solo se agregan movimientos.";
+  }
+  if (has("ayuda", "help", "?", "como", "que")) {
+    return "Escribe qué y cuánto: “renta 8000 el 1”, “sueldo 9000 quincenal” o “tengo 11400 en el banco”.";
+  }
+  return "Falta el monto: “gasolina 600 cada semana”.";
 }
 
 // ---------------------------------------------------------------------------
@@ -1374,7 +1576,12 @@ function scheduleParts(rule: FinancialRecurrence, today: ISODate): string[] {
   return parts;
 }
 
-function summarize(item: FinancialItem, today: ISODate, cards: CardInfo[]): string {
+function summarize(
+  item: FinancialItem,
+  today: ISODate,
+  cards: CardInfo[],
+  doc: FinancialDocument | undefined,
+): string {
   const parts: string[] = [KIND_LABELS[item.kind]];
   if (fold(item.name) !== fold(KIND_LABELS[item.kind])) parts.push(item.name);
   const cardName = (id: string | undefined): string | null =>
@@ -1397,19 +1604,25 @@ function summarize(item: FinancialItem, today: ISODate, cards: CardInfo[]): stri
       if (item.annualRate !== undefined) parts.push(`${formatPercent(item.annualRate)} anual`);
       parts.push(...scheduleParts(item.recurrence, today));
       break;
-    case "credit-card":
-      parts.push(
-        `saldo ${formatMoney(item.balance)}`,
-        `${formatPercent(item.annualRate)} anual`,
-        `corte día ${item.cutDay}, pago día ${item.dueDay}`,
-      );
+    case "credit-card": {
+      parts.push(`saldo ${formatMoney(item.balance)}`);
+      if (item.paymentMode === "statement") parts.push("pagas el total cada mes");
+      else {
+        parts.push(`${formatPercent(item.annualRate)} anual`);
+        const monthly = cardMonthlyPayment(item);
+        if (monthly > 0) parts.push(`pagas ${formatMoney(monthly)} al mes`);
+      }
+      parts.push(`corte día ${item.cutDay}, pago día ${item.dueDay}`);
       break;
+    }
     case "installment-plan": {
       parts.push(`${formatMoney(item.originalAmount)} a ${item.installmentsTotal} MSI (${formatMoney(monthlyInstallment(item))}/mes)`);
       if (item.installmentsPaid > 0) parts.push(`${item.installmentsPaid} pagados`);
       const card = cardName(item.cardId);
       if (card !== null) parts.push(`con ${card}`);
-      parts.push(`desde ${displayDate(item.recurrence.startDate, today)}`);
+      const bought = item.recurrence.startDate;
+      parts.push(bought === today ? "compra hoy" : `compra el ${displayDate(bought, today)}`);
+      parts.push(`primer abono ${displayDate(firstInstallmentDate(item, doc), today)}`);
       break;
     }
   }

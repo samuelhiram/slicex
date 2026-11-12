@@ -119,7 +119,8 @@ describe("goal-seek: drag the end of a debt to choose when you're free", () => {
     expect(after.paymentAmount).toBeGreaterThan(before);
     expect(after.recurrence.endDate).toBeUndefined();
     const pill = bridge.getDragAnnotation()!;
-    expect(pill.text).toMatch(/^Libre en .+ · pagas \$[\d,]+\/mes/);
+    // UX-13: the goal, the result and the payoff before the gesture.
+    expect(pill.text).toMatch(/^Meta: .+ → Libre en .+ · pagas \$[\d,]+\/mes/);
     core.endGesture();
     await flush();
     const payoff = estimateDebtPayoffs(bridge.getDocument()).get("card")!.payoffDate!;
@@ -172,9 +173,10 @@ describe("amount by hand", () => {
   it("drag up raises the amount live; the whole drag is ONE undo entry", () => {
     const { core, bridge } = setup();
     core.beginGesture();
-    expect(bridge.levelDrag("sal", "start", 0)).toBe("+$9,000 /quinc");
+    expect(bridge.levelDrag("sal", "start", 0)).toBe("+$9,000 /quincena");
     const text = bridge.levelDrag("sal", "move", 120 * Math.log(2));
-    expect(text).toBe("+$18,000 /quinc");
+    // UX-39: the amount it had when the drag started.
+    expect(text).toBe("+$18,000 /quincena (antes $9,000)");
     bridge.levelDrag("sal", "move", 120 * Math.log(1.5));
     expect(levelValue(bridge.getItem("sal")!)).toBe(13_500);
     // The pill shows the effect against the drag's start.

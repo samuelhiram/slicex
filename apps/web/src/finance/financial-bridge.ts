@@ -50,6 +50,7 @@ import {
   type DebtPayoffEstimate,
 } from "@slicex/core";
 import {
+  prefersReducedMotion,
   stepSeriesValueAt,
   type PlaylistClip,
   type PlaylistClipContent,
@@ -68,8 +69,15 @@ import type {
   PreviewEffect,
   ValleyInsight,
 } from "./bridge-api";
-import { formatDateShort, formatMoney, formatMoneyWhole } from "./format";
+import {
+  formatDateLong,
+  formatDateShort,
+  formatMoney,
+  formatMoneyWhole,
+  formatSignedMoneyWhole,
+} from "./format";
 import { frequencyShort, isAutoRowLabel, KIND_COLORS, KIND_LABELS } from "./labels";
+import { cadenceText } from "./schedule-ui";
 import {
   beatOf,
   canonicalItem,
@@ -96,6 +104,7 @@ import {
   describeItemAt,
   dragAnnotation,
   formatMonthYear,
+  type OverviewDomain,
 } from "./visuals";
 
 // Label the playlist gives to clips created without a template.
@@ -130,8 +139,10 @@ interface DocSnapshot {
 
 const EPS = 1e-6;
 
-// Amount by hand: px of upward travel that multiply the amount by e.
+// Amount by hand: px of upward travel that multiply the amount by e (Shift:
+// a finer hand, LEVEL_FINE_FACTOR times slower, whole pesos).
 const LEVEL_PX_PER_E = 120;
+const LEVEL_FINE_FACTOR = 8;
 // Branch switch morph of the money lane.
 const TRANSITION_MS = 320;
 
@@ -178,7 +189,20 @@ export function niceAmount(raw: number): number {
   return Math.max(step, Math.round(value / step) * step);
 }
 
-export function levelText(item: FinancialItem, value: number, doc: FinancialDocument): string {
+export function levelText(
+  item: FinancialItem,
+  value: number,
+  doc: FinancialDocument,
+  // The amount when the drag started: shown "(antes $X)" once it differs.
+  before?: number,
+): string {
+  const main = levelMain(item, value, doc);
+  return before !== undefined && Math.abs(before - value) >= 0.5
+    ? `${main} (antes ${formatMoneyWhole(before)})`
+    : main;
+}
+
+function levelMain(item: FinancialItem, value: number, doc: FinancialDocument): string {
   const freq = frequencyShort(item.recurrence);
   const once = item.recurrence.frequency === "once";
   switch (item.kind) {
@@ -192,11 +216,11 @@ export function levelText(item: FinancialItem, value: number, doc: FinancialDocu
       return `Pagas ${formatMoneyWhole(value)}/mes`;
     case "card-purchase": {
       const card = doc.items.find((candidate) => candidate.id === item.cardId);
-      return card ? `${formatMoneyWhole(value)} → ${card.name}` : formatMoneyWhole(value);
+      return card ? `−${formatMoneyWhole(value)} con ${card.name}` : `−${formatMoneyWhole(value)}`;
     }
     case "installment-plan": {
       const months = Math.max(1, item.installmentsTotal);
-      return `${formatMoneyWhole(value)} en ${months} MSI · ${formatMoney(
+      return `${formatMoneyWhole(value)} en ${months} MSI · −${formatMoney(
         Math.round((value / months) * 100) / 100,
       )}/mes`;
     }
@@ -219,6 +243,14 @@ function sameBars(a: readonly number[], b: readonly number[]): boolean {
   return true;
 }
 
+function isDebtItem(item: FinancialItem): boolean {
+  return (
+    item.kind === "credit-card" ||
+    item.kind === "installment-plan" ||
+    (item.kind === "loan" && item.balance !== undefined)
+  );
+}
+
 export function describeItem(
   item: FinancialItem,
   doc: FinancialDocument,
@@ -234,19 +266,19 @@ export function describeItem(
         ? `−${formatMoney(item.paymentAmount)} ${freq} · resta ${formatMoney(item.balance)}`
         : `−${formatMoney(item.paymentAmount)} ${freq}`;
     case "credit-card":
-      return `Deuda ${formatMoney(item.balance)} · ${item.annualRate}% · paga ${formatMoney(
+      return `Deuda ${formatMoney(item.balance)} · tasa ${item.annualRate}% · paga ${formatMoney(
         item.paymentAmount ?? item.minimumPayment,
       )}`;
     case "card-purchase": {
       const card = doc.items.find((candidate) => candidate.id === item.cardId);
       return card
-        ? `${formatMoney(item.amount)} → ${card.name}`
-        : `${formatMoney(item.amount)} (sin tarjeta)`;
+        ? `−${formatMoney(item.amount)} con ${card.name}`
+        : `−${formatMoney(item.amount)} (sin tarjeta)`;
     }
     case "installment-plan": {
       const monthly =
         item.installmentsTotal > 0 ? item.originalAmount / item.installmentsTotal : 0;
-      return `${formatMoney(monthly)}/mes · ${item.installmentsPaid}/${item.installmentsTotal}`;
+      return `−${formatMoney(monthly)}/mes · ${item.installmentsPaid} de ${item.installmentsTotal} pagos`;
     }
   }
 }
@@ -292,6 +324,9 @@ export class FinancialBridge implements FinancialBridgeApi {
   private dragCache: {
     revision: number;
     baseline: DocSnapshot;
+    // The goal-seek note it was built with: a move that leaves the payment
+    // (and so the revision) the same still moves the goal date.
+    note: object | null;
     data: PlaylistDragAnnotation;
   } | null = null;
   private readonly snapshotProjections = new WeakMap<DocSnapshot, FinancialProjection>();
@@ -319,6 +354,14 @@ export class FinancialBridge implements FinancialBridgeApi {
   // Goal-seek result of the open gesture, shown in the drag pill.
   private gestureNote: { text: string; tone: PlaylistDragAnnotation["tone"] } | null = null;
   private level: { itemId: string; value: number } | null = null;
+  // Bounds of the money lane (hysteresis across revisions, visuals.ts).
+  private overviewDomain: OverviewDomain | null = null;
+  // Info cards of clips (hover / tap), per revision.
+  private readonly infoCache = new Map<string, string | null>();
+  private infoDay = Number.NaN;
+  // Debt payoffs of a gesture's baseline (the "antes" of a goal-seek).
+  private basePayoffs: { snapshot: DocSnapshot; value: Map<string, DebtPayoffEstimate> } | null =
+    null;
   private preview: FinancialPreview | null = null;
   private previewCache: {
     revision: number;
@@ -456,12 +499,14 @@ export class FinancialBridge implements FinancialBridgeApi {
       return cached.data;
     }
     let data: PlaylistOverviewData;
+    const domain = this.overviewDomain;
     if (baseline) {
       data = buildOverview(
         this.doc,
         this.projection,
         this.warnings,
         cashSeries(this.doc, this.projectionOf(baseline)),
+        domain,
       );
     } else if (preview) {
       const view = this.previewData(preview);
@@ -470,6 +515,7 @@ export class FinancialBridge implements FinancialBridgeApi {
         view.projection,
         view.warnings,
         cashSeries(this.doc, this.projection),
+        domain,
       );
     } else if (comparison) {
       data = buildOverview(
@@ -477,10 +523,13 @@ export class FinancialBridge implements FinancialBridgeApi {
         this.projection,
         this.warnings,
         this.comparisonSeries(comparison),
+        domain,
       );
     } else {
-      data = buildOverview(this.doc, this.projection, this.warnings, null);
+      data = buildOverview(this.doc, this.projection, this.warnings, null, domain);
     }
+    // The lane keeps its bounds until the data leaves their round step.
+    this.overviewDomain = data.domain ?? null;
     this.overviewCache = { revision: this.revision, baseline: key, data };
     return data;
   }
@@ -489,16 +538,82 @@ export class FinancialBridge implements FinancialBridgeApi {
     const baseline = this.gestureBaseline();
     if (!baseline) return null;
     const cached = this.dragCache;
-    if (cached && cached.revision === this.revision && cached.baseline === baseline) {
+    if (
+      cached &&
+      cached.revision === this.revision &&
+      cached.baseline === baseline &&
+      cached.note === this.gestureNote
+    ) {
       return cached.data;
     }
-    const effect = dragAnnotation(this.doc, this.projectionOf(baseline), this.projection);
-    const note = this.gestureNote ?? this.statementNote(baseline);
+    const baseProjection = this.projectionOf(baseline);
+    const changed = this.changedItems(baseline);
+    const debt = changed.some((item) => isDebtItem(item));
+    const effect = dragAnnotation(this.doc, baseProjection, this.projection, {
+      debt,
+      interestDelta: debt ? this.interestDelta(baseline) : 0,
+    });
+    const note = this.gestureNote ?? this.statementNote(baseline) ?? this.paymentsNote(baseline, changed, baseProjection);
     const data: PlaylistDragAnnotation = note
       ? { text: `${note.text} · ${effect.text}`, tone: note.tone === "negative" ? "negative" : effect.tone }
       : effect;
-    this.dragCache = { revision: this.revision, baseline, data };
+    this.dragCache = { revision: this.revision, baseline, note: this.gestureNote, data };
     return data;
+  }
+
+  // Items of the document that differ from `baseline` (by reference).
+  private changedItems(baseline: DocSnapshot): FinancialItem[] {
+    const before = new Set<FinancialItem>(baseline.items);
+    return this.doc.items.filter((item) => !before.has(item));
+  }
+
+  // Interest of every debt (payoff estimates) now minus at the baseline.
+  private interestDelta(baseline: DocSnapshot): number {
+    const total = (payoffs: Map<string, DebtPayoffEstimate>) => {
+      let sum = 0;
+      for (const estimate of payoffs.values()) sum += estimate.totalInterest;
+      return sum;
+    };
+    return total(this.payoffs()) - total(this.payoffsOf(baseline));
+  }
+
+  private payoffsOf(snapshot: DocSnapshot): Map<string, DebtPayoffEstimate> {
+    if (snapshot === this.snap) return this.payoffs();
+    const cached = this.basePayoffs;
+    if (cached && cached.snapshot === snapshot) return cached.value;
+    const value = estimateDebtPayoffs({
+      ...this.doc,
+      items: snapshot.items,
+      initialCash: snapshot.initialCash,
+      minimumCashReserve: snapshot.minimumCashReserve,
+    });
+    this.basePayoffs = { snapshot, value };
+    return value;
+  }
+
+  // A recurring item cut shorter / made longer: how many payments it keeps.
+  private paymentsNote(
+    baseline: DocSnapshot,
+    changed: readonly FinancialItem[],
+    baseProjection: FinancialProjection,
+  ): { text: string; tone: PlaylistDragAnnotation["tone"] } | null {
+    if (changed.length !== 1) return null;
+    const item = changed[0]!;
+    if (isDebtItem(item) || item.recurrence.frequency === "once") return null;
+    const old = baseline.items.find((candidate) => candidate.id === item.id);
+    if (!old || old.recurrence.endDate === item.recurrence.endDate) return null;
+    if (old.recurrence.startDate !== item.recurrence.startDate) return null;
+    const count = (projection: FinancialProjection) => {
+      let n = 0;
+      for (const point of projection.points) {
+        if (point.itemId === item.id && point.cashDelta !== 0) n += 1;
+      }
+      return n;
+    };
+    const now = count(this.projection);
+    const was = count(baseProjection);
+    if (now === was) return null;
+    return { text: `${now} ${now === 1 ? "pago" : "pagos"} (antes ${was})`, tone: "neutral" };
   }
 
   // A purchase on a "totalero" card dragged across a cut: when it is paid.
@@ -560,7 +675,12 @@ export class FinancialBridge implements FinancialBridgeApi {
   // Vertical drag on a clip's top edge (the interaction controller opened a
   // gesture: every touch() below lands in ONE undo entry, and the gesture
   // baseline gives the lane its ghost and the pill its effect).
-  levelDrag(clipId: string, phase: "start" | "move" | "end", deltaY: number): string | null {
+  levelDrag(
+    clipId: string,
+    phase: "start" | "move" | "end",
+    deltaY: number,
+    fine = false,
+  ): string | null {
     if (phase === "start") {
       const item = this.itemIndex.get(clipId);
       const clip = this.findClip(clipId);
@@ -582,7 +702,9 @@ export class FinancialBridge implements FinancialBridgeApi {
     }
     const current = this.itemIndex.get(level.itemId);
     if (!current) return null;
-    const value = niceAmount(level.value * Math.exp(deltaY / LEVEL_PX_PER_E));
+    const value = fine
+      ? Math.max(1, Math.round(level.value * Math.exp(deltaY / (LEVEL_PX_PER_E * LEVEL_FINE_FACTOR))))
+      : niceAmount(level.value * Math.exp(deltaY / LEVEL_PX_PER_E));
     if (levelValue(current) !== value) {
       const next = withLevel(current, value);
       this.doc = {
@@ -591,7 +713,7 @@ export class FinancialBridge implements FinancialBridgeApi {
       };
       this.commitTouch();
     }
-    return levelText(this.itemIndex.get(level.itemId) ?? current, value, this.doc);
+    return levelText(this.itemIndex.get(level.itemId) ?? current, value, this.doc, level.value);
   }
 
   // --- wave 2: valleys that explain and fix themselves
@@ -653,7 +775,10 @@ export class FinancialBridge implements FinancialBridgeApi {
     let text: string | null = null;
     if (Number.isFinite(day) && day >= 0 && day <= horizonBeat(this.doc)) {
       const date = dateOf(this.doc, day);
-      const lines = [`Caja ${formatMoneyWhole(this.snapshotAt(date).cash)}`];
+      const snapshot = this.snapshotAt(date);
+      const lines = [`Caja ${formatMoneyWhole(snapshot.cash)}`];
+      // The grey line of the lane, named (it has no hover of its own).
+      if (snapshot.debt > 0.5) lines.push(`Deuda ${formatMoneyWhole(snapshot.debt)}`);
       // That day's cash movements, one line per item (in event order).
       const totals = new Map<string, { name: string; delta: number }>();
       for (const point of this.pointsOn(date)) {
@@ -686,6 +811,93 @@ export class FinancialBridge implements FinancialBridgeApi {
       this.pointsByDate = { projection: this.projection, map };
     }
     return this.pointsByDate.map.get(date) ?? NO_POINTS;
+  }
+
+  /**
+   * Info card of a clip (hover / tap): the full name is the card's title
+   * (the clip label); these are its lines — kind and amount with its
+   * cadence, the next payment, how it ends. Cached per revision and clip:
+   * O(1) per frame while it shows.
+   */
+  getClipInfo(clipId: string): string | null {
+    // Its lines follow the playhead day (next payment, debt): per day too.
+    const day = this.playheadDay();
+    if (day !== this.infoDay) {
+      this.infoCache.clear();
+      this.infoDay = day;
+    }
+    const cached = this.infoCache.get(clipId);
+    if (cached !== undefined) return cached;
+    const item = this.itemIndex.get(clipId);
+    const text = item ? this.describeClipInfo(item) : null;
+    this.infoCache.set(clipId, text);
+    return text;
+  }
+
+  private describeClipInfo(item: FinancialItem): string {
+    const lines: string[] = [];
+    const cadence = cadenceText(item.recurrence);
+    const once = item.recurrence.frequency === "once";
+    const kind = KIND_LABELS[item.kind];
+    switch (item.kind) {
+      case "income":
+        lines.push(`${kind} · +${formatMoney(item.amount)}${once ? "" : ` ${cadence}`}`);
+        break;
+      case "expense":
+        lines.push(`${kind} · −${formatMoney(item.amount)}${once ? "" : ` ${cadence}`}`);
+        break;
+      case "card-purchase": {
+        const card = this.itemIndex.get(item.cardId);
+        lines.push(`${kind} · −${formatMoney(item.amount)}${card ? ` con ${card.name}` : ""}`);
+        break;
+      }
+      case "loan":
+        lines.push(`${kind} · −${formatMoney(item.paymentAmount)} ${cadence}`);
+        break;
+      case "credit-card":
+        lines.push(
+          item.paymentMode === "statement"
+            ? `${kind} · pagas el total de cada mes`
+            : `${kind} · pagas ${formatMoney(item.paymentAmount ?? item.minimumPayment)} al mes · tasa ${item.annualRate}%`,
+        );
+        break;
+      case "installment-plan": {
+        const monthly =
+          item.installmentsTotal > 0 ? item.originalAmount / item.installmentsTotal : 0;
+        lines.push(`${kind} · −${formatMoney(monthly)}/mes · ${item.installmentsTotal} pagos`);
+        break;
+      }
+    }
+    if (item.enabled === false) lines.push("Excluido de tus cifras");
+    // Next movement of this item from the playhead day on.
+    const from = dateOf(this.doc, this.playheadDay());
+    for (const point of this.projection.points) {
+      if (point.itemId !== item.id || point.date < from) continue;
+      if (point.cashDelta === 0) continue;
+      lines.push(`Próximo: ${formatDateShort(point.date)} · ${formatSignedMoneyWhole(point.cashDelta)}`);
+      break;
+    }
+    if (isDebtItem(item)) {
+      const debt = this.debtAt(this.playheadDay()).get(item.id);
+      if (debt !== undefined && debt > 0.5) lines.push(`Debes ${formatMoneyWhole(debt)}`);
+      const payoff = this.payoffs().get(item.id);
+      if (payoff) {
+        lines.push(
+          payoff.payoffDate === null
+            ? "No se liquida con este pago"
+            : `Libre en ${formatMonthYear(payoff.payoffDate)}`,
+        );
+      }
+    } else if (!once) {
+      lines.push(
+        item.recurrence.endDate
+          ? `Hasta el ${formatDateLong(item.recurrence.endDate)}`
+          : "Sin fecha de fin",
+      );
+    } else {
+      lines.push(`El ${formatDateLong(item.recurrence.startDate)}`);
+    }
+    return lines.join("\n");
   }
 
   getTrackLayout(): FinancialTrackLayout {
@@ -739,8 +951,11 @@ export class FinancialBridge implements FinancialBridgeApi {
 
   /** Morph the lane from `series` (the curve shown before) to the current one. */
   animateFrom(series: PlaylistStepSeries | null): void {
-    if (!series) {
+    // Reduced motion: the lane switches at once (same rule as the
+    // navigator's glides).
+    if (!series || prefersReducedMotion()) {
       this.transition = null;
+      if (series) this.notifyVisual();
       return;
     }
     const days = Math.max(1, horizonBeat(this.doc));
@@ -1175,14 +1390,29 @@ export class FinancialBridge implements FinancialBridgeApi {
     const per = base.kind === "credit-card" ? "/mes" : frequencyShort(base.recurrence);
     const payment = formatMoneyWhole(solution.paymentAmount);
     const when = solution.payoffDate ? formatMonthYear(solution.payoffDate) : "";
+    // The goal (where the edge is), the result and the date before the
+    // gesture: "Meta: 23 sep → Libre en ago 2027 (antes jul 2028)".
+    const baseline = this.gestureBaseline();
+    const before = baseline ? this.payoffsOf(baseline).get(base.id) : this.payoffs().get(base.id);
+    const was =
+      before === undefined
+        ? ""
+        : before.payoffDate === null
+          ? " (antes no se liquidaba)"
+          : formatMonthYear(before.payoffDate) !== when
+            ? ` (antes ${formatMonthYear(before.payoffDate)})`
+            : "";
+    const goal = `Meta: ${formatDateShort(target)}`;
     if (!solution.feasible) {
       this.gestureNote = {
-        text: when ? `Lo antes posible: ${when} pagando ${payment}${per}` : `Pagando ${payment}${per}`,
+        text: when
+          ? `${goal} → lo antes posible: ${when}${was} pagando ${payment}${per}`
+          : `${goal} → pagando ${payment}${per}`,
         tone: "negative",
       };
     } else {
       this.gestureNote = {
-        text: `Libre en ${when} · pagas ${payment}${per}`,
+        text: `${goal} → Libre en ${when}${was} · pagas ${payment}${per}`,
         tone: "positive",
       };
     }
@@ -1620,6 +1850,7 @@ export class FinancialBridge implements FinancialBridgeApi {
     for (const item of this.doc.items) index.set(item.id, item);
     this.itemIndex = index;
     this.detailCache.clear();
+    this.infoCache.clear();
     this.detailDay = Number.NaN;
     if (this.contentIndex) this.previousContent = this.contentIndex;
     this.contentIndex = null;

@@ -246,12 +246,31 @@ describe("renderer — clip content provider", () => {
     const list = views();
     registry.syncFrame(parent, list);
     const body = nodeOf(parent, list, "clip-bass-1").children[0] as Graphics;
-    // body fill + title band + 4 in-window events (4, 10, 15, 22).
-    expect(body.context.instructions.length).toBe(2 + 4);
+    // body fill + accent + the in-window events right of the accent (10, 15,
+    // 22); the one on the start day (4) would sit on the accent bar, which
+    // already marks it.
+    expect(body.context.instructions.length).toBe(2 + 3);
     expect(sparkCalls).not.toContain("clip-bass-1");
     expect(sparkCalls.length).toBe(
       list.filter((v) => v.clip.type === "pattern" && v.clip.id !== "clip-bass-1").length,
     );
+    registry.destroy();
+  });
+
+  it("an event or a guide on the start day is not stacked on the accent bar", () => {
+    // clip-bass-1 starts at 4: the payment on that day and a cut on it would
+    // be drawn at the card's left edge, beside the accent (three lines).
+    const content: PlaylistClipContent = { kind: "events", beats: [4, 10], values: [1, 1], marks: [4] };
+    const registry = createClipNodeRegistry(PALETTE, {
+      getClipContent: (id) => (id === "clip-bass-1" ? content : null),
+    });
+    const parent = new Container();
+    const list = views();
+    registry.syncFrame(parent, list);
+    const body = nodeOf(parent, list, "clip-bass-1").children[0] as Graphics;
+    // body fill + accent + the event of beat 10; no guide stroke, no bar at 4.
+    const actions = body.context.instructions.map((i) => i.action);
+    expect(actions).toEqual(["fill", "fill", "fill"]);
     registry.destroy();
   });
 
