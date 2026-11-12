@@ -5,6 +5,9 @@ import {
   createDemoPlaylistState,
   createPlaylistCore,
   DEFAULT_PLAYLIST_METRICS,
+  getHorizontalScrollbarRect,
+  getVerticalScrollbarRect,
+  type PlaylistMetrics,
 } from "../src/playlist-core";
 import {
   createPlaylistInteractionController,
@@ -13,7 +16,7 @@ import {
 
 const M = DEFAULT_PLAYLIST_METRICS;
 
-function setup(options: PlaylistInteractionOptions = {}) {
+function setup(options: PlaylistInteractionOptions = {}, metrics: PlaylistMetrics = M) {
   const listeners = new Map<string, (event: WheelEvent) => void>();
   const host = {
     style: { cursor: "" } as Record<string, string>,
@@ -33,7 +36,7 @@ function setup(options: PlaylistInteractionOptions = {}) {
       return true;
     },
   } as unknown as HTMLElement;
-  const core = createPlaylistCore(createDemoPlaylistState());
+  const core = createPlaylistCore(createDemoPlaylistState(), { metrics });
   core.setViewportSize(1200, 700);
   core.updateViewport({ scrollX: 0, scrollY: 0 });
   const controller = createPlaylistInteractionController(host, core, options);
@@ -86,6 +89,28 @@ describe('mouseWheel: "rows" — the wheel scrolls the rows, like any document',
   it("over the ruler (which never scrolls vertically) the wheel moves time", () => {
     const { controller, wheel, scroll } = setup({ mouseWheel: "rows" });
     wheel(overRows.x, M.rulerHeight / 2);
+    controller.destroy();
+    expect(scroll().x).toBeGreaterThan(0);
+    expect(scroll().y).toBe(0);
+  });
+});
+
+describe("the horizontal scrollbar (the navigator): thicker, and the wheel over it moves time", () => {
+  const THICK: PlaylistMetrics = { ...M, horizontalScrollbarHeight: 28 };
+
+  it("horizontalScrollbarHeight thickens only the horizontal bar", () => {
+    const core = createPlaylistCore(createDemoPlaylistState(), { metrics: THICK });
+    core.setViewportSize(1200, 700);
+    const state = core.getState();
+    expect(getHorizontalScrollbarRect(state, THICK)).toMatchObject({ y: 700 - 28, height: 28 });
+    expect(getVerticalScrollbarRect(state, THICK).width).toBe(M.scrollbarSize);
+    // Without it, both are scrollbarSize (as before).
+    expect(getHorizontalScrollbarRect(state, M).height).toBe(M.scrollbarSize);
+  });
+
+  it('"rows": a notch over the horizontal bar moves time, not the rows', () => {
+    const { controller, wheel, scroll } = setup({ mouseWheel: "rows" }, THICK);
+    wheel(overRows.x, 700 - 14);
     controller.destroy();
     expect(scroll().x).toBeGreaterThan(0);
     expect(scroll().y).toBe(0);

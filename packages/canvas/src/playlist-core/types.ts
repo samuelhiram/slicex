@@ -401,6 +401,9 @@ export interface PlaylistMetrics {
   timelineOverscanPx: number;
   playMarkerHitWidth: number;
   scrollbarSize: number;
+  // Height of the horizontal scrollbar (the timeline navigator) when it is
+  // thicker than the vertical one is wide. Absent: scrollbarSize.
+  horizontalScrollbarHeight?: number;
   scrollbarThumbMin: number;
   scrollbarVirtualRangePx: number;
   contextMenuWidth: number;

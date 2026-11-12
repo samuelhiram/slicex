@@ -24,7 +24,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { FinancialDocumentSchema } from "@slicex/contracts";
 import { addDays, type FinancialItem, type FinancialItemKind, type LiquidityWarning } from "@slicex/core";
-import { getTrackIndexById, getTrackTopByIndex, getTracksTop } from "@slicex/canvas";
+import { getHorizontalScrollbarHeight, getTrackIndexById, getTrackTopByIndex, getTracksTop } from "@slicex/canvas";
 import { useAnnounce } from "../../ui/announcer";
 import { useFitInViewport } from "../../ui/fit-in-viewport";
 import { useDismiss } from "../../ui/use-dismiss";
@@ -187,7 +187,7 @@ function revealClips(bridge: FinancialBridgeApi, ids: readonly string[]): void {
   const index = getTrackIndexById(state, first.trackId);
   if (index >= 0) {
     const top = getTrackTopByIndex(state, index, metrics);
-    const rowsHeight = viewport.height - getTracksTop(metrics) - metrics.scrollbarSize;
+    const rowsHeight = viewport.height - getTracksTop(metrics) - getHorizontalScrollbarHeight(metrics);
     if (rowsHeight > 0 && (top < viewport.scrollY || top + metrics.trackHeight > viewport.scrollY + rowsHeight)) {
       next.scrollY = Math.max(0, top - 8);
     }

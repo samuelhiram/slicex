@@ -2028,7 +2028,7 @@ button.fin-summary__chip[aria-disabled="true"]:hover {
    the first track's clips. */
 .playlist-shell--finance .playlist-inspector--collapsed {
   top: auto;
-  bottom: 28px;
+  bottom: calc(var(--pl-hbar-h, 20px) + 8px);
 }
 
 .playlist-inspector--collapsed .playlist-inspector__toggle {
@@ -4128,7 +4128,9 @@ kbd {
 .fin-toast {
   position: fixed;
   left: 50%;
-  bottom: 36px;
+  /* Stage inset 8 + the 28 px navigator + 8 px of air (a sibling of the
+     shell: --pl-hbar-h does not reach it). */
+  bottom: 44px;
   z-index: 14;
   display: flex;
   align-items: center;
@@ -4203,14 +4205,14 @@ kbd {
 
 /* While a notice shows, the banners (bottom left) step above it. */
 .playlist-shell:has(~ .fin-toast) .fin-banners {
-  bottom: 104px;
+  bottom: 112px;
 }
 
 /* --- Banners (onboarding, Rec) ------------------------------------------------ */
 .fin-banners {
   position: absolute;
   left: calc(var(--pl-header-w, 216px) + 16px);
-  bottom: 28px;
+  bottom: calc(var(--pl-hbar-h, 20px) + 8px);
   /* Passive hints: under any panel the person opens (side panel,
      inspector, menus), never over its controls. */
   z-index: 5;
@@ -4251,7 +4253,7 @@ kbd {
   }
 
   .fin-banners {
-    bottom: 24px;
+    bottom: calc(var(--pl-hbar-h, 20px) + 4px);
   }
 
   .fin-banner {
@@ -5424,7 +5426,7 @@ kbd {
 .fin-mode {
   position: absolute;
   right: 56px;
-  bottom: 40px;
+  bottom: calc(var(--pl-hbar-h, 20px) + 20px);
   z-index: 7;
   display: flex;
   align-items: center;

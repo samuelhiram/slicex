@@ -11,6 +11,7 @@ import {
   getTrackLaneCount,
   getTrackLaneHeight,
   getTracksTop,
+  getHorizontalScrollbarHeight,
   getVerticalScrollableRange,
   getVerticalScrollbarRect,
   getVerticalScrollbarThumbRect,
@@ -1640,7 +1641,7 @@ export function createPlaylistInteractionController(
     let vy = 0;
     if (vertical) {
       const top = getTracksTop(metrics);
-      const bottom = state.viewport.height - metrics.scrollbarSize;
+      const bottom = state.viewport.height - getHorizontalScrollbarHeight(metrics);
       if (point.y > bottom - EDGE_ZONE && verticalRoom(state) > 0.5) {
         vy = edgeSpeed(point.y - (bottom - EDGE_ZONE)) * 0.6;
       } else if (point.y < top + EDGE_ZONE && point.y > top - 8 && state.viewport.scrollY > 0) {
@@ -1719,7 +1720,7 @@ export function createPlaylistInteractionController(
           point.x >= metrics.trackHeaderWidth &&
           point.x < viewport.width - metrics.scrollbarSize &&
           point.y >= 0 &&
-          point.y < viewport.height - metrics.scrollbarSize &&
+          point.y < viewport.height - getHorizontalScrollbarHeight(metrics) &&
           hit.kind !== "scrollbar-horizontal" &&
           hit.kind !== "scrollbar-vertical";
         core.setHoverTime(overTimeline ? screenXToTime(state, point.x, metrics) : null);
@@ -2556,8 +2557,12 @@ export function createPlaylistInteractionController(
     const notch = dy !== 0 ? dy : dx;
     if (wheelScrollsRows) {
       // Shift arrives as deltaX on some platforms (Windows Chrome): either
-      // way it means time; so does a tilt wheel and the bands above rows.
-      const overRows = point.y > getTracksTop(metrics);
+      // way it means time; so does a tilt wheel, the bands above the rows
+      // and the horizontal scrollbar under them (the navigator: it scrolls
+      // the way it points).
+      const overRows =
+        point.y > getTracksTop(metrics) &&
+        point.y < state.viewport.height - getHorizontalScrollbarHeight(metrics);
       if (!event.shiftKey && dx === 0 && overRows && room) {
         navigator.scrollBy(0, notch);
         return;
@@ -2583,7 +2588,7 @@ export function createPlaylistInteractionController(
     const height = getTrackHeightByIndex(state, index, metrics);
     const visible = Math.max(
       1,
-      state.viewport.height - getTracksTop(metrics) - metrics.scrollbarSize,
+      state.viewport.height - getTracksTop(metrics) - getHorizontalScrollbarHeight(metrics),
     );
     const scrollY = state.viewport.scrollY;
     if (top < scrollY) navigator.scrollTo({ scrollY: Math.max(0, top - 8) });

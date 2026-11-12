@@ -45,8 +45,10 @@ export const FINANCE_PLAYLIST_METRICS: PlaylistMetrics = {
   rulerHeight: 52,
   trackHeaderWidth: 216,
   // The horizontal scrollbar is the timeline navigator (miniature of the
-  // year + zoomable window): tall enough to grab comfortably.
+  // year + zoomable window): thicker than the vertical bar, so it is easy
+  // to grab and to wheel over (the wheel there moves time).
   scrollbarSize: 20,
+  horizontalScrollbarHeight: 28,
 };
 
 /**

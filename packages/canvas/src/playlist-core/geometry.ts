@@ -154,18 +154,25 @@ export function pointInRect(point: PlaylistPoint, rect: PlaylistRect): boolean {
 export const SCROLLBAR_EDGE_PX = 6;
 export const SCROLLBAR_EDGE_MIN_THUMB = 36;
 
+/** Height of the horizontal scrollbar (metrics.horizontalScrollbarHeight ?? scrollbarSize). */
+export function getHorizontalScrollbarHeight(
+  metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+): number {
+  return metrics.horizontalScrollbarHeight ?? metrics.scrollbarSize;
+}
+
 export function getHorizontalScrollbarRect(
   state: PlaylistState,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
 ): PlaylistRect {
   return {
     x: metrics.trackHeaderWidth,
-    y: Math.max(getTracksTop(metrics), state.viewport.height - metrics.scrollbarSize),
+    y: Math.max(getTracksTop(metrics), state.viewport.height - getHorizontalScrollbarHeight(metrics)),
     width: Math.max(
       metrics.scrollbarThumbMin,
       state.viewport.width - metrics.trackHeaderWidth - metrics.scrollbarSize,
     ),
-    height: metrics.scrollbarSize,
+    height: getHorizontalScrollbarHeight(metrics),
   };
 }
 
@@ -180,7 +187,7 @@ export function getVerticalScrollbarRect(
     width: metrics.scrollbarSize,
     height: Math.max(
       metrics.scrollbarThumbMin,
-      state.viewport.height - tracksTop - metrics.scrollbarSize,
+      state.viewport.height - tracksTop - getHorizontalScrollbarHeight(metrics),
     ),
   };
 }
@@ -249,7 +256,7 @@ export function getRealTracksScrollLimit(
   return Math.max(
     0,
     getRealTracksHeight(state, metrics) +
-      metrics.scrollbarSize -
+      getHorizontalScrollbarHeight(metrics) -
       getTrackAreaHeight(state, metrics),
   );
 }
@@ -265,7 +272,7 @@ export function getVerticalContentExtent(
     // No virtual rows: the content is the real tracks plus room for the
     // horizontal scrollbar (consistent with getRealTracksScrollLimit).
     return Math.max(
-      totalHeight + metrics.scrollbarSize,
+      totalHeight + getHorizontalScrollbarHeight(metrics),
       state.viewport.scrollY + viewportHeight,
       viewportHeight,
     );

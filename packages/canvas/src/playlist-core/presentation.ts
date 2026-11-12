@@ -15,6 +15,7 @@ import {
   getActiveLoopRegion,
   getAutomationPointPosition,
   getClipTitleRect,
+  getHorizontalScrollbarHeight,
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
   getOverviewLaneHeight,
@@ -381,9 +382,9 @@ function createLayout(
       metrics.trackHeaderWidth,
       state.viewport.width - metrics.scrollbarSize,
     ),
-    y: Math.max(tracksTop, state.viewport.height - metrics.scrollbarSize),
+    y: Math.max(tracksTop, state.viewport.height - getHorizontalScrollbarHeight(metrics)),
     width: metrics.scrollbarSize,
-    height: metrics.scrollbarSize,
+    height: getHorizontalScrollbarHeight(metrics),
   };
   const overviewRect = {
     x: metrics.trackHeaderWidth,
@@ -1255,7 +1256,7 @@ export function getClipExtendHandle(
   const viewLeft = metrics.trackHeaderWidth;
   const viewRight = state.viewport.width - metrics.scrollbarSize;
   const viewTop = getTracksTop(metrics);
-  const viewBottom = state.viewport.height - metrics.scrollbarSize;
+  const viewBottom = state.viewport.height - getHorizontalScrollbarHeight(metrics);
   const rect = view.rect;
   const left = Math.max(rect.x, viewLeft);
   const right = Math.min(rect.x + rect.width, viewRight);

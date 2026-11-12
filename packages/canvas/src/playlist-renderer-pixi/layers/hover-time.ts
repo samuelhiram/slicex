@@ -8,7 +8,7 @@
 // like the other dynamic layers: a rect or two and one pooled Text, no
 // allocation (the label string is cached per cell by the renderer).
 import type { Container, Graphics } from "pixi.js";
-import type { PlaylistPresentation } from "../../playlist-core";
+import { getHorizontalScrollbarHeight, type PlaylistPresentation } from "../../playlist-core";
 import { COLORS } from "../palette";
 import { addText } from "../text-pool";
 import { RULER_TICK_CHAR_PX, rulerTickLabelY } from "./ruler";
@@ -34,7 +34,7 @@ export function drawHoverTime(
   const viewport = state.viewport;
   const left = metrics.trackHeaderWidth;
   const right = viewport.width - metrics.scrollbarSize;
-  const bottom = viewport.height - metrics.scrollbarSize;
+  const bottom = viewport.height - getHorizontalScrollbarHeight(metrics);
   const pxPerBeat = viewport.pxPerBeat;
   const cellLeft = left + time * pxPerBeat - viewport.scrollX;
   const center = cellLeft + pxPerBeat / 2;

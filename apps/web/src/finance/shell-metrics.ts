@@ -13,7 +13,7 @@
 // event lines show whole. Picked at mount like the others: switching it
 // live needs metrics the core can change in place (P2-19, pending).
 import type { CSSProperties } from "react";
-import type { PlaylistMetrics } from "@slicex/canvas";
+import { getHorizontalScrollbarHeight, type PlaylistMetrics } from "@slicex/canvas";
 import { FINANCE_PLAYLIST_METRICS } from "./mapping";
 
 export type ShellDensity = "comfortable" | "compact" | "tight" | "short";
@@ -64,5 +64,8 @@ export function shellLayoutStyle(metrics: PlaylistMetrics): CSSProperties {
     "--pl-ruler-h": `${metrics.rulerHeight}px`,
     "--pl-lane-h": `${metrics.overviewLaneHeight}px`,
     "--pl-header-w": `${metrics.trackHeaderWidth}px`,
+    // The horizontal scrollbar (navigator): what floats at the bottom of the
+    // stage stays clear of it.
+    "--pl-hbar-h": `${getHorizontalScrollbarHeight(metrics)}px`,
   } as CSSProperties;
 }
