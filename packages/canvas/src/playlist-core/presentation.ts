@@ -684,6 +684,11 @@ function createClipViews(
     if (clip.start > visibleEndTime) {
       continue;
     }
+    // Without host minimum widths the span alone decides (the cheap cull
+    // first, before any lookup).
+    if (!minWidthPx && clip.start + clip.duration < visibleStartTime) {
+      continue;
+    }
     const trackIndex = cache.trackIndexById.get(clip.trackId);
     if (trackIndex === undefined) {
       continue;

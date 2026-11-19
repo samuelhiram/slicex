@@ -51,10 +51,11 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
 - **`FinancialBridge`** (`apps/web/src/finance/financial-bridge.ts`): `item.id === clip.id`. La
   geometría del clip es la verdad de las fechas (estirar borde derecho = `endDate`, recortar el
   izquierdo no mueve los días de pago, slice parte la recurrencia); lo no temporal (montos,
-  tarjetas) vive en el documento. **Candado de fechas por objeto** (2026-11-18): un candado
-  translúcido en la esquina INFERIOR IZQUIERDA de la tarjeta, pegajoso como el texto (en una
-  tarjeta baja, por carriles apilados, se pasa AL LADO del bloque nombre + monto, centrado;
-  nunca desaparece mientras se ve el texto) (`PlaylistClip.timeLocked`; el
+  tarjetas) vive en el documento. **Candado de fechas por objeto** (2026-11-18): un botón de
+  solo ícono al inicio de la tercera fila de la tarjeta, antes de la etiqueta de fechas (cosa
+  aparte), pegajoso como el texto (en una tarjeta baja, por carriles apilados, la fila va AL
+  LADO del bloque nombre + monto, centrada; nunca desaparece mientras se ve el texto)
+  (`PlaylistClip.timeLocked`; el
   renderer lo dibuja con `clipTimeLock` y lo expone con `getClipLockRect`, que el controller usa
   como `clipTimeLock.rectOf` para que el clic caiga donde se ve). Cerrado: arrastrar solo cambia
   de línea, sin estirar, sin agarrador central ni Slip, y ←/→ mueven el día. Abierto: se mueve
@@ -247,7 +248,18 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     (`PlaylistLayoutOptions.clipMinWidthPx` ← `FinancialBridge.clipMinWidth`, con la misma
     estimación de texto del renderer, `clipTextWidthPx`): crece el rect dibujado (hit-test y
     renderer), no su fecha. Muy alejado, dos etiquetas cercanas de la misma línea pueden
-    encimarse (los carriles se calculan en días).
+    encimarse (los carriles se calculan en días). La etiqueta entera lleva el color de su tipo,
+    como sus hermanos (sin la "extensión de un día" tenue de UX-41; su día es su borde izquierdo).
+  - **Cada tarjeta dice sus fechas, en una tercera fila** (`describePeriod` → `getClipPeriod`
+    del renderer): "9 dic 2026", "1 dic 2026 – 1 sep 2027", "13 nov 2026 – Indefinido"; una deuda
+    o MSI hasta su liquidación estimada. Bajo el nombre y el monto van DOS cosas distintas: el
+    candado, un botón de solo ícono (translúcido; un cuadro suave bajo el puntero; lo único que
+    reacciona), y 6 px después la etiqueta de fechas, información: ícono de calendario, relleno
+    opaco del color de la tarjeta un tono más claro (más oscuro en tema claro), sin borde,
+    esquinas suaves, el gris de la línea del monto — parte de la tarjeta, tapa las marcas de
+    pago. En una tarjeta sin alto para la tercera fila (carriles apilados) la fila va al lado del
+    bloque nombre + monto, centrada. Recortada con "…" si no cabe; la etiqueta de una sola fecha
+    crece para mostrarla (`clipCardWidthPx`, misma geometría que el dibujo).
   - **En el canvas la rueda es vertical** (2026-11-09; `mouseWheel: "rows"` del controller):
     sube y baja entre líneas de evento como cualquier documento; Shift + rueda, la rueda
     inclinable o la rueda sobre la regla / el carril de Caja mueven el tiempo; Ctrl + rueda o

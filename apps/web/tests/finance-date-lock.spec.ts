@@ -226,7 +226,8 @@ describe("every card says the dates it covers", () => {
         payoffDate: "2027-02-15",
         totalInterest: 0,
         totalPaid: 3000,
-      } as never),
+        finalDebt: 0,
+      }),
     ).toBe("7 nov 2026 – 15 feb 2027");
     expect(describePeriod(card)).toBe("7 nov 2026 – Indefinido");
   });

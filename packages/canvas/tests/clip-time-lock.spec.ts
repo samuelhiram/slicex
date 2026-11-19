@@ -300,7 +300,14 @@ function drawn(start: number, duration: number, scrollBeats: number, timeLocked 
   const period = node.children.find((child) => child instanceof Text && child.text.includes("nov 2026")) as
     | Text
     | undefined;
+  // The badge behind the dates: the Graphics right before their Text.
+  const periodIndex = period ? node.children.indexOf(period) : -1;
+  const badge = periodIndex > 0 ? node.children[periodIndex - 1] : undefined;
   return {
+    badgeX: badge && badge.visible ? node.x + badge.x : Number.NaN,
+    badgeY: badge && badge.visible ? node.y + badge.y : Number.NaN,
+    badgeRight: badge && badge.visible ? node.x + badge.x + badge.width : Number.NaN,
+    titleY: title ? node.y + title.y : Number.NaN,
     periodX: period && period.visible ? node.x + period.x : Number.NaN,
     periodY: period && period.visible ? node.y + period.y : Number.NaN,
     periodText: period && period.visible ? period.text : null,
@@ -331,7 +338,7 @@ describe("the lock sits in the bottom-left corner", () => {
     expect(lock!.x).toBeLessThanOrEqual(titleX);
   });
 
-  it("a card too short for the corner keeps it, beside the name and amount, centred", () => {
+  it("a card too short for a third row keeps it, after the name and amount, centred", () => {
     const { rect, lock, textEnd } = drawn(5, 50, 0, true, 44);
     expect(rect.height).toBeLessThan(50);
     expect(lock).not.toBeNull();
@@ -347,28 +354,37 @@ describe("the lock sits in the bottom-left corner", () => {
   });
 });
 
-describe("the dates it covers, right after the lock", () => {
-  it("on the lock's row, whole on a long card", () => {
-    const { lock, periodX, periodY, periodText } = drawn(5, 50, 0);
+describe("the third row: the lock button, then the dates tag (two things)", () => {
+  it("under the name and the amount: an 18 px lock button, the dates tag 6 px after it", () => {
+    const { rect, titleY, lock, badgeX, badgeY, periodX, periodText } = drawn(5, 50, 0);
     expect(periodText).toBe("10 nov 2026 – 10 abr 2027");
-    expect(periodX).toBeGreaterThanOrEqual(lock!.x + lock!.width);
-    expect(periodX - (lock!.x + lock!.width)).toBeLessThan(6);
-    expect(periodY).toBeGreaterThanOrEqual(lock!.y);
-    expect(periodY).toBeLessThan(lock!.y + lock!.height);
+    // The lock's hit area is the button alone.
+    expect(lock!.width).toBe(18);
+    expect(lock!.height).toBe(18);
+    // A gap, then the tag: padding, calendar glyph, its gap, the text.
+    expect(badgeX - (lock!.x + lock!.width)).toBe(6);
+    expect(periodX - badgeX).toBe(6 + 10 + 5);
+    expect(badgeY).toBe(lock!.y);
+    // The third row: under the title (20) + the amount line (2 + 15), inside the card.
+    expect(lock!.y).toBeGreaterThanOrEqual(titleY - 5 + 37 - 1);
+    expect(lock!.y + lock!.height).toBeLessThanOrEqual(rect.y + rect.height);
   });
 
-  it("beside the text on a short card too; cut to fit a narrow one", () => {
+  it("beside the text on a short card; cut to fit a narrow one", () => {
     const short = drawn(5, 50, 0, true, 44);
     expect(short.periodText).toBe("10 nov 2026 – 10 abr 2027");
-    expect(short.periodX).toBeGreaterThan(short.lock!.x);
-    // 7 beats = 140 px: the dates are cut, never past the card.
-    const narrow = drawn(5, 7, 0);
+    expect(short.lock!.x).toBeGreaterThanOrEqual(short.textEnd);
+    expect(short.badgeX).toBeGreaterThanOrEqual(short.lock!.x + short.lock!.width);
+    // 10 beats = 200 px: the dates are cut, never past the card.
+    const narrow = drawn(5, 10, 0);
     expect(narrow.periodText!.endsWith("…")).toBe(true);
+    expect(narrow.badgeRight).toBeLessThanOrEqual(narrow.rect.x + narrow.rect.width);
   });
 
   it("clipCardWidthPx fits what the card draws", () => {
     const tall = clipCardWidthPx("Bono", "+$4,000", "9 dic 2026", 58, 20);
-    expect(tall).toBeGreaterThanOrEqual(8 + 22 + 2 + "9 dic 2026".length * 6.7);
+    // The row: inset start + lock + gap + tag (padding, glyph, gap, text).
+    expect(tall).toBeGreaterThanOrEqual(8 + 18 + 6 + 6 * 2 + 10 + 5 + "9 dic 2026".length * 6.7);
     expect(clipCardWidthPx("Bono", "+$4,000", "9 dic 2026", 40, 20)).toBeGreaterThan(tall);
   });
 });

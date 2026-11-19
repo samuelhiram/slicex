@@ -58,20 +58,39 @@ const TITLE_Y = 5;
 // Conservative advance of the 12px / 600 title font (no canvas measuring:
 // deterministic and headless-safe, same approach as the detail line).
 const TITLE_CHAR_PX = 7.2;
-// Lock button (providers.timeLock): a translucent padlock in the card's
-// BOTTOM-LEFT corner, sliding with the title (sticky) so it stays in view;
-// it takes no room from the text. On a card too short for that (stacked
-// lanes) it moves BESIDE the name / amount block, centred on the card. The
-// box (hit area and hover chip) is LOCK_BOX square around the glyph. Only a
-// card whose text is hidden (narrower than LOCK_MIN_WIDTH) shows none.
-const LOCK_BOX = 22;
+// The card's THIRD ROW (providers.timeLock), under the name and the
+// amount, holds TWO different things side by side:
+//   - the lock: an icon-only button (translucent padlock; a soft square
+//     under the pointer) — the only part that reacts to the pointer;
+//   - the dates it covers (providers.getClipPeriod: "1 dic 2026 – 1 sep
+//     2027", "13 nov 2026 – Indefinido", "9 dic 2026"): an information tag
+//     with a calendar glyph, opaque in the card's own colour a shade lighter
+//     (darker on a light theme), no border, the card's soft corners, the
+//     amount line's grey — part of the card, and payment marks never run
+//     under the dates.
+// The row slides with the title (sticky); on a card too short for a third
+// row (stacked lanes) it sits BESIDE the name / amount block, centred. Only
+// a card whose text is hidden (narrower than LOCK_MIN_WIDTH) shows none.
 const LOCK_MIN_WIDTH = 44;
+// The lock starts this far left of the text column (clear of the accent bar).
 const LOCK_INSET = 3;
-// The dates a card covers (providers.getClipPeriod: "1 dic 2026 – 1 sep
-// 2027", "13 nov 2026 – Indefinido", "9 dic 2026") sit right after the lock,
-// on its row: what the lock fixes, next to it.
-const PERIOD_GAP = 2;
+const LOCK_BOX = 18;
+// Between the lock button and the dates tag: two things, not one.
+const LOCK_DATE_GAP = 6;
+const CHIP_H = 18;
+const CHIP_RADIUS = 5;
+const DATE_PAD = 6;
+const CAL_ICON = 10;
+const CAL_GAP = 5;
 const PERIOD_FONT_SIZE = 11;
+// How much of the theme's ink the dates tag's fill takes over the card
+// colour; and the lock button's square under the pointer.
+const CHIP_SHADE = 0.08;
+const LOCK_SHADE_HOVER = 0.16;
+// Px the third row takes with `chars` characters of dates (estimate:
+// layout, never drawing): the lock, then the dates tag.
+const chipPx = (chars: number): number =>
+  LOCK_BOX + (chars > 0 ? LOCK_DATE_GAP + DATE_PAD * 2 + CAL_ICON + CAL_GAP + chars * DETAIL_CHAR_PX : 0);
 
 interface ClipNode {
   container: Container;
@@ -108,9 +127,9 @@ interface ClipNode {
   contentPxPerBeat: number;
   // Host highlight the overlay was last drawn with.
   highlighted: boolean | "danger";
-  // Lock button (providers.timeLock): its own small Graphics, redrawn only
-  // when its look changes (lockKey: state bits; -1 = never drawn), placed by
-  // transform every frame with the title.
+  // The lock button (providers.timeLock): its own small Graphics, redrawn
+  // only when its look / card colour change (lockKey; -1 = never drawn),
+  // placed by transform every frame with the title.
   lock: Graphics | null;
   lockKey: number;
   // The dates next to the lock (providers.getClipPeriod); display string
@@ -120,6 +139,13 @@ interface ClipNode {
   periodWidth: number;
   periodHeight: number;
   periodDisplay: string;
+  // The dates tag (its own Graphics, redrawn when its width / card colour
+  // change: periodBgKey) and the dates' text width, measured once per
+  // display string.
+  periodBg: Graphics | null;
+  periodBgKey: number;
+  periodMeasured: string;
+  periodTextWidth: number;
   // Visual hash captures everything that would force a redraw. Position and
   // size are kept separate so we can skip a redraw when only x/y changed.
   hash: string;
@@ -325,12 +351,17 @@ export function clipTextWidthPx(title: string, detail: string | null): number {
   return Math.ceil(text + CLIP_TEXT_RIGHT_PAD + 1);
 }
 
-/** The lock row: the card's bottom-left corner, or beside the text on a card too short for it. */
-function lockBeside(height: number, titleHeight: number): boolean {
-  return height - LOCK_BOX < titleHeight + DETAIL_LINE_HEIGHT;
+/** Local y where the third row (lock + dates) starts: under the name and the amount. */
+function thirdRowTop(titleHeight: number): number {
+  return titleHeight + 2 + DETAIL_LINE_HEIGHT;
 }
 
-/** Local x where the text block (title + detail) ends, without the sticky shift. */
+/** No room for a third row: the chip goes beside the text block. */
+function lockBeside(height: number, titleHeight: number): boolean {
+  return height - thirdRowTop(titleHeight) < CHIP_H;
+}
+
+/** Local x where the text block (title, detail) ends, without the sticky shift. */
 function textBlockEnd(titleChars: number, detailChars: number): number {
   return Math.max(
     TITLE_PAD_X + titleChars * TITLE_CHAR_PX,
@@ -338,9 +369,14 @@ function textBlockEnd(titleChars: number, detailChars: number): number {
   );
 }
 
-/** Local x where the lock box starts (beside mode: after the text block). */
+/** Local x where the third row (lock, then dates) starts (beside mode: after the text block). */
 function lockRowStart(beside: boolean, blockEnd: number): number {
-  return beside ? blockEnd + 6 : TITLE_PAD_X - LOCK_INSET;
+  return beside ? blockEnd + 8 : TITLE_PAD_X - LOCK_INSET;
+}
+
+/** Local x where the third row ends; `periodChars` 0 = the lock alone. */
+function lockRowEnd(beside: boolean, blockEnd: number, periodChars: number): number {
+  return lockRowStart(beside, blockEnd) + chipPx(periodChars);
 }
 
 /**
@@ -358,11 +394,7 @@ export function clipCardWidthPx(
 ): number {
   const detailChars = detail && height >= titleHeight + DETAIL_MIN_BODY_HEIGHT ? detail.length : 0;
   const block = textBlockEnd(title.length, detailChars);
-  const beside = lockBeside(height, titleHeight);
-  const row =
-    lockRowStart(beside, block) +
-    LOCK_BOX +
-    (period ? PERIOD_GAP + period.length * DETAIL_CHAR_PX : 0);
+  const row = lockRowEnd(lockBeside(height, titleHeight), block, period ? period.length : 0);
   return Math.ceil(Math.max(block, row) + CLIP_TEXT_RIGHT_PAD + 1);
 }
 
@@ -660,35 +692,58 @@ const LOCK_FIXED = 2;
 const LOCK_HOVER = 4;
 const LOCK_MUTED = 8;
 
-// A padlock in a LOCK_BOX square, translucent until the pointer is on it:
-// closed and filled when the dates are fixed, open (shackle lifted off its
-// left post) and outlined, quieter still, when they are free. Under the
-// pointer it is opaque on a soft chip ("this is a button").
-function drawLockLocal(g: Graphics, look: number, palette: PixiPaletteColors): void {
+// The lock button: a padlock in a LOCK_BOX square — closed and filled when
+// the dates are fixed, open (shackle lifted off its left post) and
+// outlined, quieter, when they are free; translucent at rest, opaque on a
+// soft square (the card's colour shaded toward the ink) under the pointer.
+function drawLockLocal(g: Graphics, look: number, card: number, palette: PixiPaletteColors): void {
   g.clear();
   const fixed = (look & LOCK_FIXED) !== 0;
   const hovered = (look & LOCK_HOVER) !== 0;
   const muted = (look & LOCK_MUTED) !== 0;
-  if (hovered) g.roundRect(0, 0, LOCK_BOX, LOCK_BOX, 6).fill({ color: palette.text, alpha: 0.14 });
+  if (hovered) {
+    g.roundRect(0, 0, LOCK_BOX, LOCK_BOX, CHIP_RADIUS).fill({ color: mixColor(card, palette.text, LOCK_SHADE_HOVER) });
+  }
   const color = palette.text;
-  const alpha = hovered ? 1 : muted ? 0.3 : fixed ? 0.55 : 0.38;
+  const alpha = hovered ? 1 : muted ? 0.35 : fixed ? 0.8 : 0.5;
   const cx = LOCK_BOX / 2;
   const top = LOCK_BOX / 2 - 0.5;
   if (fixed) {
-    g.moveTo(cx - 4, top)
-      .lineTo(cx - 4, top - 3)
-      .arc(cx, top - 3, 4, Math.PI, 0)
-      .lineTo(cx + 4, top)
-      .stroke({ color, alpha, width: 1.7 });
-    g.roundRect(cx - 6, top, 12, 9, 2).fill({ color, alpha });
+    g.moveTo(cx - 3, top)
+      .lineTo(cx - 3, top - 2.5)
+      .arc(cx, top - 2.5, 3, Math.PI, 0)
+      .lineTo(cx + 3, top)
+      .stroke({ color, alpha, width: 1.4 });
+    g.roundRect(cx - 4.5, top, 9, 6.5, 1.5).fill({ color, alpha });
   } else {
-    g.moveTo(cx + 4, top)
-      .lineTo(cx + 4, top - 5)
-      .arc(cx, top - 5, 4, 0, Math.PI, true)
-      .lineTo(cx - 4, top - 3)
-      .stroke({ color, alpha, width: 1.7 });
-    g.roundRect(cx - 5.5, top + 0.5, 11, 8, 2).stroke({ color, alpha, width: 1.5 });
+    g.moveTo(cx + 3, top)
+      .lineTo(cx + 3, top - 4)
+      .arc(cx, top - 4, 3, 0, Math.PI, true)
+      .lineTo(cx - 3, top - 2.5)
+      .stroke({ color, alpha, width: 1.4 });
+    g.roundRect(cx - 4, top + 0.5, 8, 6, 1.5).stroke({ color, alpha, width: 1.2 });
   }
+}
+
+// The dates tag: a soft rectangle in the card's colour shaded toward the
+// ink (opaque: it hides what runs behind the dates), a small calendar glyph.
+function drawDateTagLocal(
+  g: Graphics,
+  width: number,
+  card: number,
+  ink: number,
+  muted: boolean,
+  palette: PixiPaletteColors,
+): void {
+  g.clear();
+  g.roundRect(0, 0, width, CHIP_H, CHIP_RADIUS).fill({ color: mixColor(card, palette.text, CHIP_SHADE) });
+  const ix = DATE_PAD;
+  const iy = (CHIP_H - CAL_ICON) / 2;
+  const line = { color: ink, alpha: muted ? 0.6 : 0.9 };
+  g.roundRect(ix + 0.5, iy + 1.5, CAL_ICON - 1, CAL_ICON - 2, 2).stroke({ ...line, width: 1.2 });
+  g.rect(ix + 0.5, iy + 1.5, CAL_ICON - 1, 2.5).fill(line);
+  g.moveTo(ix + 3, iy).lineTo(ix + 3, iy + 2.5).stroke({ ...line, width: 1.2 });
+  g.moveTo(ix + CAL_ICON - 3, iy).lineTo(ix + CAL_ICON - 3, iy + 2.5).stroke({ ...line, width: 1.2 });
 }
 
 // px of the card that is the clip's real extent (content.extent, beats),
@@ -858,6 +913,11 @@ function drawClipOverlayLocal(
   }
 }
 
+function hidePeriod(node: ClipNode): void {
+  hideText(node.period);
+  if (node.periodBg) node.periodBg.visible = false;
+}
+
 function ensureText(
   node: ClipNode,
   key: "label" | "ratioBadge" | "offsetBadge" | "detail" | "period",
@@ -923,11 +983,10 @@ export function createClipNodeRegistry(
   const badges = providers.badges !== false;
   const timeLock = providers.timeLock === true;
   const getClipPeriod = timeLock ? providers.getClipPeriod : undefined;
-  // Px the title gives to the lock on a clip `width` wide.
-  // The card shows a lock: its text shows (labels need 44 x 24) and the
-  // box fits its height.
+  // The card shows its chip: its text shows (labels need 44 x 24) and the
+  // chip fits its height.
   const lockFits = (view: PlaylistClipPresentation): boolean =>
-    timeLock && view.rect.width >= LOCK_MIN_WIDTH && view.rect.height >= Math.max(24, LOCK_BOX + 2);
+    timeLock && view.rect.width >= LOCK_MIN_WIDTH && view.rect.height >= Math.max(24, CHIP_H + 2);
 
   // Secondary line under the title bar. Created lazily ONCE per node (same
   // factory pattern as the title label), never per frame.
@@ -981,16 +1040,11 @@ export function createClipNodeRegistry(
   function stickyShift(node: ClipNode, view: PlaylistClipPresentation, left: number): number {
     const hidden = left - view.rect.x;
     if (!(hidden > 0)) return 0;
-    const block = Math.max(
-      TITLE_PAD_X + node.labelDisplay.length * TITLE_CHAR_PX,
-      DETAIL_PAD_X + node.detailDisplay.length * DETAIL_CHAR_PX,
-    );
+    const block = textBlockEnd(node.labelDisplay.length, node.detailDisplay.length);
     // The lock row slides with the text: it must fit too.
     const row =
       timeLock && lockFits(view)
-        ? lockRowStart(lockBeside(view.rect.height, view.titleRect.height), block) +
-          LOCK_BOX +
-          (node.periodDisplay ? PERIOD_GAP + node.periodDisplay.length * DETAIL_CHAR_PX : 0)
+        ? lockRowEnd(lockBeside(view.rect.height, view.titleRect.height), block, node.periodDisplay.length)
         : 0;
     const textWidth = Math.max(block, row);
     const room = view.rect.width - textWidth - CLIP_TEXT_RIGHT_PAD;
@@ -1123,17 +1177,42 @@ export function createClipNodeRegistry(
       node.labelDisplay.length,
       detailVisible ? node.detailDisplay.length : 0,
     );
-    const start = lockRowStart(lockBeside(height, view.titleRect.height), block) + LOCK_BOX + PERIOD_GAP;
+    const start =
+      lockRowStart(lockBeside(height, view.titleRect.height), block) +
+      LOCK_BOX +
+      LOCK_DATE_GAP +
+      DATE_PAD +
+      CAL_ICON +
+      CAL_GAP;
     node.periodDisplay = truncateToChars(
       period,
-      Math.floor((width - start - CLIP_TEXT_RIGHT_PAD) / DETAIL_CHAR_PX),
+      Math.floor((width - start - DATE_PAD - CLIP_TEXT_RIGHT_PAD) / DETAIL_CHAR_PX),
     );
   }
 
-  // The lock: bottom-left (or beside the text on a short card), placed by
-  // transform with the title's sticky shift after the labels are laid out;
-  // redrawn only when its look changes.
-  function placeLock(node: ClipNode, view: PlaylistClipPresentation, shift: number): void {
+  // The real width of a Text (measured once per string; the estimate where
+  // there is no canvas to measure with, e.g. headless).
+  function measured(text: Text, estimate: number): number {
+    try {
+      return Math.ceil(text.width);
+    } catch {
+      return Math.ceil(estimate);
+    }
+  }
+
+  // The third row: the lock button, then the dates tag — under the name and
+  // the amount or, on a card too short for it, beside the text block,
+  // centred. Placed by transform with the title's sticky shift; each piece
+  // redrawn only when its look / width / card colour change.
+  function placeLockRow(node: ClipNode, view: PlaylistClipPresentation, shift: number): void {
+    const muted = view.effectivelyMuted;
+    // The card's own fill under the row (the same mix the body paints).
+    const card = mixColor(
+      palette.background ?? COLORS.background,
+      parseHexColor(view.clip.color, 0x777777),
+      (palette.clipTint ?? COLORS.clipTint) * (muted ? CLIP_MUTED_TINT_SCALE : 1),
+    );
+
     let lock = node.lock;
     if (!lock) {
       lock = new Graphics();
@@ -1143,50 +1222,76 @@ export function createClipNodeRegistry(
     const look =
       (view.clip.timeLocked === true ? LOCK_FIXED : LOCK_FREE) |
       (view.lockHovered ? LOCK_HOVER : 0) |
-      (view.effectivelyMuted ? LOCK_MUTED : 0);
-    if (look !== node.lockKey) {
-      drawLockLocal(lock, look, palette);
-      node.lockKey = look;
+      (muted ? LOCK_MUTED : 0);
+    // Numbers, not a string: no allocation per frame.
+    const lockKey = card * 16 + look;
+    if (lockKey !== node.lockKey) {
+      drawLockLocal(lock, look, card, palette);
+      node.lockKey = lockKey;
     }
+
     const height = view.rect.height;
-    // The corner only when the box clears the title + detail lines (the
-    // glyph has its own padding in the box, so it sits on the bottom edge);
-    // else beside the text block. The same conservative advances as the
-    // sticky text (no canvas measuring: deterministic and headless-safe).
     const beside = lockBeside(height, view.titleRect.height);
+    // The row's vertical band: the third row, or the whole card (beside).
+    const rowTop = beside ? 0 : thirdRowTop(view.titleRect.height);
+    const rowY = Math.min(Math.round(rowTop + (height - rowTop - CHIP_H) / 2), height - CHIP_H - 1);
+    let x: number;
     if (!beside) {
-      lock.x = lockRowStart(false, 0) + shift;
-      lock.y = height - LOCK_BOX;
+      x = lockRowStart(false, 0) + shift;
     } else {
+      // The same conservative advances as the sticky text (no canvas
+      // measuring: deterministic and headless-safe).
       const label = node.label !== null && node.label.visible;
       const detail = node.detail !== null && node.detail.visible;
       const block = textBlockEnd(label ? node.labelDisplay.length : 0, detail ? node.detailDisplay.length : 0);
-      lock.x = Math.round(Math.min(lockRowStart(true, block) + shift, view.rect.width - LOCK_BOX - LOCK_INSET - 2));
-      lock.y = Math.round((height - LOCK_BOX) / 2);
+      x = Math.min(lockRowStart(true, block) + shift, view.rect.width - LOCK_BOX - 2);
     }
+    lock.x = Math.round(x);
+    lock.y = rowY;
     lock.visible = true;
 
-    // The dates, right after the lock, on its row.
+    // The dates tag, a few px after the lock: a different thing.
     if (!node.periodDisplay) {
-      hideText(node.period);
+      hidePeriod(node);
       return;
     }
-    const color = view.effectivelyMuted ? palette.textMuted : palette.text;
+    // The tag first, so the text (added after) paints over it.
+    let tag = node.periodBg;
+    if (!tag) {
+      tag = new Graphics();
+      node.periodBg = tag;
+      node.container.addChild(tag);
+    }
+    // The amount line's grey: one family with the text above.
+    const ink = palette.textMuted;
     const text = ensureText(node, "period", () =>
       new Text({
         text: node.periodDisplay,
         style: {
-          fill: color,
+          fill: ink,
           fontFamily: CANVAS_FONT_FAMILY,
           fontSize: PERIOD_FONT_SIZE,
-          fontWeight: "500" as any,
+          fontWeight: "600" as any,
         },
       }),
     );
-    applyText(text, node.periodDisplay, color, PERIOD_FONT_SIZE, "500");
-    text.alpha = view.effectivelyMuted ? 0.6 : 0.72;
-    text.x = lock.x + LOCK_BOX + PERIOD_GAP;
-    text.y = lock.y + Math.round((LOCK_BOX - DETAIL_LINE_HEIGHT) / 2);
+    applyText(text, node.periodDisplay, ink, PERIOD_FONT_SIZE, "600");
+    text.alpha = muted ? 0.7 : 1;
+    if (node.periodMeasured !== node.periodDisplay) {
+      node.periodMeasured = node.periodDisplay;
+      node.periodTextWidth = measured(text, node.periodDisplay.length * DETAIL_CHAR_PX);
+    }
+    const tagWidth = DATE_PAD * 2 + CAL_ICON + CAL_GAP + node.periodTextWidth;
+    const tagKey = (card * 4096 + tagWidth) * 2 + (muted ? 1 : 0);
+    if (tagKey !== node.periodBgKey) {
+      drawDateTagLocal(tag, tagWidth, card, ink, muted, palette);
+      node.periodBgKey = tagKey;
+    }
+    tag.x = lock.x + LOCK_BOX + LOCK_DATE_GAP;
+    tag.y = rowY;
+    tag.visible = true;
+    text.x = tag.x + DATE_PAD + CAL_ICON + CAL_GAP;
+    text.y = tag.y + Math.round((CHIP_H - DETAIL_LINE_HEIGHT) / 2);
   }
 
   function createNode(): ClipNode {
@@ -1221,6 +1326,11 @@ export function createClipNodeRegistry(
       periodWidth: -1,
       periodHeight: -1,
       periodDisplay: "",
+      periodBg: null,
+      periodBgKey: -1,
+      periodMeasured: "",
+      periodTextWidth: 0,
+
       hash: "",
       width: 0,
       height: 0,
@@ -1320,10 +1430,10 @@ export function createClipNodeRegistry(
       applyDetail(node, view, detail, detailVisible, shift);
       if (timeLock) {
         if (lockFits(view)) {
-          placeLock(node, view, shift);
+          placeLockRow(node, view, shift);
         } else {
           if (node.lock) node.lock.visible = false;
-          hideText(node.period);
+          hidePeriod(node);
         }
       }
     }
@@ -1338,7 +1448,7 @@ export function createClipNodeRegistry(
       hideText(node.ratioBadge);
       hideText(node.offsetBadge);
       hideText(node.detail);
-      hideText(node.period);
+      hidePeriod(node);
     }
   }
 
@@ -1351,6 +1461,7 @@ export function createClipNodeRegistry(
         node.body.destroy();
         node.overlay.destroy();
         node.lock?.destroy();
+        node.periodBg?.destroy();
         if (node.label) node.label.removeFromParent();
         if (node.ratioBadge) node.ratioBadge.removeFromParent();
         if (node.offsetBadge) node.offsetBadge.removeFromParent();
@@ -1367,6 +1478,7 @@ export function createClipNodeRegistry(
     for (const node of cache.values()) {
       node.hash = "";
       node.lockKey = -1;
+      node.periodBgKey = -1;
     }
   }
 
@@ -1379,12 +1491,15 @@ export function createClipNodeRegistry(
       node.offsetBadge?.style.update();
       node.detail?.style.update();
       node.period?.style.update();
+      // Re-measured with the fonts available now.
+      node.periodMeasured = "";
     }
   }
 
   function lockRectOf(clipId: string, out: PlaylistRect): PlaylistRect | null {
     const node = cache.get(clipId);
     if (!node || !node.container.visible || !node.lock || !node.lock.visible) return null;
+    // The lock button alone (the dates tag is information, not a control).
     out.x = node.container.x + node.lock.x;
     out.y = node.container.y + node.lock.y;
     out.width = LOCK_BOX;
