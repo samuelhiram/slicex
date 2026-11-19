@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FinancialDocument, FinancialItem } from "@slicex/core";
 import { createPlaylistCore } from "@slicex/canvas";
-import { FinancialBridge } from "../src/finance/financial-bridge";
+import { describeItem, FinancialBridge } from "../src/finance/financial-bridge";
 import {
   createDemoFinancialDocument,
   expandFinancialEvents,
@@ -868,5 +868,29 @@ describe("FinancialBridge — Ola 1 renderer providers", () => {
     expect(later).toMatch(/^Al \d{1,2} [a-z]{3}: debes \$/);
     core.setPlayPosition(200.7);
     expect(bridge.getClipDetail("fin-nu")).toBe(later);
+  });
+});
+
+describe("a budget with no fixed day survives the timeline", () => {
+  it("stretching its end keeps 'sin día fijo' (and the clip says it is a budget)", () => {
+    const doc: FinancialDocument = {
+      ...makeDoc(),
+      items: [
+        {
+          id: "out",
+          kind: "expense",
+          name: "Salidas",
+          amount: 1500,
+          recurrence: { frequency: "weekly", startDate: START, endDate: "2027-01-30", flexibleDay: true },
+        },
+      ],
+    };
+    const { core, bridge, clip } = setup(doc);
+    const before = clip("out");
+    core.resizeClip("out", "right", before.start + before.duration + 28);
+    const item = bridge.getItem("out")!;
+    expect(item.recurrence.flexibleDay).toBe(true);
+    expect(item.recurrence.endDate! > "2027-01-30").toBe(true);
+    expect(describeItem(item, bridge.getDocument())).toBe("−$1,500 /semana · presupuesto");
   });
 });

@@ -119,6 +119,28 @@ publicado), con `schemaResolver` nativo (Standard Schema; Zod 3.25 lo implementa
   encabezado en `finance-components.spec.ts`. `vitest.setup.ts` simula `matchMedia` (jsdom no lo
   trae y el provider de Mantine lo lee).
 
+## 5. Controles sin pickers nativos (2026-11-18)
+
+Decisión: **ningún control nativo con UI del sistema** (el desplegable de `<select>`, el reloj de
+`type="time"`, las flechas de `type="number"`, el checkbox blanco en tema oscuro). Se mantiene
+"UI propia sobre Mantine Form", con primitivas **sin estilo** debajo, al modo de shadcn/ui:
+
+- **`Select`** (`apps/web/src/ui/select.tsx`) sobre **Radix Select** (`@radix-ui/react-select`
+  2.4.1, fijado): listbox accesible, teclado completo, escribir para saltar, posicionamiento que
+  evita bordes, en un portal sobre los diálogos. Vestido con los tokens del estándar v2
+  (`.fin-select*` en `globals.css`): el disparador es un campo más; la lista, una tarjeta con la
+  opción elegida marcada (✓) y ayuda opcional en gris por opción. Escape cierra solo la lista (es
+  una capa de la pila de Escape), nunca el diálogo. `""` es un valor válido ("Todas"). Sustituye
+  los 14 `<select>` (Tipo, tarjeta, forma de pago, día del mes, unidad de "Cada N", Pagado con,
+  filtros del panel de movimientos, rango visible, imán, comparar futuros, Rec, onboarding).
+- **Hora** ("Registrar"): un `Select` de horarios cada 15 min con la hora exacta de ahora y "Sin
+  hora" (escribir "14:3" salta a 14:30).
+- **Checkbox** dibujado con los tokens (marca animada en `--accent`); **radios** igual; campos
+  numéricos sin flechas del sistema.
+- Pruebas: `tests/select-helpers.ts` (`chooseOption`, `readOptions`, `shownText`) abre el select
+  como una persona (teclado) y elige por `data-value`; `vitest.setup.ts` simula pointer capture y
+  `scrollIntoView` (jsdom no los trae). `tests/ui-select.spec.tsx` cubre el componente.
+
 ### Pendiente
 - `FinancialObjectSchema` / `RecurrenceRuleSchema` de `contracts` describen el modelo dormido del
   API y no el real: retirarlos cuando se conecte el servidor con `FinancialItemSchema`.

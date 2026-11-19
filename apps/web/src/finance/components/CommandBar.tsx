@@ -24,6 +24,7 @@ import {
   suggestMexicanYear,
   type FinancialDocument,
   type FinancialItem,
+  type Movement,
   type YearSuggestion,
 } from "@slicex/core";
 import type { FinancialBridgeApi, FinancialPreview, PreviewEffect } from "../bridge-api";
@@ -36,6 +37,8 @@ import {
   type ParsedCommand,
 } from "../command";
 import { formatDateShort, formatMoneyWhole } from "../format";
+import type { Futures } from "../futures";
+import { describeEffect, movementHeadline } from "../movements-ui";
 import { KIND_COLORS } from "../labels";
 import { useAnnounce } from "../../ui/announcer";
 import { useOverlay } from "../../ui/use-overlay";
@@ -45,6 +48,12 @@ import { useFinancialRevision } from "./FinancialUi";
 
 export interface CommandBarProps {
   bridge: FinancialBridgeApi;
+  /**
+   * The plan's futures: with them, what already happened ("gasté 500 en
+   * tacos ayer") is RECORDED in the journal ("Buscar" → "Lo que pasó")
+   * instead of only moving today's cash.
+   */
+  futures?: Futures | null;
   today: string;
   onClose: () => void;
   /** Where the focus goes on close when the element that opened the bar is gone. */
@@ -68,6 +77,11 @@ export interface CommandOption {
   apply: (bridge: FinancialBridgeApi, effect: PreviewEffect | null) => string | null;
   /** Closes the bar after applying (default true). */
   closes?: boolean;
+  /**
+   * Something that already happened: with the plan's futures the bar
+   * records it as a movement (same effect as `apply`, plus the record).
+   */
+  record?: Omit<Movement, "id">;
 }
 
 export interface CommandPlan {
@@ -110,6 +124,11 @@ function addOption(id: string, label: string, parsed: ParsedCommand, item: Finan
       return effect ? `Agregado: ${what}. ${describePreviewEffect(effect)}` : `Agregado: ${what}`;
     },
   };
+}
+
+/** The movement a one-off that already happened becomes (see CommandOption.record). */
+function pastRecord(kind: "expense" | "income", amount: number, item: FinancialItem): Omit<Movement, "id"> {
+  return { kind, amount: roundCents(Math.abs(amount)), date: item.recurrence.startDate, concept: item.name };
 }
 
 function cashOption(id: string, label: string, doc: FinancialDocument, cash: number, why: string): CommandOption {
@@ -216,8 +235,14 @@ export function planCommand(intent: CommandIntent, doc: FinancialDocument): Comm
     const asExpense: FinancialItem = { ...item, kind: "expense" };
     const options: CommandOption[] = past
       ? [
-          cashOption("past-expense", "Gasto: restarlo de mi liquidez", doc, doc.initialCash - amount, "Descontado de tu liquidez"),
-          cashOption("past-income", "Ingreso: sumarlo a mi liquidez", doc, doc.initialCash + amount, "Sumado a tu liquidez"),
+          {
+            ...cashOption("past-expense", "Gasto: restarlo de mi liquidez", doc, doc.initialCash - amount, "Descontado de tu liquidez"),
+            record: pastRecord("expense", amount, item),
+          },
+          {
+            ...cashOption("past-income", "Ingreso: sumarlo a mi liquidez", doc, doc.initialCash + amount, "Sumado a tu liquidez"),
+            record: pastRecord("income", amount, item),
+          },
           cashOption("kind-balance", "Es mi saldo de hoy", doc, amount, "Liquidez de hoy actualizada"),
         ]
       : [
@@ -252,19 +277,25 @@ export function planCommand(intent: CommandIntent, doc: FinancialDocument): Comm
             bridge.replaceItem({ ...current, balance: roundCents(current.balance + item.amount) });
             return `Sumado al saldo de ${card.name}: ${formatMoneyWhole(card.balance)} → ${formatMoneyWhole(next)}`;
           },
+          record: { ...pastRecord("expense", item.amount, item), cardId: card.id },
         };
       } else {
         first = addOption("past-record", "Anotarlo igual", parsed, item);
       }
     } else {
       const sign = item.kind === "income" ? 1 : -1;
-      first = cashOption(
-        "past-discount",
-        sign > 0 ? "Sumarlo a mi liquidez" : "Descontarlo de mi liquidez",
-        doc,
-        doc.initialCash + sign * amount,
-        sign > 0 ? "Sumado a tu liquidez" : "Descontado de tu liquidez",
-      );
+      first = {
+        ...cashOption(
+          "past-discount",
+          sign > 0 ? "Sumarlo a mi liquidez" : "Descontarlo de mi liquidez",
+          doc,
+          doc.initialCash + sign * amount,
+          sign > 0 ? "Sumado a tu liquidez" : "Descontado de tu liquidez",
+        ),
+        ...(item.kind === "income" || item.kind === "expense"
+          ? { record: pastRecord(item.kind, amount, item) }
+          : {}),
+      };
     }
     const options = first.id === "past-record" ? [first] : [first, addOption("past-record", "Anotarlo igual", parsed, item)];
     return {
@@ -302,7 +333,7 @@ function suggestionOption(suggestion: YearSuggestion): CommandOption {
 
 const EXAMPLES = "renta 8000 el 1 · sueldo 9000 quincenal · tengo 11400 en el banco · pagué la tarjeta 3000";
 
-export function CommandBar({ bridge, today, onClose, fallbackFocus }: CommandBarProps) {
+export function CommandBar({ bridge, futures = null, today, onClose, fallbackFocus }: CommandBarProps) {
   const revision = useFinancialRevision(bridge);
   const announce = useAnnounce();
   const [text, setText] = React.useState("");
@@ -354,6 +385,22 @@ export function CommandBar({ bridge, today, onClose, fallbackFocus }: CommandBar
   const effect = useLivePreviewEffect(bridge, preview, { delayMs: 0 });
 
   const commit = (option: CommandOption) => {
+    if (option.record && futures && option.record.amount > 0) {
+      // Already happened: into the journal, booked on every future.
+      bridge.setPreview(null);
+      const movement: Movement = { ...option.record, id: futures.newMovementId() };
+      const docBefore = bridge.getDocument();
+      const booked = futures.commitMovement(null, movement);
+      announce({
+        message: `Registrado: ${movementHeadline(movement)}. ${describeEffect(docBefore, booked)}`,
+        undo: () => {
+          const current = futures.getMovement(movement.id);
+          if (current) futures.commitMovement(current, null);
+        },
+      });
+      onClose();
+      return;
+    }
     const message = option.apply(bridge, effect);
     if (message) announce({ message, undo: () => bridge.core.undo() });
     if (option.closes === false) {

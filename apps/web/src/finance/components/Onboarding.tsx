@@ -42,6 +42,7 @@ import {
   LAST_DAY_OF_MONTH,
 } from "./form-kit";
 import { SchedulePicker } from "./SchedulePicker";
+import { Select } from "../../ui/select";
 
 export function WelcomeBanner({
   onStart,
@@ -592,17 +593,15 @@ export function OnboardingDialog({
     const dayError = form.errors[`debts.${index}.day`];
     return (
       <div key={index} className="fin-onboarding__debt">
-        <select
+        <Select
           aria-label={`Tipo de la deuda ${index + 1}`}
           value={row.kind}
-          onChange={(event) => form.setFieldValue(`debts.${index}.kind`, event.target.value as DebtKind)}
-        >
-          {(Object.keys(DEBT_KIND_LABELS) as DebtKind[]).map((kind) => (
-            <option key={kind} value={kind}>
-              {DEBT_KIND_LABELS[kind]}
-            </option>
-          ))}
-        </select>
+          onValueChange={(next) => form.setFieldValue(`debts.${index}.kind`, next as DebtKind)}
+          options={(Object.keys(DEBT_KIND_LABELS) as DebtKind[]).map((kind) => ({
+            value: kind,
+            label: DEBT_KIND_LABELS[kind],
+          }))}
+        />
         <input
           key={name.key}
           {...name.input}

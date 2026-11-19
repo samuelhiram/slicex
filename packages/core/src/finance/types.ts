@@ -50,6 +50,16 @@ export interface FinancialRecurrence {
    * (resizing an edge) leaves the anchor alone so paydays don't move.
    */
   anchorDate?: ISODate;
+  /**
+   * A budget with no fixed day ("$1,500 de salidas cada semana; no sé qué
+   * día"): the schedule's dates are the START of each period (from the
+   * window start: the plan's today when it was set), so the amount counts
+   * as committed from the first day of its week / quincena / month — the
+   * prudent reading for cash. The engine expands it like any recurrence;
+   * the flag says how the dates were chosen (UI wording, no date asked).
+   * Meaningless for "once".
+   */
+  flexibleDay?: boolean;
 }
 
 export type FinancialItemKind =
@@ -68,6 +78,13 @@ export interface FinancialItemBase {
   enabled?: boolean;
   /** Optional UI colour override (hex). The engine ignores it. */
   color?: string;
+  /**
+   * UI: whether dragging it on the timeline may change its dates. Absent:
+   * the default (fixed when it has a start AND an end; free otherwise —
+   * apps/web mapping.ts). Stored only when the person chose otherwise. The
+   * engine ignores it; a form can always change the dates.
+   */
+  lockDates?: boolean;
   recurrence: FinancialRecurrence;
 }
 

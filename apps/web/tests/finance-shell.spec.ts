@@ -6,6 +6,7 @@
 // react-4 (shell side), react-8 and react-9, plus the Ola 1 wiring: the
 // four render-loop providers, the money lane metrics and the finance-native
 // tool row.
+import { chooseOption, readOptions, shownText } from "./select-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 import { act } from "react";
@@ -252,6 +253,7 @@ vi.mock("../src/finance/financial-bridge", async () => {
 });
 
 import { PlaylistShell } from "../src/components/PlaylistShell";
+import { RECORDS_OPEN_KEY } from "../src/finance/records-panel-state";
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -278,8 +280,10 @@ function unmountShell() {
 }
 
 beforeEach(() => {
-  // The shell loads / autosaves the plan in localStorage: start clean.
+  // The shell loads / autosaves the plan in localStorage, and keeps an open
+  // form's draft in sessionStorage (it reopens after a reload): start clean.
   localStorage.clear();
+  sessionStorage.clear();
   hoisted.renderers.length = 0;
   hoisted.rendererCallbacks.length = 0;
   hoisted.coreOptions.length = 0;
@@ -481,6 +485,94 @@ describe("react-8: the shell behind the editor is inert; focus comes back", () =
   });
 });
 
+describe("the records panel: beside the timeline, open by default", () => {
+  const panel = () => document.getElementById("fin-records");
+  const trigger = () => document.querySelector<HTMLButtonElement>(".fin-search-trigger")!;
+
+  it("opens on 'Gastos del mes'; the header button folds it and the choice is remembered", async () => {
+    await mountShell();
+    expect(panel()).not.toBeNull();
+    // A column of the workspace, not a layer over the stage.
+    expect(panel()!.parentElement!.classList.contains("playlist-shell__workspace")).toBe(true);
+    expect(stage().contains(panel()!)).toBe(false);
+    expect(panel()!.querySelector("h2")!.textContent).toBe("Gastos del mes");
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    expect(trigger().getAttribute("aria-controls")).toBe("fin-records");
+    // Open: "Registrar" lives in the panel, not in the header.
+    expect(document.querySelector(".fin-record")).toBeNull();
+    expect(panel()!.querySelector(".fin-records__record")!.textContent).toBe("Registrar");
+    click(trigger());
+    expect(panel()).toBeNull();
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+    expect(localStorage.getItem(RECORDS_OPEN_KEY)).toBe("folded");
+    // Folded: the header's "Registrar gasto" with this month's spending.
+    const record = document.querySelector<HTMLButtonElement>(".fin-record")!;
+    expect(record.textContent).toBe("Registrar gasto, este mes $0");
+    click(record);
+    expect(document.querySelector(".fin-capture")).not.toBeNull();
+    pressEscape();
+    unmountShell();
+    await mountShell();
+    expect(panel()).toBeNull();
+    click(trigger());
+    expect(panel()).not.toBeNull();
+  });
+
+  it("inert behind a form, like the stage; F opens it and focuses its search", async () => {
+    await mountShell();
+    pickNew("income");
+    expect(panel()!.hasAttribute("inert")).toBe(true);
+    pressEscape();
+    expect(panel()!.hasAttribute("inert")).toBe(false);
+    click(panel()!.querySelector(".fin-records__fold"));
+    expect(panel()).toBeNull();
+    const host = document.querySelector<HTMLElement>(".playlist-shell__surface")!;
+    act(() => host.focus());
+    act(() => {
+      host.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
+    expect(panel()).not.toBeNull();
+    expect(document.activeElement).toBe(panel()!.querySelector(".fin-records__query"));
+  });
+});
+
+describe("the lock on each object: fixed or free dates", () => {
+  it("the controller asks the renderer where it is, names it and announces a click (with Deshacer)", async () => {
+    const { bridge } = await mountShell();
+    const options = hoisted.interactionOptions.at(-1)!;
+    // No global "rows only" any more: each object's lock decides.
+    expect(options.clipMoveAxis).toBeUndefined();
+    const lock = options.clipTimeLock!;
+    expect(lock.rectOf).toBeTypeOf("function");
+    expect(lock.hints![0]).toContain("Fechas libres");
+    expect(lock.hints![1]).toContain("Fechas fijas");
+    const item = bridge.getDocument().items[0]!;
+    act(() => lock.onToggle!(item.id, true));
+    expect(document.body.textContent).toContain(`${item.name}: fechas fijas.`);
+    expect(buttonByText("Deshacer")).not.toBeNull();
+    act(() => lock.onToggle!(item.id, false));
+    expect(document.body.textContent).toContain(`${item.name}: fechas libres.`);
+  });
+
+  it("the right button is the silencer: no menu, what it crosses flips (announced)", async () => {
+    const { bridge } = await mountShell();
+    const options = hoisted.interactionOptions.at(-1)!;
+    expect(options.rightButton).toBe("mute");
+    const [a, b] = bridge.getDocument().items;
+    act(() =>
+      options.onEdit!({ kind: "mute", clipIds: [a!.id, b!.id], labels: [a!.name, b!.name], muted: [true, true] }),
+    );
+    expect(document.body.textContent).toContain(`Excluidos de tus cifras 2: ${a!.name} y ${b!.name}`);
+    act(() =>
+      options.onEdit!({ kind: "mute", clipIds: [a!.id, b!.id], labels: [a!.name, b!.name], muted: [false, true] }),
+    );
+    expect(document.body.textContent).toContain(`Excluido de tus cifras: ${b!.name} · Vuelve a contar: ${a!.name}`);
+  });
+});
+
 describe("react-9: nothing covers the playhead readout", () => {
   it("sits in the money lane's header cell; the rails open below the lane", async () => {
     loadGlobalsCss();
@@ -627,29 +719,22 @@ describe("finance-native toolbar", () => {
       ".playlist-shell__snap-select",
     )!;
     expect(document.querySelector(".playlist-shell__snap-label")!.textContent).toBe("Imán");
-    expect([...select.options].map((o) => [o.textContent, o.value])).toEqual([
+    expect(readOptions(select).map((o) => [o.label, o.value])).toEqual([
       ["Cada día", "beat"],
       ["Cada 7 días", "bar"],
       ["Quincenas (1 y 16)", "axis"],
       ["Sin imán", "none"],
     ]);
     expect(select.value).toBe("beat");
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLSelectElement.prototype,
-      "value",
-    )!.set!;
     for (const mode of ["bar", "axis", "none", "beat"] as const) {
-      act(() => {
-        setter.call(select, mode);
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-      });
+      chooseOption(select, mode);
       expect(bridge.core.getState().snap.mode).toBe(mode);
       expect(select.value).toBe(mode);
     }
     // A mode the toolbar does not offer is shown as "Otro", not misreported.
     act(() => bridge.core.setSnapMode("half-beat"));
     expect(select.value).toBe("half-beat");
-    expect(select.selectedOptions[0]?.textContent).toBe("Otro");
+    expect(shownText(select)).toBe("Otro");
   });
 
   it("a selection chip only for a multi-selection (no permanent counter)", async () => {

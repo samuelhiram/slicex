@@ -428,6 +428,32 @@ describe("under the date: the cash and that day's movements", () => {
     expect(bridge.getDayDetail(5)!.split("\n")[0]).toBe("Caja $3,500");
     expect(bridge.getDayDetail(-5)).toBeNull();
   });
+
+  it("what comes in first, then what goes out — whatever the plan's order", () => {
+    const day = addDays(TODAY, 5);
+    const doc: FinancialDocument = {
+      id: "d",
+      name: "d",
+      startDate: TODAY,
+      initialCash: 1000,
+      minimumCashReserve: 0,
+      horizonMonths: 12,
+      items: [
+        { id: "rent", kind: "expense", name: "Renta", amount: 7500, recurrence: { frequency: "monthly", startDate: day } },
+        { id: "car", kind: "loan", name: "Auto", paymentAmount: 2500, recurrence: { frequency: "monthly", startDate: day, endDate: addDays(day, 200) } },
+        { id: "sal", kind: "income", name: "Sueldo", amount: 9000, recurrence: { frequency: "monthly", startDate: day } },
+        { id: "extra", kind: "income", name: "Venta", amount: 500, recurrence: { frequency: "once", startDate: day, endDate: day } },
+      ],
+    };
+    const { bridge } = setup(doc);
+    // Caja, then what came in, then what went out, then the debt (the loan).
+    const lines = bridge.getDayDetail(5)!.split("\n");
+    expect(lines[0]).toMatch(/^Caja /);
+    expect(lines.slice(1, 5).map((line) => line[0])).toEqual(["+", "+", "−", "−"]);
+    expect(lines.slice(1, 3).sort()).toEqual(["+$500 Venta", "+$9,000 Sueldo"]);
+    expect(lines[5]).toMatch(/^Deuda /);
+    expect(lines).toHaveLength(6);
+  });
 });
 
 describe("an end 'hasta 1 sep' includes the payment of the 1st", () => {

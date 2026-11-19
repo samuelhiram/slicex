@@ -17,12 +17,17 @@
 // - UX-20: each future's figures (horizon, lowest point, debt) are cached
 //   per document object: computed once per revision, never per frame.
 import {
+  applyMovementEffect,
+  isEmptyMovementEffect,
+  movementChangeEffect,
   projectFinancialDocument,
   summarizeProjection,
   type FinancialDocument,
   type FinancialProjection,
   type ISODate,
   type LedgerEntry,
+  type Movement,
+  type MovementEffect,
   type ProjectionSummary,
 } from "@slicex/core";
 import type { FinancialBridgeApi, FinancialSession } from "./bridge-api";
@@ -71,12 +76,16 @@ export class Futures {
   private activeId: string;
   private compareId: string | null;
   private ledger: LedgerEntry[];
+  // What really happened, recorded by hand (oldest first). ONE journal for
+  // every future: reality does not depend on the version of the year shown.
+  private movements: Movement[];
   private version = 0;
   private counter = 0;
   private readonly listeners = new Set<() => void>();
 
   constructor(bridge: FinancialBridgeApi, saved: SavedPlan | null = null) {
     this.bridge = bridge;
+    this.movements = saved?.movements ? [...saved.movements] : [];
     if (saved) {
       this.branches = saved.branches.map((branch) => ({
         ...branch,
@@ -446,6 +455,65 @@ export class Futures {
     this.changed();
   }
 
+  // --- real movements ("lo que sí pasó") -------------------------------------
+
+  getMovements(): readonly Movement[] {
+    return this.movements;
+  }
+
+  getMovement(id: string): Movement | null {
+    return this.movements.find((movement) => movement.id === id) ?? null;
+  }
+
+  /**
+   * Records a change of the journal — a new movement (`before` null), an
+   * edit (both) or a deletion (`after` null) — and books its effect on
+   * today's cash / card debt of EVERY future: the active one through the
+   * bridge (outside the plan's undo history, see applyReality), the parked
+   * ones on their documents (their undo histories catch up when they come
+   * back). Returns the effect booked (empty when nothing moved).
+   */
+  commitMovement(before: Movement | null, after: Movement | null): MovementEffect {
+    if (before === null && after === null) return movementChangeEffect(null, null);
+    const effect = movementChangeEffect(before, after);
+    if (!isEmptyMovementEffect(effect)) {
+      this.bridge.applyReality(effect);
+      this.branches = this.branches.map((branch) =>
+        branch.id === this.activeId ? branch : { ...branch, doc: applyMovementEffect(branch.doc, effect) },
+      );
+      this.applyComparison();
+    }
+    if (before === null) {
+      this.movements = [...this.movements, after!];
+    } else if (after === null) {
+      this.movements = this.movements.filter((movement) => movement.id !== before.id);
+    } else {
+      // An edit keeps its place in the journal (the order it was recorded).
+      let found = false;
+      this.movements = this.movements.map((movement) => {
+        if (movement.id !== before.id) return movement;
+        found = true;
+        return after;
+      });
+      if (!found) this.movements = [...this.movements, after];
+    }
+    this.changed();
+    return effect;
+  }
+
+  /**
+   * A fresh movement id ("mov-<base36 time>-<n>"): unique in the journal
+   * even when a deleted movement is restored by "Deshacer".
+   */
+  newMovementId(now: number = Date.now()): string {
+    const base = `mov-${Math.max(0, Math.floor(now)).toString(36)}`;
+    const taken = new Set(this.movements.map((movement) => movement.id));
+    for (let n = 1; ; n += 1) {
+      const id = `${base}-${n}`;
+      if (!taken.has(id)) return id;
+    }
+  }
+
   /**
    * Replace every parked future's document (e.g. after rolling the whole
    * plan forward to a new day). The active one goes through the bridge.
@@ -473,6 +541,7 @@ export class Futures {
         ...(branch.trialOf !== undefined ? { trialOf: branch.trialOf } : {}),
       })),
       ledger: this.ledger,
+      movements: this.movements,
     };
   }
 

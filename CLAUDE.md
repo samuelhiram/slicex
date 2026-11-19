@@ -32,7 +32,7 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 | Estado | Zustand 4 (store actual `editorStore.ts` está dormido — modelo financial, no playlist) |
 | Persistencia | Prisma 7 + `@prisma/adapter-pg` sobre Cloudflare Hyperdrive (Postgres) |
 | Validación | Zod en `@slicex/contracts` |
-| Formularios | Mantine Form 9.7.3 (solo estado/validación, sin componentes de Mantine) + esquemas Zod de `@slicex/contracts` (`finance.ts`); ver [docs/forms-audit.md](docs/forms-audit.md) |
+| Formularios | Mantine Form 9.7.3 (solo estado/validación, sin componentes de Mantine) + esquemas Zod de `@slicex/contracts` (`finance.ts`); selectores con `Select` (`apps/web/src/ui/select.tsx`, Radix Select 2.4.1 con los tokens): nunca `<select>` ni pickers nativos; ver [docs/forms-audit.md](docs/forms-audit.md) §5 |
 | Observabilidad | `@sentry/cloudflare` (Worker) + `@sentry/react` (browser) + JSON `console` → Workers Logpush |
 | Tests | Vitest (1103 unit) + Playwright (1 spec: `apps/web/tests/*.pw.ts`) |
 | Deploy | `wrangler deploy` o Workers Builds (push a `master` → build+deploy) |

@@ -7,6 +7,9 @@ export interface ClipDragOriginal {
   trackIndex: number;
   // Lane inside its track at drag start (stacked lanes, lanes.ts).
   lane: number;
+  // Its time span is fixed (PlaylistClip.timeLocked): the drag only moves
+  // the set between rows.
+  timeLocked?: boolean;
 }
 
 // Per destination track, filled the first time the drag hovers it: whether
@@ -154,6 +157,14 @@ export type ActiveGesture =
       lastPoint: PlaylistPoint;
       muted: boolean;
       touchedClipIds: Set<string>;
+      // The right-button silencer: a clip flips (muted ⇄ counted) each time
+      // the pointer ENTERS it, so passing over it again flips it back;
+      // `touchedClipIds` is then what is under the pointer. Otherwise every
+      // crossed clip takes `muted`, once per sweep.
+      toggle?: boolean;
+      // Every clip the sweep touched, with its state BEFORE it (the report
+      // lists those that differ on release).
+      changed: Map<string, boolean>;
     }
   | {
       kind: "track-resize";

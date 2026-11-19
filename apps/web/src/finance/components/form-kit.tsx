@@ -6,6 +6,7 @@ import type { UseFormReturnType } from "@mantine/form";
 import { MoneySchema } from "@slicex/contracts";
 import { z } from "zod";
 import { parseNumberInput } from "../format";
+import { Select, type SelectOption } from "../../ui/select";
 
 /**
  * Zod schema of an amount AS TYPED ("$12,000", "1 234.5"): the text is read
@@ -126,6 +127,16 @@ const DAY_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
   { value: LAST_DAY_OF_MONTH, label: "Último día" },
 ];
 
+const DAY_SELECT_OPTIONS: readonly SelectOption[] = DAY_OPTIONS.map((option) => ({
+  value: String(option.value),
+  label: option.label,
+}));
+
+/** With a "not chosen" first option ("—", "Día"…). */
+function DAY_SELECT_OPTIONS_EMPTY(emptyLabel: string): readonly SelectOption[] {
+  return [{ value: "", label: emptyLabel }, ...DAY_SELECT_OPTIONS];
+}
+
 /**
  * THE day-of-month control (UX-34): the same "[1–30 | Último día]" select in
  * the editor's monthly "Día de pago", the card's "Día de corte / de pago"
@@ -151,25 +162,17 @@ export function DaySelect({
   "aria-describedby"?: string;
 }) {
   const known = value !== undefined && Number.isFinite(value) && value >= 1 && value <= LAST_DAY_OF_MONTH;
+  const options = allowEmpty ? DAY_SELECT_OPTIONS_EMPTY(emptyLabel) : DAY_SELECT_OPTIONS;
   return (
-    <select
+    <Select
       id={id}
       className="fin-day-select"
       value={known ? String(Math.round(value)) : ""}
-      onChange={(event) => onChange(event.target.value === "" ? undefined : Number(event.target.value))}
+      onValueChange={(next) => onChange(next === "" ? undefined : Number(next))}
+      options={options}
+      placeholder={emptyLabel}
       {...aria}
-    >
-      {allowEmpty || !known ? (
-        <option value="" disabled={!allowEmpty}>
-          {emptyLabel}
-        </option>
-      ) : null}
-      {DAY_OPTIONS.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
+    />
   );
 }
 

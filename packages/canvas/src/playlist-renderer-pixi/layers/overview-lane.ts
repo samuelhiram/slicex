@@ -48,6 +48,12 @@ const PILL_HEIGHT = 16;
 const TITLE_SIZE = 13;
 const TITLE_CHAR_PX = 7.8;
 const PIN_RADIUS = 3.5;
+// Annotation pills live in the lane's top band (never over the curve where
+// it matters), joined to their pin by a dotted leader.
+const PILL_TOP_PAD = 3;
+const PILL_ROW_GAP = 3;
+const LEADER_DOT_PX = 2;
+const LEADER_GAP_PX = 3;
 const DOT_RADIUS = 4.5;
 const GUIDE_DOT_PX = 2;
 
@@ -559,17 +565,34 @@ export function createOverviewLaneLayer(
         lane.x + 2,
         Math.max(lane.x + 2, right - width - 2),
       );
-      const above =
-        y - PILL_HEIGHT - 6 >= lane.y + 1 ? y - PILL_HEIGHT - 6 : y + 6;
-      const below =
-        y + 6 + PILL_HEIGHT <= lane.y + lane.height ? y + 6 : above;
-      const labelY = isFree(labelX, above, width, PILL_HEIGHT)
-        ? above
-        : isFree(labelX, below, width, PILL_HEIGHT)
-          ? below
-          : Number.NaN;
+      // The top band first (a second row when two pills meet), as long as
+      // it stays clear of its own pin; else next to the pin as before.
+      const row0 = lane.y + PILL_TOP_PAD;
+      const row1 = row0 + PILL_HEIGHT + PILL_ROW_GAP;
+      const clearOfPin = (top: number): boolean => top + PILL_HEIGHT + 4 <= y - PIN_RADIUS;
+      let labelY = Number.NaN;
+      if (clearOfPin(row0) && isFree(labelX, row0, width, PILL_HEIGHT)) labelY = row0;
+      else if (clearOfPin(row1) && isFree(labelX, row1, width, PILL_HEIGHT)) labelY = row1;
+      else {
+        const above =
+          y - PILL_HEIGHT - 6 >= lane.y + 1 ? y - PILL_HEIGHT - 6 : y + 6;
+        const below =
+          y + 6 + PILL_HEIGHT <= lane.y + lane.height ? y + 6 : above;
+        if (isFree(labelX, above, width, PILL_HEIGHT)) labelY = above;
+        else if (isFree(labelX, below, width, PILL_HEIGHT)) labelY = below;
+      }
       if (Number.isNaN(labelY)) continue;
       placedLabels.push(labelX, labelY, width, PILL_HEIGHT);
+      // Dotted leader from the pill down to its pin (rebuild-time only).
+      const leaderTop = labelY + PILL_HEIGHT + 1;
+      const leaderBottom = y - PIN_RADIUS - 2;
+      if (leaderBottom - leaderTop >= LEADER_DOT_PX + LEADER_GAP_PX) {
+        const lx = Math.round(x) + 0.5;
+        for (let ly = leaderTop; ly < leaderBottom; ly += LEADER_DOT_PX + LEADER_GAP_PX) {
+          g.moveTo(lx, ly).lineTo(lx, Math.min(ly + LEADER_DOT_PX, leaderBottom));
+        }
+        g.stroke({ color, width: 1, alpha: 0.8 });
+      }
       g.roundRect(labelX, labelY, width, PILL_HEIGHT, PILL_HEIGHT / 2)
         .fill({ color: COLORS.panelStrong })
         .stroke({ color, width: 1, alpha: 0.55 });

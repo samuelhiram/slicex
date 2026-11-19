@@ -393,6 +393,20 @@ describe("overview lane — cached layer", () => {
     expect(layer.stats.frameRebuilds).toBe(1);
   });
 
+  it("annotation pills live in the lane's top band, above their pin (a dotted leader joins them)", () => {
+    const { parts, layer } = makeLaneLayer();
+    const core = laneCore();
+    const data = overviewData(stepSeries(40, (i) => (i < 10 ? 800 - i * 100 : 400)));
+    layer.sync(core.getPresentation(), data);
+    const lane = core.getPresentation().layout.overviewRect;
+    const valley = (parts.curveText.children as unknown as Array<{ text: string; visible: boolean; y: number }>).find(
+      (child) => child.visible && child.text === "valley",
+    );
+    expect(valley).toBeDefined();
+    // Top row: lane top + pad, the text 2 px inside its pill.
+    expect(valley!.y).toBeLessThanOrEqual(lane.y + 8);
+  });
+
   it("rebuilds only on data ref / scrollX / pxPerBeat / width — never on hover or playhead", () => {
     const { layer, parts } = makeLaneLayer();
     const core = laneCore();

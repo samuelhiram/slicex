@@ -113,14 +113,14 @@ describe("UX-40 — away from today a clip says which day it describes", () => {
   });
 });
 
-describe("UX-41 — a one-day event marks its real day", () => {
-  it("point items carry extent 1 (the rest of the block is a tag)", () => {
+describe("UX-41 — a one-day event is one card in its colour", () => {
+  it("point items carry no one-day extent: the whole tag is the card, like its siblings", () => {
     const doc = createDemoFinancialDocument(TODAY);
     const contents = buildClipContents(doc, projectFinancialDocument(doc), new Map());
     const gasto = contents.get("fin-gasto");
     expect(gasto?.kind).toBe("events");
     if (gasto?.kind !== "events") throw new Error("events");
-    expect(gasto.extent).toBe(1);
+    expect(gasto.extent).toBeUndefined();
     expect(contents.get("fin-sueldo")?.kind === "events" && (contents.get("fin-sueldo") as { extent?: number }).extent).toBeFalsy();
     expect(contents.get("fin-laptop-msi")?.accent).toBe("dashed");
   });
@@ -338,6 +338,7 @@ function liveText(): string {
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   // No onboarding banner / hints in the way.
   localStorage.setItem("slicex.navHint", "1");
   hoisted.cores.length = 0;
@@ -466,9 +467,10 @@ describe("UX-04 — keyboard only: open Sueldo, change it, save; delete Gasto", 
 describe("UX-16 / UX-57 / UX-60 — tools, their mode and the single-key shortcuts", () => {
   it("the toolbar is one tab stop; arrows move between the tools", async () => {
     await mountShell();
-    const tools = [...document.querySelectorAll<HTMLButtonElement>(".playlist-shell__tool")];
+    const toolbar = document.querySelector('[role="toolbar"]')!;
+    const tools = [...toolbar.querySelectorAll<HTMLButtonElement>(".playlist-shell__tool")];
+    expect(tools.length).toBeGreaterThan(1);
     expect(tools.filter((tool) => tool.tabIndex === 0)).toHaveLength(1);
-    expect(document.querySelector('[role="toolbar"]')!.contains(tools[0]!)).toBe(true);
     act(() => tools[0]!.focus());
     press(tools[0]!, "ArrowRight");
     expect(document.activeElement).toBe(tools[1]);

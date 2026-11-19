@@ -51,4 +51,33 @@ export { solveDebtPayment } from "./goalseek";
 export { amortizedPayment, loanPaymentCount, periodsPerYear } from "./amortization";
 export type { DebtPaymentSolution } from "./goalseek";
 export { explainValley, suggestValleyFixes } from "./valley";
+export {
+  applyMovementEffect,
+  compareMovementsNewestFirst,
+  EMPTY_MOVEMENT_EFFECT,
+  EXPENSE_CATEGORIES,
+  filterMovements,
+  INCOME_CATEGORIES,
+  invertMovementEffect,
+  isEmptyMovementEffect,
+  movementChangeEffect,
+  movementEffect,
+  movementSearchText,
+  normalizeSearchText,
+  quickCategories,
+  summarizeMovements,
+  totalsByCategory,
+  UNCATEGORIZED,
+  usedCategories,
+  withCardDebtDelta,
+} from "./movements";
+export type {
+  CategoryTotal,
+  Movement,
+  MovementEffect,
+  MovementFilter,
+  MovementKind,
+  MovementLike,
+  MovementTotals,
+} from "./movements";
 export type { ValleyCause, ValleyExplanation, ValleyFix } from "./valley";

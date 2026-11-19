@@ -74,6 +74,8 @@ export interface PlaylistCreateClipInput {
   points?: PlaylistAutomationPoint[];
   // true → the clip is skipped by every slice path (see PlaylistClip.noSlice).
   noSlice?: boolean;
+  // true → gestures never change its time (see PlaylistClip.timeLocked).
+  timeLocked?: boolean;
 }
 
 // Opaque snapshot of a document + its undo history (see saveSession).
@@ -115,6 +117,8 @@ export interface PlaylistCoreOptions {
   //     track are no-ops (like a locked track) and moveClips clamps the
   //     destination to the last real track.
   virtualTracks?: boolean;
+  // See PlaylistLayoutOptions.clipMinWidthPx.
+  clipMinWidthPx?: (clip: PlaylistClip) => number;
 }
 
 export interface PlaylistSubscription {
@@ -168,7 +172,10 @@ export class PlaylistCore {
     this.timeAxis = options.timeAxis ?? null;
     this.stretchEnabled = options.stretchEnabled !== false;
     this.virtualTracks = options.virtualTracks !== false;
-    this.layoutOptions = { virtualTracks: this.virtualTracks };
+    this.layoutOptions = {
+      virtualTracks: this.virtualTracks,
+      ...(options.clipMinWidthPx ? { clipMinWidthPx: options.clipMinWidthPx } : {}),
+    };
     const initial =
       !this.stretchEnabled && initialState.stretchMode
         ? { ...initialState, stretchMode: false }
@@ -771,6 +778,13 @@ export class PlaylistCore {
     this.dispatch({ type: "SET_CLIP_NO_SLICE", clipId, noSlice });
   }
 
+  // Fix / free a clip's time span for gestures (PlaylistClip.timeLocked).
+  // Undoable; the value the clip already has is a no-op.
+  setClipTimeLocked(clipId: string, timeLocked: boolean): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
+    this.dispatch({ type: "SET_CLIP_TIME_LOCKED", clipId, timeLocked });
+  }
+
   // Undo checkpoint without a playlist change: the present is replaced by a
   // content-identical state with a new identity (clips/tracks arrays are
   // reused). Outside a gesture it is its own undo entry; inside a gesture it
@@ -1194,6 +1208,7 @@ export class PlaylistCore {
       muted: input.muted,
       sourceId: input.sourceId ?? id,
       ...(input.noSlice === true ? { noSlice: true } : null),
+      ...(input.timeLocked === true ? { timeLocked: true } : null),
     };
     const clip: PlaylistClip =
       baseClip.type === "automation"
@@ -1244,6 +1259,8 @@ export class PlaylistCore {
         muted: input.muted,
         sourceId: input.sourceId ?? id,
         ...(input.noSlice === true ? { noSlice: true } : null),
+        ...(input.timeLocked === true ? { timeLocked: true } : null),
+      ...(input.timeLocked === true ? { timeLocked: true } : null),
       };
       const clip: PlaylistClip =
         baseClip.type === "automation"

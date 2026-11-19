@@ -42,8 +42,8 @@ describe("item-form-spec: one skeleton for the six kinds", () => {
     for (const field of [...spec.when, ...spec.details]) expect(field.control).not.toBe("money");
   });
 
-  it("a loan's payments left are its Termina (count); an MSI's is derived; the rest choose", () => {
-    expect(ITEM_FORM_SPEC.loan.end).toBe("count");
+  it("a loan must end (a date or its payments left); an MSI's is derived; the rest choose", () => {
+    expect(ITEM_FORM_SPEC.loan.end).toBe("ends");
     expect(ITEM_FORM_SPEC["installment-plan"].end).toBe("derived");
     for (const kind of ["income", "expense", "card-purchase", "credit-card"] as const) {
       expect(ITEM_FORM_SPEC[kind].end).toBe("choice");
@@ -75,7 +75,9 @@ describe("item-form-spec: the summary reads the form in its own order", () => {
     const named = { ...loan, name: "Auto" } as FinancialItem;
     expect(firstFieldError(itemFormErrors(named, []), named)).toBe("¿Cuánto pagas?: escribe cuánto pagas.");
     const paid = { ...named, paymentAmount: 1500 } as FinancialItem;
-    expect(firstFieldError(itemFormErrors(paid, []), paid)).toBe("Termina: escribe cuántos pagos te faltan.");
+    expect(firstFieldError(itemFormErrors(paid, []), paid)).toBe(
+      "Termina: escribe la fecha del último pago o cuántos pagos te faltan.",
+    );
   });
 
   it("without a kind, the shared order starts with Tipo · Nombre and keeps each path once", () => {

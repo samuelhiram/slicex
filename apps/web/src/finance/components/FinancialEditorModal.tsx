@@ -27,6 +27,7 @@ import {
   addMonths,
   compareISODate,
   createDefaultFinancialItem,
+  recurrenceInterval,
   isISODate,
   monthlyInstallment,
   remainingInstallmentDebt,
@@ -58,7 +59,9 @@ import {
   useEditableText,
   useFieldError,
 } from "./form-kit";
+import { Select } from "../../ui/select";
 import { SchedulePicker } from "./SchedulePicker";
+import type { EditorDraftUi } from "../form-draft";
 import {
   cleanItem,
   endLabel,
@@ -105,6 +108,7 @@ import {
   withPayday,
   withPaymentCount,
   withStartDate,
+  budgetPeriod,
   cadenceText,
   defaultPaymentCount,
   frequencyParts,
@@ -131,6 +135,14 @@ interface FinancialEditorModalBaseProps {
   placement?: FinancialPlacement;
   /** The real today ("hoy", "mañana", "el 15" in the date fields); default: the plan's start. */
   today?: ISODate;
+  /**
+   * Reopen with what was being written before a reload (form-draft.ts). The
+   * baseline of "unsaved changes" stays the item as saved (or the blank
+   * draft), so the restored edits still count as unsaved.
+   */
+  restore?: { values: FinancialItem; ui?: EditorDraftUi };
+  /** Every change of the values (and of "Termina" / "Intereses"): to keep the draft across a reload. */
+  onDraftChange?: (values: FinancialItem, ui: EditorDraftUi) => void;
 }
 
 export type FinancialEditorModalProps = FinancialEditorModalBaseProps &
@@ -304,7 +316,7 @@ export function blankDraft(draft: FinancialItem, cards: ReadonlyArray<CreditCard
 
 /**
  * The form's view of a saved item: a recurring window starts ON its first
- * payment ("Primer pago", UX-34) — the same payments, the anchor kept.
+ * payment ("Próximo pago", UX-34) — the same payments, the anchor kept.
  */
 function openItem(item: FinancialItem): FinancialItem {
   if (!usesFrequency(item.kind) || isOnce(item)) return item;
@@ -468,6 +480,54 @@ function NumberField({
   );
 }
 
+/**
+ * One choice among a few, as tiles (the "Se repite" look): a radio group
+ * with a roving tab stop, ←/→ move and choose.
+ */
+function ChoiceTiles({
+  labelledBy,
+  options,
+}: {
+  labelledBy: string;
+  options: ReadonlyArray<{ id: string; label: string; checked: boolean; choose: () => void }>;
+}) {
+  const checkedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.checked),
+  );
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    const from = buttons.indexOf(event.target as HTMLButtonElement);
+    if (from < 0) return;
+    const last = buttons.length - 1;
+    let to: number;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") to = from === last ? 0 : from + 1;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") to = from === 0 ? last : from - 1;
+    else return;
+    event.preventDefault();
+    options[to]!.choose();
+    buttons[to]!.focus();
+  };
+  return (
+    <div className="fin-repeat__presets" role="radiogroup" aria-labelledby={labelledBy} onKeyDown={onKeyDown}>
+      {options.map((option, index) => (
+        <button
+          key={option.id}
+          type="button"
+          role="radio"
+          aria-checked={option.checked}
+          tabIndex={index === checkedIndex ? 0 : -1}
+          className="fin-repeat__preset"
+          data-checked={option.checked ? "true" : undefined}
+          onClick={option.choose}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** A day-of-month field ("Día de corte", "Día de pago"): THE day control (form-kit). */
 function DayField({
   label,
@@ -501,12 +561,27 @@ function DayField({
 }
 
 /** "Pagas $8,000 cada mes, el día 20, desde …: 7 pagos." — the schedule in plain words. */
+/** "Sin día fijo" applies to a repeating expense (a budget); never to income (that would be optimistic). */
+function canBeBudget(item: FinancialItem): boolean {
+  return item.kind === "expense" && !isOnce(item);
+}
+
 function scheduleSentence(draft: FinancialItem, payments: number | null, last: string | null): string | null {
   const rule = draft.recurrence;
   if (!isISODate(rule.startDate)) return null;
   const amount = primaryAmount(draft);
   const valid = amount !== undefined && Number.isFinite(amount);
   const money = valid ? ` ${formatMoney(amount)}` : "";
+  if (rule.flexibleDay === true && canBeBudget(draft)) {
+    const { every, period } = budgetPeriod(rule);
+    const until =
+      rule.endDate === undefined
+        ? ""
+        : payments && last
+          ? `, hasta el ${formatDateWeekday(last)} (${payments} ${payments === 1 ? "vez" : "veces"})`
+          : "";
+    return `Apartas${money} ${every}, sin día fijo: el plan lo descuenta al empezar cada ${period}, desde el ${formatDateWeekday(rule.startDate)}${until}.`;
+  }
   const verb = draft.kind === "income" ? "Cobras" : draft.kind === "card-purchase" ? "Cargas" : "Pagas";
   if (rule.frequency === "once") {
     return `${verb}${money} una sola vez, el ${formatDateWeekday(rule.startDate)}.`;
@@ -528,10 +603,12 @@ function Readback({
   sentence,
   upcoming = [],
   more = false,
+  upcomingLabel = "Próximos:",
 }: {
   sentence: string | null;
   upcoming?: ReadonlyArray<string>;
   more?: boolean;
+  upcomingLabel?: string;
 }) {
   if (!sentence) return null;
   return (
@@ -539,7 +616,7 @@ function Readback({
       <p className="fin-readback__sentence">{sentence}</p>
       {upcoming.length > 0 ? (
         <p className="fin-readback__next">
-          <span className="fin-readback__label">Próximos:</span>
+          <span className="fin-readback__label">{upcomingLabel}</span>
           {upcoming.map((date) => (
             <span key={date} className="fin-readback__date">
               {formatDateWeekday(date)}
@@ -759,7 +836,6 @@ function CardSelect({
   // make "— Sin tarjeta —" / "Selecciona…" the already-selected option, and
   // picking it again fires no change event: the form could never be fixed.
   const missing = value !== undefined && value !== "" && !known;
-  const unchosen = value === "" || (!optional && !known && !missing);
 
   const newCard = creatingCard ? (
     <NewCardForm
@@ -808,29 +884,18 @@ function CardSelect({
           {label}
           {optional ? <em className="fin-editor__optional"> (opcional)</em> : null}
         </label>
-        <select
+        <Select
           id={selectId}
           value={selectValue}
           {...errorAria(fieldError)}
-          onChange={(event) => onChange(event.target.value === "" ? undefined : event.target.value)}
-        >
-          {unchosen ? (
-            <option value={CHOOSE_CARD} disabled>
-              Selecciona…
-            </option>
-          ) : null}
-          {optional ? <option value="">— Sin tarjeta —</option> : null}
-          {missing ? (
-            <option value={value} disabled>
-              (tarjeta eliminada)
-            </option>
-          ) : null}
-          {cards.map((card) => (
-            <option key={card.id} value={card.id}>
-              {card.name}
-            </option>
-          ))}
-        </select>
+          onValueChange={(next) => onChange(next === "" ? undefined : next)}
+          placeholder="Elige una tarjeta…"
+          options={[
+            ...(optional ? [{ value: "", label: "Sin tarjeta" }] : []),
+            ...(missing && value ? [{ value, label: "(tarjeta eliminada)", disabled: true }] : []),
+            ...cards.map((card) => ({ value: card.id, label: card.name })),
+          ]}
+        />
         {newCardButton}
         <FieldError {...fieldError} />
       </div>
@@ -1035,7 +1100,27 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
   // "Termina": on a date (default) or after N payments — both store an end
   // date; this only says which one the form shows. Changed only by typing
   // or choosing, never by focus (UX-37).
-  const [endBy, setEndBy] = React.useState<"date" | "count">("date");
+  const [endBy, setEndBy] = React.useState<"date" | "count">(() => props.restore?.ui?.endBy ?? "date");
+  // A loan's "Intereses": without by default; "Con intereses" shows the
+  // rate (a loan that already has one opens with it). Only a form state:
+  // the item keeps just its rate (none = no interest).
+  const [loanInterest, setLoanInterest] = React.useState(() => {
+    if (props.restore?.ui) return props.restore.ui.loanInterest;
+    const start = props.restore?.values ?? initialItem;
+    return start?.kind === "loan" && (start.annualRate ?? 0) > 0;
+  });
+  // After a reload: back to what was being written, before the first paint
+  // (the baseline stays the saved item / blank draft: still "unsaved").
+  React.useLayoutEffect(() => {
+    if (props.restore && initialItem) setDraft(props.restore.values);
+    // Once, on open.
+  }, []);
+  // Keep the draft for a reload (the shell stores it while the form is open).
+  const onDraftChangeRef = React.useRef(props.onDraftChange);
+  onDraftChangeRef.current = props.onDraftChange;
+  React.useEffect(() => {
+    if (draft) onDraftChangeRef.current?.(draft, { endBy, loanInterest });
+  }, [draft, endBy, loanInterest]);
   // "Tipo" (UX-31: editing asks before converting) and the unsaved-changes
   // question (UX-51 / UX-27).
   const [pendingKind, setPendingKind] = React.useState<FinancialItemKind | null>(null);
@@ -1200,6 +1285,22 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
       return { ...prev, recurrence: next };
     });
 
+  // "Sin día fijo (presupuesto)": the periods start today (the plan's first
+  // day); turning it off leaves that date, ready to be changed.
+  const onBudgetChange = (budgetOn: boolean) => {
+    if (budgetOn) {
+      onStartDateChange(doc.startDate);
+      patchRecurrence({ flexibleDay: true });
+      return;
+    }
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev.recurrence };
+      delete next.flexibleDay;
+      return { ...prev, recurrence: next };
+    });
+  };
+
   const onPaydayChange = (day: number) =>
     setDraft((prev) => (prev ? { ...prev, recurrence: withPayday(prev.recurrence, day) } : prev));
 
@@ -1310,11 +1411,12 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
   const schedule = frequencyParts(recurrence);
   const indefinite = recurrence.endDate === undefined;
   const endMode: "never" | "date" | "count" = indefinite ? "never" : endBy;
-  const monthly = showFrequency && recurrence.frequency === "monthly";
+  const budget = recurrence.flexibleDay === true && canBeBudget(draft);
+  const monthly = showFrequency && recurrence.frequency === "monthly" && !budget;
   const first = byPayments ? firstPayment(recurrence) : null;
   const startPreview =
     first && isISODate(recurrence.startDate) && first !== recurrence.startDate
-      ? `${draft.kind === "income" ? "Primer cobro" : "Primer pago"}: ${formatDateWeekday(first)}`
+      ? `${draft.kind === "income" ? "Próximo cobro" : "Próximo pago"}: ${formatDateWeekday(first)}`
       : undefined;
   const upcoming = byPayments ? upcomingPayments(recurrence, 4) : [];
   const title = creating
@@ -1351,17 +1453,12 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
             <label className="fin-editor__label" htmlFor={`${titleId}-kind`}>
               {label}
             </label>
-            <select
+            <Select
               id={`${titleId}-kind`}
               value={pendingKind ?? draft.kind}
-              onChange={(event) => onKindPicked(event.target.value as FinancialItemKind)}
-            >
-              {KIND_ORDER.map((kind) => (
-                <option key={kind} value={kind}>
-                  {KIND_LABELS[kind]}
-                </option>
-              ))}
-            </select>
+              onValueChange={(next) => onKindPicked(next as FinancialItemKind)}
+              options={KIND_ORDER.map((kind) => ({ value: kind, label: KIND_LABELS[kind] }))}
+            />
           </div>
         );
       case "text":
@@ -1395,26 +1492,74 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
             onChange={(value) => setNumber(field.path, value)}
           />
         );
+      case "loan-interest":
+        if (draft.kind !== "loan") return null;
+        return (
+          <div
+            className="fin-editor__field fin-editor__field--wide fin-editor__interest"
+            data-field-path={field.path}
+          >
+            <span className="fin-editor__label" id="fin-editor-interest">
+              Intereses
+            </span>
+            <ChoiceTiles
+              labelledBy="fin-editor-interest"
+              options={[
+                {
+                  id: "none",
+                  label: "Sin intereses",
+                  checked: !loanInterest,
+                  choose: () => {
+                    setLoanInterest(false);
+                    setNumber("annualRate", undefined);
+                  },
+                },
+                {
+                  id: "with",
+                  label: "Con intereses",
+                  checked: loanInterest,
+                  choose: () => setLoanInterest(true),
+                },
+              ]}
+            />
+            {loanInterest ? (
+              <NumberField
+                label="Tasa anual"
+                path="annualRate"
+                value={numberAt(draft, "annualRate")}
+                suffix="%"
+                hint="Tu pago ya los incluye: el plan no los suma aparte. La tasa sirve para «Calcular pago» y para decidir qué deuda liquidar primero."
+                onChange={(value) => setNumber("annualRate", value)}
+              />
+            ) : (
+              <span className="fin-editor__hint">Pagas justo lo que debes, repartido en tus pagos.</span>
+            )}
+          </div>
+        );
       case "computed":
         return draft.kind === "installment-plan" ? <InstallmentValue label={label} plan={draft} wide={wide} /> : null;
       case "payment-mode": {
         const statement = draft.kind === "credit-card" && draft.paymentMode === "statement";
         return (
-          <label className={`fin-editor__field${wide ? " fin-editor__field--wide" : ""}`} data-field-path={field.path}>
-            <span className="fin-editor__label">{label}</span>
-            <select
+          <div className={`fin-editor__field${wide ? " fin-editor__field--wide" : ""}`} data-field-path={field.path}>
+            <span className="fin-editor__label" id={`${titleId}-payment-mode`}>
+              {label}
+            </span>
+            <Select
+              aria-labelledby={`${titleId}-payment-mode`}
               value={statement ? "statement" : "fixed"}
-              onChange={(event) =>
+              onValueChange={(next) =>
                 patch({
-                  paymentMode: event.target.value === "statement" ? "statement" : undefined,
+                  paymentMode: next === "statement" ? "statement" : undefined,
                 })
               }
-            >
-              <option value="fixed">Pago fijo cada mes</option>
-              <option value="statement">Pago total del estado de cuenta (totalero)</option>
-            </select>
+              options={[
+                { value: "fixed", label: "Pago fijo cada mes" },
+                { value: "statement", label: "Pago total del estado de cuenta", hint: "totalero: nunca pagas intereses" },
+              ]}
+            />
             {hint ? <span className="fin-editor__hint">{hint}</span> : null}
-          </label>
+          </div>
         );
       }
       case "card":
@@ -1453,13 +1598,34 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
           </div>
         );
       case "start":
+        if (budget) {
+          // A budget: no date asked — the periods start today.
+          return (
+            <div
+              className={`fin-editor__field fin-editor__field--wide fin-editor__computed fin-editor__reading`}
+              data-field-path="recurrence.startDate"
+            >
+              <span className="fin-editor__label">{startLabel(draft)}</span>
+              <label className="fin-editor__check">
+                <input type="checkbox" checked onChange={() => onBudgetChange(false)} />
+                Sin día fijo (presupuesto)
+              </label>
+              <span className="fin-editor__hint">
+                Se aparta al empezar cada {budgetPeriod(recurrence).period}, desde hoy.
+              </span>
+            </div>
+          );
+        }
         return (
+          <>
           <DateField
             path="recurrence.startDate"
             label={startLabel(draft)}
             value={recurrence.startDate}
             reference={doc.startDate}
             today={today}
+            // "Próximo pago" is normally ahead: "15 dic" is the next one.
+            prefer={isOnce(draft) ? "nearest" : "on-or-after"}
             preview={startPreview}
             wide={monthly || wide}
             onChange={onStartDateChange}
@@ -1477,6 +1643,14 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
               </span>
             ) : null}
           </DateField>
+          {canBeBudget(draft) ? (
+            // A budget has no day: "$1,500 de salidas cada semana".
+            <label className="fin-editor__check fin-editor__budget">
+              <input type="checkbox" checked={false} onChange={() => onBudgetChange(true)} />
+              Sin día fijo (presupuesto)
+            </label>
+          ) : null}
+          </>
         );
       case "day":
         return (
@@ -1488,22 +1662,6 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
           />
         );
       case "end":
-        if (spec.end === "count") {
-          // A loan always ends: after the payments you still owe (UX-08).
-          return (
-            <NumberField
-              label={endLabel(draft)}
-              path="recurrence.endDate"
-              prefix="Después de"
-              suffix="pagos"
-              compact
-              wide
-              hint="Los pagos que te faltan, contando el próximo."
-              value={payments ?? undefined}
-              onChange={(n) => onPaymentCountChange(n === undefined ? undefined : Math.floor(n))}
-            />
-          );
-        }
         if (spec.end === "derived") {
           return recurrence.endDate !== undefined ? (
             <EndCut
@@ -1523,6 +1681,10 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
             </div>
           );
         }
+        // A loan always ends (UX-08): no "Nunca"; on a date (the default,
+        // when you know the last payment) or after the payments you owe.
+        const mustEnd = spec.end === "ends";
+        const shownEnd = mustEnd ? endBy : endMode;
         return (
           <div
             className="fin-editor__field fin-editor__field--wide"
@@ -1533,24 +1695,26 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
               {endLabel(draft)}
             </span>
             <div className="fin-ends">
-              <label className="fin-ends__option">
-                <input
-                  type="radio"
-                  name="fin-editor-end"
-                  checked={endMode === "never"}
-                  onChange={() => onIndefiniteChange(true)}
-                />
-                <span>Nunca</span>
-              </label>
+              {mustEnd ? null : (
+                <label className="fin-ends__option">
+                  <input
+                    type="radio"
+                    name="fin-editor-end"
+                    checked={endMode === "never"}
+                    onChange={() => onIndefiniteChange(true)}
+                  />
+                  <span>Nunca</span>
+                </label>
+              )}
               <span className="fin-ends__option">
                 <label className="fin-ends__choice">
                   <input
                     type="radio"
                     name="fin-editor-end"
-                    checked={endMode === "date"}
+                    checked={shownEnd === "date"}
                     onChange={() => {
                       setEndBy("date");
-                      if (indefinite) onIndefiniteChange(false);
+                      if (indefinite && !mustEnd) onIndefiniteChange(false);
                     }}
                   />
                   <span>El</span>
@@ -1562,7 +1726,7 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
                     inline
                     path="recurrence.endDate"
                     label="Fecha de fin"
-                    value={endMode === "date" ? recurrence.endDate : undefined}
+                    value={shownEnd === "date" ? recurrence.endDate : undefined}
                     // "15 nov" for an end date means the next 15 NOV on
                     // or after the start, never one before it.
                     reference={isISODate(recurrence.startDate) ? recurrence.startDate : doc.startDate}
@@ -1582,10 +1746,10 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
                     <input
                       type="radio"
                       name="fin-editor-end"
-                      checked={endMode === "count"}
+                      checked={shownEnd === "count"}
                       onChange={() => {
                         setEndBy("count");
-                        if (indefinite) onIndefiniteChange(false);
+                        if (indefinite && !mustEnd) onIndefiniteChange(false);
                       }}
                     />
                     <span>Después de</span>
@@ -1597,7 +1761,7 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
                     step={1}
                     className="fin-ends__count"
                     aria-label="Número de pagos"
-                    value={endMode === "count" && payments ? String(payments) : ""}
+                    value={shownEnd === "count" && payments ? String(payments) : ""}
                     onChange={(event) => {
                       const n = Math.floor(Number(event.target.value));
                       setEndBy("count");
@@ -1608,6 +1772,11 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
                 </span>
               ) : null}
             </div>
+            {mustEnd ? (
+              <span className="fin-editor__hint">
+                La fecha de tu último pago o, si no la sabes, cuántos pagos te faltan (contando el próximo).
+              </span>
+            ) : null}
           </div>
         );
       case "loan-calc": {
@@ -1628,7 +1797,7 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
             </button>
             {suggested === null ? (
               <span id="fin-editor-calc-hint" className="fin-editor__hint">
-                Escribe cuánto debes y cuántos pagos te faltan.
+                Escribe cuánto debes y cuándo terminas de pagar.
               </span>
             ) : null}
           </div>
@@ -1679,7 +1848,7 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
 
   return (
     <div
-      className="playlist-shell__modal-overlay"
+      className="playlist-shell__modal-overlay fin-sheet-overlay"
       role="presentation"
       onMouseDown={(event) => {
         pressedOnOverlayRef.current = event.target === event.currentTarget;
@@ -1693,7 +1862,7 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
     >
       <div
         ref={dialogRef}
-        className="playlist-shell__modal fin-editor"
+        className="playlist-shell__modal fin-editor fin-sheet"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -1721,7 +1890,7 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
         </header>
         <form
           ref={formRef}
-          className="playlist-shell__modal-body fin-editor__body"
+          className="playlist-shell__modal-body fin-editor__body fin-sheet__body"
           noValidate
           onSubmit={(event) => {
             event.preventDefault();
@@ -1734,6 +1903,9 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
             if (path && !touched.has(path)) setTouched((prev) => new Set(prev).add(path));
           }}
         >
+          {/* The side sheet: the form on the left, what it comes to on the
+              right ("Vista previa"), the actions under both. */}
+          <div className="fin-sheet__main">
           {locked ? (
             <p className="fin-editor__locked" role="status">
               Línea de evento bloqueada: desbloquéala para editar o eliminar.
@@ -1797,17 +1969,6 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
                 </div>
               );
             })}
-            {/* What it comes to, in plain words: the schedule (and a
-                purchase's payment), then what it does to your cash. */}
-            <div className="fin-editor__section fin-editor__section--outcome">
-              <Readback
-                sentence={readback}
-                upcoming={upcoming}
-                more={byPayments && (recurrence.endDate === undefined || (payments ?? 0) > upcoming.length)}
-              />
-              {purchase ? <Readback sentence={purchase} /> : null}
-              <EffectLine className="fin-editor__field--wide" effect={effect} reserve={doc.minimumCashReserve} />
-            </div>
           </fieldset>
           </FieldErrorsContext.Provider>
 
@@ -1815,6 +1976,27 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
           <p className="fin-sr-only" role="status" aria-live="polite" aria-atomic="true">
             {spoken}
           </p>
+          </div>
+
+          {/* What it comes to, in plain words, beside the form: the
+              schedule (and a purchase's payment), then what it does to your
+              cash. Follows every keystroke. */}
+          <aside className="fin-sheet__preview" aria-labelledby={`${titleId}-preview`}>
+            <h3 id={`${titleId}-preview`} className="fin-sheet__preview-title">
+              Vista previa
+            </h3>
+            <p className="fin-sheet__preview-hint">Así queda en tu plan con lo que llevas escrito.</p>
+            <div className="fin-editor__section fin-editor__section--outcome">
+              <Readback
+                sentence={readback}
+                upcoming={upcoming}
+                upcomingLabel={budget ? "Se aparta:" : "Próximos:"}
+                more={byPayments && (recurrence.endDate === undefined || (payments ?? 0) > upcoming.length)}
+              />
+              {purchase ? <Readback sentence={purchase} /> : null}
+              <EffectLine className="fin-editor__field--wide" effect={effect} reserve={doc.minimumCashReserve} />
+            </div>
+          </aside>
 
           <footer className="fin-editor__actions">
             <p className="fin-editor__error" role="alert" aria-live="polite">

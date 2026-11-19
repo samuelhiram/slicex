@@ -12,6 +12,7 @@ import { formatDateShort, formatMoneyWhole, formatSignedMoneyWhole } from "../fo
 import { type Futures } from "../futures";
 import { useAnnounce } from "../../ui/announcer";
 import { FinSection, useFinancialRevision } from "./FinancialUi";
+import { Select } from "../../ui/select";
 
 export interface ScenarioPanelProps {
   bridge: FinancialBridgeApi;
@@ -230,19 +231,16 @@ export function ScenarioPanel({ bridge, futures = null, today, defaultOpen = tru
           ) : null}
           {compareTarget && futures && active ? (
             <div className="fin-scenario__compare">
-              <label className="fin-scenario__select">
-                <span>Comparar con</span>
-                <select
+              <div className="fin-scenario__select">
+                <span id="fin-scenario-compare">Comparar con</span>
+                <Select
+                  size="sm"
+                  aria-labelledby="fin-scenario-compare"
                   value={compareTarget.id}
-                  onChange={(event) => futures.setCompare(event.target.value)}
-                >
-                  {others.map((branch) => (
-                    <option key={branch.id} value={branch.id}>
-                      {branch.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  onValueChange={(next) => futures.setCompare(next)}
+                  options={others.map((branch) => ({ value: branch.id, label: branch.name }))}
+                />
+              </div>
               <ComparisonTable rows={rowsOf(current, base)} baseLabel={compareTarget.name} currentLabel={active.name} />
             </div>
           ) : (

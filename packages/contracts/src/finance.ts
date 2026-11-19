@@ -56,6 +56,7 @@ export const FinancialRecurrenceSchema = z
     startDate: ISODateSchema,
     endDate: ISODateSchema.optional(),
     anchorDate: ISODateSchema.optional(),
+    flexibleDay: z.boolean().optional(),
     interval: number()
       .int("Debe ser un entero")
       .min(1, "Debe ser 1 o más")
@@ -86,6 +87,7 @@ const base = {
   name: z.string(),
   enabled: z.boolean().optional(),
   color: z.string().optional(),
+  lockDates: z.boolean().optional(),
   recurrence: FinancialRecurrenceSchema,
 };
 
@@ -163,5 +165,29 @@ export const FinancialDocumentSchema = z.object({
   items: z.array(z.unknown()),
 });
 
+/** "HH:MM", 24 h. */
+export const TimeOfDaySchema = z
+  .string({ invalid_type_error: "Hora inválida" })
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida");
+
+export const MovementKindSchema = z.enum(["expense", "income"]);
+
+/**
+ * A real movement of the journal (@slicex/core Movement): what was spent or
+ * received, when, and on which card (absent: cash / debit).
+ */
+export const MovementSchema = z.object({
+  id: z.string().min(1),
+  kind: MovementKindSchema,
+  amount: MoneySchema.positive("Escribe un monto mayor a 0"),
+  date: ISODateSchema,
+  time: TimeOfDaySchema.optional(),
+  concept: z.string(),
+  category: z.string().optional(),
+  notes: z.string().optional(),
+  cardId: z.string().min(1).optional(),
+});
+
 export type FinancialItemDTO = z.infer<typeof FinancialItemSchema>;
+export type MovementDTO = z.infer<typeof MovementSchema>;
 export type FinancialRecurrenceDTO = z.infer<typeof FinancialRecurrenceSchema>;

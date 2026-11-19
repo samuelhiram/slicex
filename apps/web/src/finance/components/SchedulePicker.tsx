@@ -17,6 +17,7 @@ import {
   type FrequencyUnit,
 } from "../schedule-ui";
 import { useEditableText } from "./form-kit";
+import { Select } from "../../ui/select";
 
 // "Cada N": a number field the person can clear while typing (the rule only
 // takes whole numbers >= 1; leaving it empty restores the rule's).
@@ -157,15 +158,16 @@ export function SchedulePicker({
         <div className="fin-repeat__custom">
           <span className="fin-repeat__word">Cada</span>
           <EveryInput value={every} unit={counted} onChange={(n) => onChange(counted, n)} />
-          <select
+          <Select
             className="fin-repeat__unit"
             aria-label="Unidad"
             value={counted}
-            onChange={(event) => onChange(event.target.value as FrequencyUnit, every)}
-          >
-            <option value="days">{every === 1 ? "día" : "días"}</option>
-            <option value="months">{every === 1 ? "mes" : "meses"}</option>
-          </select>
+            onValueChange={(next) => onChange(next as FrequencyUnit, every)}
+            options={[
+              { value: "days", label: every === 1 ? "día" : "días" },
+              { value: "months", label: every === 1 ? "mes" : "meses" },
+            ]}
+          />
         </div>
       ) : null}
     </div>

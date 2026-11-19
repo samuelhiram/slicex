@@ -187,6 +187,8 @@ export interface PlaylistClipPresentation {
   isAutomation: boolean;
   selected: boolean;
   hovered: boolean;
+  // The pointer is over the clip's lock button (controller clipTimeLock).
+  lockHovered: boolean;
   // True when the clip OR its track should render as muted (clip.muted OR
   // track.muted OR another track is soloed).
   effectivelyMuted: boolean;
@@ -627,6 +629,7 @@ function createClipViews(
   state: PlaylistState,
   metrics: PlaylistMetrics,
   cache: TrackLayoutCache,
+  minWidthPx?: (clip: PlaylistClip) => number,
 ): PlaylistClipPresentation[] {
   const selectedClipIds = new Set(state.selection.clipIds);
   const hoveredClipId =
@@ -678,7 +681,9 @@ function createClipViews(
   const rulerOffset = getTracksTop(metrics) - state.viewport.scrollY;
 
   for (const clip of state.clips) {
-    const clipEnd = clip.start + clip.duration;
+    // A host minimum width (a tag as wide as its text) also reaches right.
+    const minWidth = minWidthPx ? minWidthPx(clip) : 0;
+    const clipEnd = Math.max(clip.start + clip.duration, clip.start + minWidth / pxPerBeat);
     if (clipEnd < visibleStartTime || clip.start > visibleEndTime) {
       continue;
     }
@@ -696,7 +701,7 @@ function createClipViews(
     const rect = {
       x: headerOffset + clip.start * pxPerBeat,
       y: rulerOffset + trackTop + (clip.lane ?? 0) * laneHeight + metrics.clipPaddingY,
-      width: clip.duration * pxPerBeat,
+      width: Math.max(clip.duration * pxPerBeat, minWidth),
       height: laneHeight - metrics.clipPaddingY * 2,
     };
     const titleRect = getClipTitleRect(state, clip, metrics);
@@ -754,6 +759,7 @@ function createClipViews(
         hoveredClipId != null &&
         hoveredClipId === clip.id &&
         state.hover?.kind !== "automation-point",
+      lockHovered: state.hover?.kind === "clip-lock" && state.hover.clipId === clip.id,
       effectivelyMuted,
       trackLocked,
       groupId: clip.groupId ?? null,
@@ -1107,7 +1113,7 @@ export function createPlaylistPresentation(
   const trackRowsByIndex = new Map(
     trackRows.map((row) => [row.index, row] as const),
   );
-  const clipViews = createClipViews(state, metrics, cache);
+  const clipViews = createClipViews(state, metrics, cache, layoutOptions.clipMinWidthPx);
   const clipViewsById = new Map(
     clipViews.map((view) => [view.clip.id, view] as const),
   );
@@ -1251,6 +1257,8 @@ export function getClipExtendHandle(
   const clipId = state.selection.clipIds[0]!;
   const view = presentation.clipViewsById.get(clipId);
   if (!view || !view.isVisible || view.isAutomation || view.trackLocked) return null;
+  // Its time span is fixed: nothing to extend.
+  if (view.clip.timeLocked === true) return null;
   if (canExtend && !canExtend(clipId)) return null;
 
   const viewLeft = metrics.trackHeaderWidth;

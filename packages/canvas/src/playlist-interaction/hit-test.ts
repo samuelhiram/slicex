@@ -11,6 +11,7 @@ import {
   type PlaylistMetrics,
   type PlaylistPoint,
   type PlaylistPresentation,
+  type PlaylistRect,
 } from "../playlist-core";
 
 export type PlaylistHit =
@@ -68,6 +69,8 @@ export type PlaylistHit =
   // The selected clip's extend grabber (getClipExtendHandle): dragging it
   // moves the clip's right end. `x` is the grabber's centre.
   | { kind: "clip-extend"; clip: PlaylistClip; clipId: string; x: number }
+  // The clip's lock button (options.clipTimeLock, getClipLockRect).
+  | { kind: "clip-lock"; clip: PlaylistClip; clipId: string }
   | { kind: "automation-body"; clip: PlaylistAutomationClip; clipId: string }
   | { kind: "clip"; clip: PlaylistClip; clipId: string };
 
@@ -130,6 +133,9 @@ export interface PlaylistHitOptions {
   // grip) by this many px on each side, without changing their drawing,
   // so each is at least 24 px to the pointer.
   trackButtonSlop?: number;
+  // Where each clip's lock button is (the renderer draws it; fills `out`,
+  // null = none): a point on it is a "clip-lock" hit.
+  clipLockRect?: (clipId: string, out: PlaylistRect) => PlaylistRect | null;
 }
 
 function pointInRectSlop(
@@ -147,6 +153,8 @@ function pointInRectSlop(
 
 // Scratch for the extend-grabber lookup (pointermove rate: no allocation).
 const extendScratch = createClipExtendHandle();
+// Scratch for the lock-button lookup (same reason).
+const lockScratch = { x: 0, y: 0, width: 0, height: 0 };
 
 export function hitTestPlaylist(
   presentation: PlaylistPresentation,
@@ -302,7 +310,18 @@ export function hitTestPlaylist(
       return automationPointHit;
     }
 
-    if (pointInRect(point, clipView.resizeLeftRect)) {
+    if (
+      options.clipLockRect &&
+      options.clipLockRect(clipView.clip.id, lockScratch) &&
+      pointInRect(point, lockScratch)
+    ) {
+      return { kind: "clip-lock", clip: clipView.clip, clipId: clipView.clip.id };
+    }
+
+    // A time-locked clip has no resize edges: the press grabs the clip.
+    const resizable = clipView.clip.timeLocked !== true;
+
+    if (resizable && pointInRect(point, clipView.resizeLeftRect)) {
       return {
         kind: "resize-left",
         clip: clipView.clip,
@@ -310,7 +329,7 @@ export function hitTestPlaylist(
       };
     }
 
-    if (pointInRect(point, clipView.resizeRightRect)) {
+    if (resizable && pointInRect(point, clipView.resizeRightRect)) {
       return {
         kind: "resize-right",
         clip: clipView.clip,

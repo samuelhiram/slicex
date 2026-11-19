@@ -18,6 +18,10 @@ export const slipTool: PlaylistTool = {
     ) {
       return null;
     }
+    // Its time span is fixed (PlaylistClip.timeLocked): nothing to slip.
+    if (hit.clip.timeLocked === true) {
+      return null;
+    }
 
     const startPointerTime = screenXToTime(state, point.x, metrics);
     return {

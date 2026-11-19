@@ -13,6 +13,7 @@ import type { PlaylistCore, ViewportNavigator } from "@slicex/canvas";
 import type { FinancialBridgeApi } from "../bridge-api";
 import { formatDateLong, formatDateShort } from "../format";
 import { horizonBeat } from "../mapping";
+import { Select } from "../../ui/select";
 
 export interface NavControlsProps {
   core: PlaylistCore;
@@ -182,24 +183,17 @@ export function NavControls({ core, navigator, bridge }: NavControlsProps) {
           <path d="M4 8h8" />
         </svg>
       </button>
-      <select
-        className="fin-navctl__span"
-        aria-label="Rango visible"
-        title={`${rangeDates} · − / + para zoom, 0 para ver todo`}
-        value={current}
-        onChange={(event) => setSpan(event.target.value)}
-      >
-        {current === "" ? (
-          <option value="" disabled>
-            {describeSpanDays(span)}
-          </option>
-        ) : null}
-        {SPANS.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      <span className="fin-navctl__span-wrap" title={`${rangeDates} · − / + para zoom, 0 para ver todo`}>
+        <Select
+          className="fin-navctl__span"
+          size="sm"
+          aria-label="Rango visible"
+          value={current}
+          onValueChange={setSpan}
+          placeholder={describeSpanDays(span)}
+          options={SPANS.map((option) => ({ value: option.value, label: option.label }))}
+        />
+      </span>
       <button
         type="button"
         className="fin-navctl__button fin-navctl__zoom fin-navctl__zoom--in"
@@ -288,7 +282,7 @@ export const NAV_GESTURES: ReadonlyArray<HelpRow> = [
   { keys: "Espacio + arrastra · botón de la rueda", what: "La mano: suelta con impulso" },
   { keys: "Minimapa (abajo)", what: "Arrastra la ventana; sus bordes cambian el zoom; doble clic: todo" },
   { keys: "Arrastrar cerca del borde", what: "El tiempo se desplaza solo mientras cargas un pago" },
-  { keys: "← →", what: "Sin nada seleccionado: mueve el día marcado (la línea roja; Shift: 4 días)" },
+  { keys: "← →", what: "Mueve el día marcado (la línea roja); con un objeto de fechas libres seleccionado, lo mueve de día (Shift: 4 días)" },
   { keys: "RePág · AvPág", what: "Una pantalla atrás / adelante" },
   { keys: "Inicio · Fin", what: "Hoy · el final" },
   { keys: "+ · − · 0", what: "Acercar · alejar · ver todo" },
@@ -296,11 +290,12 @@ export const NAV_GESTURES: ReadonlyArray<HelpRow> = [
 
 // UX-45: every gesture that changes money, with its consequence.
 export const EDIT_GESTURES: ReadonlyArray<HelpRow> = [
-  { keys: "Arrastrar un objeto", what: "Cambia su fecha (y la de todos sus pagos). Alt: sin imán" },
-  { keys: "Shift + arrastrar", what: "Hace una copia en la fecha donde la sueltas" },
-  { keys: "Borde derecho", what: "Cambia cuándo termina. En una deuda calcula el pago para quedar libre ese día" },
+  { keys: "Arrastrar un objeto", what: "Lo mueve de día y de línea. Con el candado cerrado solo cambia de línea" },
+  { keys: "Candado del objeto", what: "Fija o suelta sus fechas en la línea de tiempo. Viene cerrado si tiene inicio y fin; abrirlo nunca cambia nada" },
+  { keys: "Shift + arrastrar", what: "Hace una copia donde la sueltas (con el candado cerrado: el mismo día, en otra línea)" },
+  { keys: "Borde derecho", what: "Cambia cuándo termina, si sus fechas están libres. En una deuda calcula el pago para quedar libre ese día" },
   { keys: "Barrita de arriba", what: "Sube o baja el monto (Shift: paso fino, al peso)" },
-  { keys: "Agarrador central", what: "Alarga o acorta un objeto seleccionado aunque su final no se vea" },
+  { keys: "Agarrador central", what: "Alarga o acorta un objeto seleccionado de fechas libres aunque su final no se vea" },
   { keys: "Doble clic · Enter", what: "Abre el objeto para editarlo" },
   { keys: "Ctrl+V sobre una tarjeta", what: "Pega su estado de cuenta: actualiza saldo y compras" },
   { keys: "Dividir (C)", what: "Parte un objeto en dos el día que elijas, para cambiar el monto desde ahí. Shift: todos los de ese día" },
@@ -310,7 +305,8 @@ export const EDIT_GESTURES: ReadonlyArray<HelpRow> = [
 // UX-45 / UX-04 / UX-38: the keyboard, shortcuts included.
 export const SHORTCUTS: ReadonlyArray<HelpRow> = [
   { keys: "Alt + ← →", what: "Recorre los objetos en orden de fecha (los selecciona)" },
-  { keys: "← → con un objeto", what: "Mueve su fecha un día (Shift: 4 días); ↑ ↓ lo cambia de línea" },
+  { keys: "↑ ↓ con un objeto", what: "Lo cambia de línea (sus fechas no se mueven)" },
+  { keys: "← → con un objeto", what: "Lo mueve de día si su candado está abierto; si no, mueve el día marcado" },
   { keys: "Shift+F10 · Menú", what: "Abre el menú del objeto seleccionado" },
   { keys: "Supr", what: "Borra lo seleccionado (puedes deshacer)" },
   { keys: "Ctrl+Z · Ctrl+Y", what: "Deshacer · rehacer" },

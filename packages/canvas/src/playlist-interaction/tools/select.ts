@@ -89,6 +89,7 @@ export const selectTool: PlaylistTool = {
             start: clip.start,
             trackIndex: getTrackIndexById(newState, clip.trackId),
             lane: clip.lane ?? 0,
+            ...(clip.timeLocked === true ? { timeLocked: true } : null),
           })),
         };
       }
@@ -119,6 +120,7 @@ export const selectTool: PlaylistTool = {
           start: clip.start,
           trackIndex: getTrackIndexById(state, clip.trackId),
           lane: clip.lane ?? 0,
+          ...(clip.timeLocked === true ? { timeLocked: true } : null),
         })),
       };
     }

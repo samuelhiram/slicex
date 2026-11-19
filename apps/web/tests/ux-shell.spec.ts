@@ -327,13 +327,22 @@ describe("UX-03: excluded items — chip, real debt, (simulación), one-step rea
 describe("UX-18: the starting point looks editable, errors are visible, changes echo", () => {
   const cash = () => document.querySelector<HTMLInputElement>('input[aria-label="Liquidez hoy"]')!;
 
-  it("both fields sit in the 'Punto de partida' group with a pencil", () => {
+  it("today's cash sits in the 'Punto de partida' group with a pencil; the reserve, in 'Más cifras'", () => {
     mountBar(realBridge());
     const group = metric("start");
     expect(group.getAttribute("role")).toBe("group");
     expect(group.getAttribute("aria-label")).toBe("Punto de partida");
-    expect(group.querySelectorAll("input").length).toBe(2);
-    expect(group.querySelectorAll(".fin-summary__pencil").length).toBe(2);
+    // Header v3: one editable figure in the bar (today's cash)…
+    expect([...group.querySelectorAll("input")].map((input) => input.getAttribute("aria-label"))).toEqual([
+      "Liquidez hoy",
+    ]);
+    expect(group.querySelectorAll(".fin-summary__pencil").length).toBe(1);
+    // …the reserve, a setting, in "Más cifras" (same group name, same pencil).
+    click(document.querySelector(".fin-summary__more"));
+    const more = document.querySelector('.fin-more__start[role="group"]')!;
+    expect(more.getAttribute("aria-label")).toBe("Punto de partida");
+    expect(more.querySelector('input[aria-label="Reserva mínima"]')).not.toBeNull();
+    expect(more.querySelectorAll(".fin-summary__pencil").length).toBe(1);
   });
 
   it("'12 mil' is a valid amount; the change is announced with Deshacer", () => {
@@ -535,9 +544,12 @@ describe("UX-59/63: tokens meet their contrast in both themes", () => {
   for (const [name, src] of [["claro", light], ["oscuro", dark]] as const) {
     it(`${name}: placeholder ≥ 4.5:1 on every field surface; negative figures and the ring`, () => {
       const t = (n: string) => token(src, n, token(light, n));
-      for (const surface of ["--surface", "--surface-2", "--surface-3", "--raised"]) {
+      // Forms v2: fields sit on --field-bg, the side sheet's preview on --sheet-aside.
+      for (const surface of ["--surface", "--surface-2", "--surface-3", "--raised", "--field-bg"]) {
         expect(ratio(t("--placeholder"), t(surface))).toBeGreaterThanOrEqual(4.5);
       }
+      expect(ratio(t("--muted"), t("--sheet-aside"))).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(t("--text"), t("--field-bg"))).toBeGreaterThanOrEqual(7);
       expect(ratio(t("--fin-negative-text"), t("--surface"))).toBeGreaterThanOrEqual(4.5);
       expect(ratio(t("--muted"), t("--raised"))).toBeGreaterThanOrEqual(4.5); // calendar's outside days
       expect(ratio(t("--focus-ring-color"), t("--surface"))).toBeGreaterThanOrEqual(3);

@@ -49,9 +49,27 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
   tarjeta estimado por saldo diario promedio), alertas de liquidez, avalancha, comparación de
   escenarios, documento demo.
 - **`FinancialBridge`** (`apps/web/src/finance/financial-bridge.ts`): `item.id === clip.id`. La
-  geometría del clip es la verdad de las fechas (mover = mover fechas, estirar borde derecho =
-  `endDate`, recortar el izquierdo no mueve los días de pago, slice parte la recurrencia); lo no
-  temporal (montos, tarjetas) vive en el documento. Undo/redo del playlist es la única pila: cada
+  geometría del clip es la verdad de las fechas (estirar borde derecho = `endDate`, recortar el
+  izquierdo no mueve los días de pago, slice parte la recurrencia); lo no temporal (montos,
+  tarjetas) vive en el documento. **Candado de fechas por objeto** (2026-11-18): un candado
+  translúcido en la esquina INFERIOR IZQUIERDA de la tarjeta, pegajoso como el texto (en una
+  tarjeta baja, por carriles apilados, se pasa AL LADO del bloque nombre + monto, centrado;
+  nunca desaparece mientras se ve el texto) (`PlaylistClip.timeLocked`; el
+  renderer lo dibuja con `clipTimeLock` y lo expone con `getClipLockRect`, que el controller usa
+  como `clipTimeLock.rectOf` para que el clic caiga donde se ve). Cerrado: arrastrar solo cambia
+  de línea, sin estirar, sin agarrador central ni Slip, y ←/→ mueven el día. Abierto: se mueve
+  de día y se estira como siempre. Por defecto (`datesLockedByDefault` en `mapping.ts`): cerrado
+  si tiene inicio y fin (`endDate`) o es MSI; abierto si es de una sola fecha, indefinido, o una
+  deuda que termina al liquidarse (tarjeta, préstamo con saldo: su borde derecho es la búsqueda
+  de objetivo). `FinancialItem.lockDates` guarda la elección solo cuando difiere del default; un
+  objeto abierto que estiras hasta tener fin sigue abierto. Un clic es un paso de deshacer y se
+  anuncia. El formulario siempre cambia las fechas. Clips de menos de 88 px no lo muestran. Ya no
+  se usa `clipMoveAxis: "rows"` (sigue en el motor). Las
+  barras de cobros / pagos, los cortes de tarjeta, el playhead, el escalón de la curva y la línea
+  flotante del cursor (`layers/hover-time.ts`) caen todos en el **inicio** del día
+  (`EVENT_DAY_OFFSET = 0`); la pastilla con la fecha y el sombreado del día van sobre la celda.
+  Las etiquetas del carril de caja ("Mín …", valles) viven en la franja de arriba con una línea
+  punteada hasta su punto. Undo/redo del playlist es la única pila: cada
   estado del historial tiene su snapshot de items, y cada guardado del editor es una entrada
   (`core.touch()` cuando el clip no cambia). Clips no cortables (`noSlice`): eventos únicos,
   tarjetas, MSI, préstamos con saldo.
@@ -89,6 +107,44 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     cuenta sobre una tarjeta (`statement.ts`) actualiza su saldo o agrega compras futuras.
   - *Tu año en 60 segundos:* primera visita = ejemplo + banner; el onboarding arma el año del
     usuario con tres preguntas. La persistencia en servidor (`@slicex/db`) sigue dormida.
+  - *Lo que pasó (registro de movimientos reales, 2026-11-18):* **plan ≠ realidad**. El plan
+    (items) es lo que va a pasar; un `Movement` (`@slicex/core/finance/movements.ts`) es lo que
+    ya pasó: gasto o ingreso con monto, fecha, hora, concepto, categoría, notas y tarjeta
+    opcional. Cada movimiento es independiente (nunca se empareja con un item del plan aunque se
+    llame igual) y su efecto se asienta en el "hoy" del plan: `initialCash`, o el `balance` de
+    la tarjeta si se pagó con ella. **Un solo registro para todos los futuros**
+    (`Futures.commitMovement`, guardado en `slicex.plan.v1` → `movements`).
+    **La realidad no es un paso del deshacer del plan:** `bridge.applyReality` no toca el
+    playlist; cada snapshot del historial lleva un sello con la realidad acumulada cuando se tomó
+    y, al restaurarlo (undo/redo, cambiar de futuro), se le suma la realidad registrada después.
+    Ctrl+Z de un cambio del plan nunca "des-gasta" dinero; deshacer un movimiento es asentar el
+    efecto contrario ("Deshacer" del aviso, o "Borrar"). UI: "Registrar" (tecla **G**,
+    `MovementCaptureDialog`: monto → rápidos Mandado/Gasolina/Gustito… ordenados por uso →
+    Enter; con fecha futura se vuelve un item único del plan) y el **panel de movimientos**
+    (`MovementsPanel`, 2026-11-18): columna a la derecha del timeline (~¼ de pantalla,
+    `clamp(320px, 25vw, 560px)`) que empuja el canvas (el ResizeObserver del renderer lo sigue;
+    se pliega sin animar el ancho). Abierto por defecto en **"Gastos del mes"**: el título dice
+    lo que se ve ("Ingresos de hoy", "Todo lo que pasó", "Préstamos de tu plan"), con la cifra
+    total debajo. El botón del header (antes "Buscar") lo pliega y despliega; **F** lo abre y
+    enfoca su búsqueda. Plegado o abierto lo recuerda el navegador (`localStorage`
+    `slicex.records-panel.v1`; sin elección: abierto desde 900 px, plegado debajo, donde cubre
+    el stage en vez de empujarlo); la vista (sección y filtros) la recuerda la pestaña
+    (`sessionStorage` `slicex.records-view.v1`). "Lo que pasó" = registro + bitácora de Rec
+    agrupados por día (Hoy, Ayer, lun 16 nov…, con el neto del día), filtros por texto, tipo,
+    periodo y forma de pago, y chips por categoría con su total (siguen visibles con una
+    elegida; otro clic la quita); una fila registrada abre su edición. Periodo
+    (`RecordsDateBar.tsx`): **"Día a día"** = ‹ día › con el día como botón de calendario y
+    "Hoy" (nunca pasa de hoy; `SearchView.from` = el día, ausente = hoy) y **"Elegir
+    fechas…"** = rango en el calendario de `@mantine/dates` (`type="range"`, dos clics) con ‹ ›
+    que lo recorren completo; el título lo dice ("Gastos de ayer", "Gastos del 1 al 15 nov").
+    Vacío, explica la sección: "Gastos e ingresos no planeados…". "En tu plan" =
+    ingresos, gastos, préstamos, tarjetas y MSI (entra al mismo tipo que se veía) con ajuste
+    rápido del monto, cuenta/no cuenta, ver en el timeline y editar. No es diálogo: queda
+    detrás (inerte) de los formularios que abre. **"Registrar" vive en el panel** (su acción
+    primaria); con el panel oculto, el header muestra "Registrar gasto · este mes $X"
+    (`RecordMonthButton`). El "/" registra lo que ya pasó ("gasté 500 en tacos ayer")
+    en el mismo registro. Pendiente: dibujar el pasado en el canvas (hoy el scroll X se topa en
+    el día 0).
 - **Lenguaje visual (2026-11-07):** UI calmada y de alto contraste, tema **claro y oscuro**
   (toggle en el header; primera visita sigue al sistema; elección en `localStorage`
   `slicex.theme`, `apps/web/src/theme.ts`). Tokens CSS en `globals.css`
@@ -123,6 +179,47 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     88 px. Las capas DOM se alinean con `--pl-ruler-h` / `--pl-lane-h` / `--pl-header-w`.
   - **Controles secundarios = rellenos suaves** (`--surface-2`) sin contorno; una sola acción
     primaria rellena (`--ink`) por superficie. Radios `--radius-s/m/l` = 8/12/18 px.
+  - **Header v3 (2026-11-18): tres grupos, no once controles.** (1) *Estado del plan*: el
+    veredicto ("Te alcanza todo el año · Lo más bajo …"), **una sola cifra en la barra**
+    (Liquidez hoy, editable) y "Más cifras" justo después con todo lo demás —reserva mínima
+    incluida, a cualquier ancho (`BAR_METRICS` en `FinancialSummaryBar.tsx`); el chip de alertas
+    solo se ve cuando hay alertas (el mismo botón, UX-26). (2) *Herramientas*, centradas: solo
+    íconos al estilo Figma (nombre y tecla en el tooltip y en el nombre accesible) y el imán como
+    un ícono más (su modo en el tooltip y en la lista). (3) *Acciones*: "Registrar gasto" (solo
+    con el panel de movimientos oculto), el botón del panel, el
+    futuro (solo ícono en el plan principal) y "+ Nuevo". Reglas al final de `globals.css`
+    ("Header v3"); prevalecen sobre las de abajo que hablan de etiquetas de herramientas y de
+    cifras que se acomodan por ancho.
+  - **Formularios — estándar v2 (2026-11-18)** (bloque final de `globals.css`): etiqueta arriba
+    en color de texto (13 px/600) y ayuda en gris 12 px; campos con superficie propia
+    (`--field-bg`, `--field-border`, `--field-shadow`), 36 px y esquinas de 8 px, con el anillo
+    de foco de UX-63; opciones ("Se repite", rápidos de "Registrar") como fichas con borde (la
+    elegida en `--accent`); radios dibujados con los tokens; botones de diálogo rectangulares
+    (8 px), con una sola primaria `--ink`; encabezado y pie separados por una línea. El
+    **editor de objetos es un panel lateral** (`.fin-sheet`): el formulario a la izquierda y la
+    **"Vista previa"** a la derecha (resumen en palabras, próximos pagos y efecto en tu caja,
+    en vivo), con encabezado y botones fijos y una sola columna bajo 900 px. Los demás
+    diálogos (Registrar, Rec, estado de cuenta, onboarding) siguen centrados con el mismo
+    estilo de campo. **Sin pickers nativos**: todo selector es `Select`
+    (`apps/web/src/ui/select.tsx`, Radix Select con los tokens; ver
+    [forms-audit.md](forms-audit.md) §5), la hora es un `Select` de horarios, los checkbox y
+    radios se dibujan con los tokens y los números no muestran flechas del sistema. Un préstamo termina en una **fecha** (por defecto) o **después de N
+    pagos**; nunca "Nunca". Sus **intereses**: «Sin intereses» por defecto; «Con intereses»
+    pide la tasa anual (informativa: el pago ya los incluye; sirve para «Calcular pago» y la
+    avalancha). El inicio de lo que se repite se llama **«Próximo pago / cobro / cargo»** y una
+    fecha sin año ("15 dic") se toma a futuro. Un **gasto recurrente puede ser «Sin día fijo
+    (presupuesto)»** (`FinancialRecurrence.flexibleDay`, p. ej. $1,500 de salidas cada semana):
+    no se pide fecha; el periodo arranca hoy y el monto se descuenta al **inicio** de cada
+    semana / quincena / mes (lectura prudente para la caja). El motor lo expande como cualquier
+    recurrencia; `deriveRecurrence` lo conserva al estirar el objeto. Solo gastos (en un ingreso
+    sería optimista).
+  - **Un formulario abierto sobrevive a recargar** (`apps/web/src/finance/form-draft.ts`): el
+    editor de objetos (nuevo o editando, con "Termina" e "Intereses") y "Registrar" guardan lo
+    que llevas escrito en `sessionStorage` (`slicex.form-draft.v1`) mientras están
+    abiertos y se reabren igual tras recargar la pestaña; cerrarlos (Guardar, Cancelar, ×,
+    Escape) lo olvida. Lo restaurado sigue contando como "cambios sin guardar". Por pestaña:
+    otra pestaña o una visita nueva no revive un borrador viejo. Las pruebas que montan el
+    shell limpian también `sessionStorage`.
   - **Controles donde y cuando actúan:** los íconos de cada track (ojo / enfoque / candado /
     asa) solo en la fila con hover o selección, o cuando su estado está activo; sin contadores
     permanentes (solo un chip con selección múltiple); un banner a la vez; la lectura del
@@ -139,8 +236,18 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     de handlers "clic fuera" escritos a mano por componente.
   - **La rueda mueve todo lo que se desplaza:** las tiras laterales con scrollbar oculto (cifras
     del encabezado, barra de herramientas) usan `apps/web/src/ui/wheel-scroll-x.ts` (rueda
-    vertical → lateral). El clic derecho abre menú en cualquier punto del canvas: la línea entre
-    filas y los botones del track no se lo tragan (`trackChrome: false` en el hit-test).
+    vertical → lateral). **El clic derecho es el silenciador** (2026-11-18, `rightButton:
+    "mute"`): sin menú sobre el timeline; sostenido, el cursor es el de Excluir y cada objeto
+    cambia (cuenta ⇄ excluido) cada vez que el puntero ENTRA en él — pasar de nuevo sin soltar
+    lo regresa; un paso de deshacer y un aviso ("Excluidos de tus cifras…", "Vuelve a contar…").
+    El encabezado de una línea conserva su menú; el del objeto sigue en Shift+F10 / tecla Menú.
+    La línea entre filas y los botones del track no se tragan el botón derecho (`trackChrome:
+    false` en el hit-test).
+  - **Un objeto de una sola fecha mide lo que su nombre y su monto** a cualquier zoom
+    (`PlaylistLayoutOptions.clipMinWidthPx` ← `FinancialBridge.clipMinWidth`, con la misma
+    estimación de texto del renderer, `clipTextWidthPx`): crece el rect dibujado (hit-test y
+    renderer), no su fecha. Muy alejado, dos etiquetas cercanas de la misma línea pueden
+    encimarse (los carriles se calculan en días).
   - **En el canvas la rueda es vertical** (2026-11-09; `mouseWheel: "rows"` del controller):
     sube y baja entre líneas de evento como cualquier documento; Shift + rueda, la rueda
     inclinable o la rueda sobre la regla / el carril de Caja mueven el tiempo; Ctrl + rueda o

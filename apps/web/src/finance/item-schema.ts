@@ -52,11 +52,11 @@ export function startLabel(item: FinancialItem): string {
     case "installment-plan":
       return item.installmentsPaid > 0 ? "Abonos desde" : "Fecha de compra";
     case "card-purchase":
-      return isOnceRule(item) ? "Fecha de compra" : "Primer cargo";
+      return isOnceRule(item) ? "Fecha de compra" : "Próximo cargo";
     case "income":
-      return isOnceRule(item) ? "Fecha" : "Primer cobro";
+      return isOnceRule(item) ? "Fecha" : "Próximo cobro";
     default:
-      return isOnceRule(item) ? "Fecha" : "Primer pago";
+      return isOnceRule(item) ? "Fecha" : "Próximo pago";
   }
 }
 
@@ -168,12 +168,13 @@ export function itemFormSchema(cards: ReadonlyArray<CreditCardItem>, context: It
         message: "Escribe cuánto pagas al mes (o elige totalero)",
       });
     }
-    // UX-08: a repeating loan ends — after the payments you still owe.
+    // UX-08: a repeating loan ends — on its last payment's date, or after
+    // the payments you still owe (both store the same end date).
     if (item.kind === "loan" && item.recurrence.frequency !== "once" && item.recurrence.endDate === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["recurrence", "endDate"],
-        message: "Escribe cuántos pagos te faltan",
+        message: "Escribe la fecha del último pago o cuántos pagos te faltan",
       });
     }
     // UX-07: an MSI's end never cuts installments.

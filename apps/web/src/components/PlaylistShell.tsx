@@ -22,6 +22,8 @@ import {
   type FinancialDocument,
   type FinancialItem,
   type FinancialItemKind,
+  type Movement,
+  type MovementKind,
 } from "@slicex/core";
 import { PlaylistInspector } from "./PlaylistInspector";
 import type {
@@ -46,6 +48,21 @@ import { CommandBar } from "../finance/components/CommandBar";
 import { FuturesMenu, FuturesPeekChip } from "../finance/components/FuturesMenu";
 import { OnboardingDialog, WelcomeBanner } from "../finance/components/Onboarding";
 import { RecDialog } from "../finance/components/RecDialog";
+import { MovementCaptureDialog, type CaptureValues } from "../finance/components/MovementCaptureDialog";
+import {
+  clearFormDraft,
+  loadFormDraft,
+  saveFormDraft,
+  type EditorDraftUi,
+} from "../finance/form-draft";
+import { MovementsPanel, RECORDS_PANEL_ID, RecordMonthButton } from "../finance/components/MovementsPanel";
+import { DEFAULT_SEARCH_VIEW, type SearchView } from "../finance/movements-ui";
+import {
+  loadRecordsOpen,
+  loadRecordsView,
+  saveRecordsOpen,
+  saveRecordsView,
+} from "../finance/records-panel-state";
 import { StatementDialog } from "../finance/components/StatementDialog";
 import { ValleyCard } from "../finance/components/ValleyCard";
 import { NavControls, NavHelp } from "../finance/components/NavControls";
@@ -69,6 +86,7 @@ import {
   FinancialSummaryBar,
   FutureStrip,
   NEW_ITEM_OPTIONS,
+  revealClips,
   type PlanMenuActions,
 } from "../finance/components/FinancialSummaryBar";
 import { PlayheadReadout } from "../finance/components/PlayheadReadout";
@@ -80,6 +98,7 @@ import { AnnouncerProvider, type AnnounceFn } from "../ui/announcer";
 import { useFitInViewport } from "../ui/fit-in-viewport";
 import { focusIfPossible, useEscapeLayer, useOverlay } from "../ui/use-overlay";
 import { useWheelScrollX } from "../ui/wheel-scroll-x";
+import { Select } from "../ui/select";
 
 // Playback speed of the financial timeline: 1 beat = 1 day.
 const PLAYBACK_DAYS_PER_SECOND = 7;
@@ -106,6 +125,11 @@ function focusSoon(get: () => HTMLElement | null): void {
   });
 }
 
+/** The header's records button (the panel's × gives the focus back to it). */
+function recordsTriggerFocus(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(".fin-search-trigger");
+}
+
 /** The "Mi plan ▾" button, where the global actions of the banners live (UX-48). */
 function planTriggerFocus(): HTMLElement | null {
   return document.querySelector<HTMLElement>(".fin-plan__trigger");
@@ -121,9 +145,11 @@ function navHintSeen(): boolean {
 
 // Financial item editor: edit an existing item (double-click on its clip)
 // or create one from a draft ("+ Ingreso" & co.; added only on "Guardar").
+// `restore`: reopened after a reload with what was being written (form-draft.ts).
+type EditorRestore = { values: FinancialItem; ui?: EditorDraftUi };
 type EditorState =
-  | { mode: "edit"; id: string }
-  | { mode: "create"; draft: FinancialItem; placement?: FinancialPlacement }
+  | { mode: "edit"; id: string; restore?: EditorRestore }
+  | { mode: "create"; draft: FinancialItem; placement?: FinancialPlacement; restore?: EditorRestore }
   | null;
 
 // Local calendar date of the device ("today" for the projection). The only
@@ -203,7 +229,7 @@ const TOOL_BUTTONS: ReadonlyArray<{
   {
     id: "select",
     label: "Seleccionar",
-    hint: "Seleccionar (E): elige objetos; arrastrar uno cambia su fecha",
+    hint: "Seleccionar (E): elige objetos; arrastrar uno lo cambia de línea (sus fechas se cambian al abrirlo)",
     mode: "",
     icon: <path d="M3.5 1.5v10l2.8-2.6 1.9 4.1 1.6-.7-1.9-4.1 3.8-.2z" fill="currentColor" stroke="none" />,
   },
@@ -1034,40 +1060,36 @@ function PlaylistToolbar({ core }: ToolbarProps) {
         );
       })}
       </div>
-      <label
+      <div
         className="playlist-shell__snap"
-        title="Imán: a qué se pegan las fechas cuando arrastras (Retroceso lo quita o lo pone)"
+        // The header shows the magnet only: the mode is said here.
+        title={`Imán: ${SNAP_OPTIONS.find((option) => option.value === snapMode)?.label ?? "Otro"} · a qué se pegan las fechas cuando estiras o creas (Retroceso lo quita o lo pone)`}
       >
         {/* UX-17: a visible name at every width, and a magnet. */}
-        <span className="playlist-shell__snap-label">Imán</span>
+        <span className="playlist-shell__snap-label" id="playlist-shell-snap-label">
+          Imán
+        </span>
         <span className="playlist-shell__snap-field">
           <svg className="playlist-shell__snap-icon" viewBox="0 0 14 14" aria-hidden="true">
             <path d="M3 2.2v4.6a4 4 0 0 0 8 0V2.2" />
             <path d="M3 2.2h2.4v4.6M8.6 6.8V2.2H11" />
             <path d="M3 4.4h2.4M8.6 4.4H11" />
           </svg>
-          <select
-            value={snapMode}
-            onChange={(event) =>
-              core?.setSnapMode(event.target.value as PlaylistSnapMode)
-            }
+          <Select
+            size="sm"
             className="playlist-shell__snap-select"
-          >
-            {SNAP_VALUES.has(snapMode) ? null : (
-              // A mode set elsewhere (e.g. a keyboard shortcut) that the
-              // finance toolbar does not offer: shown, not selectable.
-              <option value={snapMode} disabled>
-                Otro
-              </option>
-            )}
-            {SNAP_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            aria-labelledby="playlist-shell-snap-label"
+            value={snapMode}
+            onValueChange={(next) => core?.setSnapMode(next as PlaylistSnapMode)}
+            // A mode set elsewhere (e.g. a keyboard shortcut) that the
+            // finance toolbar does not offer: shown, not selectable.
+            options={[
+              ...(SNAP_VALUES.has(snapMode) ? [] : [{ value: snapMode, label: "Otro", disabled: true }]),
+              ...SNAP_OPTIONS.map((option) => ({ value: option.value, label: option.label })),
+            ]}
+          />
         </span>
-      </label>
+      </div>
       {/* Only a multi-selection is worth a chip (how many will move). */}
       {selectedCount > 1 ? (
         <div
@@ -1147,7 +1169,8 @@ function ToolModePill({ core }: { core: PlaylistCore | null }) {
     return (
       <div className="fin-mode fin-mode--hint" role="status">
         <span className="fin-mode__text">
-          <strong>Con un objeto:</strong> arrastra para cambiar su fecha · su borde derecho cambia
+          <strong>Con un objeto:</strong> arrástralo a otro día o línea (con el candado cerrado
+          solo cambia de línea; clic en el candado lo abre o cierra) · su borde derecho cambia
           cuándo termina · la barrita de arriba, el monto · doble clic o Enter lo abre · Supr lo
           borra
         </span>
@@ -1210,19 +1233,42 @@ function describeCanvasEdit(event: PlaylistEditEvent, bridge: FinancialBridge): 
       const what = event.clipIds.length > 1 ? `${event.clipIds.length} objetos` : names;
       return from === to ? `Movido: ${what}${where}` : `Movido: ${what}, ${from} → ${to}${where}`;
     }
+    case "mute": {
+      // The app's word for mute: "Excluir" (the tool T, the row's eye). One
+      // sweep may do both (the silencer flips what it crosses).
+      const out = event.labels.filter((_, index) => event.muted[index]);
+      const back = event.labels.filter((_, index) => !event.muted[index]);
+      const parts: string[] = [];
+      if (out.length > 0) {
+        parts.push(
+          out.length === 1
+            ? `Excluido de tus cifras: ${namesForNotice(out)}`
+            : `Excluidos de tus cifras ${out.length}: ${namesForNotice(out)}`,
+        );
+      }
+      if (back.length > 0) {
+        parts.push(
+          back.length === 1
+            ? `Vuelve a contar: ${namesForNotice(back)}`
+            : `Vuelven a contar ${back.length}: ${namesForNotice(back)}`,
+        );
+      }
+      return parts.length > 0 ? parts.join(" · ") : null;
+    }
   }
 }
 
 function describeNudgeMove(info: PlaylistNudgeInfo, bridge: FinancialBridge): string {
+  const rows = `${Math.abs(info.deltaTracks)} ${Math.abs(info.deltaTracks) === 1 ? "línea" : "líneas"} ${
+    info.deltaTracks > 0 ? "abajo" : "arriba"
+  }`;
+  // Objects only change line (their dates are set in their form).
+  if (info.fromStart === info.toStart) {
+    return info.deltaTracks === 0 ? info.label : `${info.label}: ${rows}`;
+  }
   const from = formatDateShort(bridge.dateAtBeat(info.fromStart));
   const to = formatDateShort(bridge.dateAtBeat(info.toStart));
-  const where =
-    info.deltaTracks === 0
-      ? ""
-      : ` · ${Math.abs(info.deltaTracks)} ${Math.abs(info.deltaTracks) === 1 ? "línea" : "líneas"} ${
-          info.deltaTracks > 0 ? "abajo" : "arriba"
-        }`;
-  return `${info.label}: ${from} → ${to}${where}`;
+  return `${info.label}: ${from} → ${to}${info.deltaTracks === 0 ? "" : ` · ${rows}`}`;
 }
 
 // "Renta · −$8,000 /mes · 1 dic · línea 2".
@@ -1240,6 +1286,7 @@ function describeFocusedClip(
     formatDateShort(bridge.dateAtBeat(clip.start)),
     `línea ${lineOf(core, clipId) + 1}`,
   ];
+  if (clip.timeLocked === true) parts.push("fechas fijas");
   if (item.enabled === false) parts.push("excluido de tus cifras");
   return parts.join(" · ");
 }
@@ -1283,7 +1330,65 @@ export function PlaylistShell() {
   // the controller; the shell opens the financial editor for that item
   // (item.id === clip.id). "Nuevo" opens it on a draft.
   const [editor, setEditor] = React.useState<EditorState>(null);
-  const closeEditor = React.useCallback(() => setEditor(null), []);
+  // "Registrar" (G): what really happened. The records panel (F, right of
+  // the timeline): every money record, searchable — open by default, its
+  // open / folded state remembered by the browser, its view by the tab.
+  const [capture, setCapture] = React.useState<{
+    movement: Movement | null;
+    kind: MovementKind;
+    /** Reopened after a reload with what was being written. */
+    restore?: CaptureValues;
+  } | null>(null);
+  const [recordsOpen, setRecordsOpen] = React.useState(() =>
+    loadRecordsOpen(typeof window === "undefined" ? 0 : window.innerWidth),
+  );
+  const [searchView, setSearchView] = React.useState<SearchView>(() => loadRecordsView() ?? DEFAULT_SEARCH_VIEW);
+  const recordsQueryRef = React.useRef<HTMLInputElement | null>(null);
+  const toggleRecords = React.useCallback((open: boolean) => {
+    setRecordsOpen(open);
+    saveRecordsOpen(open);
+  }, []);
+  React.useEffect(() => {
+    saveRecordsView(searchView);
+  }, [searchView]);
+  // Closing a form forgets its draft (a reload brings back only open forms).
+  const closeEditor = React.useCallback(() => {
+    setEditor(null);
+    clearFormDraft();
+  }, []);
+  // A reload with a form open brings it back as it was, once the plan is
+  // loaded (an edited item / movement that is gone: nothing to reopen).
+  const formRestoredRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!bridge || !futures || formRestoredRef.current) return;
+    formRestoredRef.current = true;
+    const saved = loadFormDraft();
+    if (!saved) return;
+    if (saved.form === "capture") {
+      const movement = saved.movementId ? futures.getMovement(saved.movementId) : null;
+      if (saved.movementId && !movement) {
+        clearFormDraft();
+        return;
+      }
+      setCapture({ movement, kind: saved.values.kind, restore: saved.values });
+      return;
+    }
+    const restore = { values: saved.values, ...(saved.ui ? { ui: saved.ui } : {}) };
+    if (saved.mode === "edit") {
+      if (!bridge.getItem(saved.itemId)) {
+        clearFormDraft();
+        return;
+      }
+      setEditor({ mode: "edit", id: saved.itemId, restore });
+      return;
+    }
+    setEditor({
+      mode: "create",
+      draft: saved.values,
+      restore,
+      ...(saved.placement ? { placement: saved.placement } : {}),
+    });
+  }, [bridge, futures]);
   const openDraft = React.useCallback(
     (draft: FinancialItem) => setEditor({ mode: "create", draft }),
     [],
@@ -1418,6 +1523,9 @@ export function PlaylistShell() {
         stretchEnabled: false,
         // Tracks are endless (FL): empty rows always wait below the items
         // to draw, paste or drop on; rows are never removed by themselves.
+        // One-time events are tags as wide as their name and amount at any
+        // zoom (the bridge, created right below, sizes them).
+        clipMinWidthPx: (clip) => financial?.clipMinWidth(clip.id) ?? 0,
       });
       const bridgeInstance = new FinancialBridge(instance, doc);
       financial = bridgeInstance;
@@ -1455,6 +1563,31 @@ export function PlaylistShell() {
         escapeSelectsTool: true,
         toolCursors: FINANCE_TOOL_CURSORS,
         nudgeFeedbackMs: 1500,
+        // The lock on each object (top-right of its card): fixed dates =
+        // a drag only changes its line; free = it moves to another day too.
+        // Fixed by default when it has a start and an end (mapping.ts).
+        clipTimeLock: {
+          // Where the renderer drew it (before the title, following it).
+          rectOf: (clipId, out) => rendererRef.current?.getClipLockRect(clipId, out) ?? null,
+          hints: [
+            "Fechas libres: arrástralo a otro día. Clic para fijarlas",
+            "Fechas fijas: solo cambia de línea. Clic para soltarlas",
+          ],
+          onToggle: (clipId, locked) => {
+            const name = bridgeInstance.getItem(clipId)?.name ?? "El objeto";
+            const playlist = instance;
+            announceRef.current?.({
+              message: locked
+                ? `${name}: fechas fijas. Solo cambia de línea; sus fechas se cambian al abrirlo.`
+                : `${name}: fechas libres. Arrástralo a otro día.`,
+              ...(playlist ? { undo: () => playlist.undo() } : {}),
+            });
+          },
+        },
+        // The right button is the silencer: held, whatever it crosses flips
+        // (stops counting; crossed again later, counts again). No menu
+        // over the timeline (Shift+F10 / Menu opens the selected object's).
+        rightButton: "mute",
         describeNudge: (info) => describeNudgeMove(info, bridgeInstance),
         hoverCardDelayMs: 350,
         trackButtonHints: {
@@ -1516,6 +1649,8 @@ export function PlaylistShell() {
         // UX-39: the amount grip is a fixed target (where the hit-test is).
         clipLevelGrip: true,
         clipExtend: (clipId) => bridgeInstance.canExtend(clipId),
+        // The lock button on each card (pairs with the controller's clipTimeLock).
+        clipTimeLock: true,
         onError: (reason) => {
           setError(reason instanceof Error ? reason.message : "Renderer failed.");
         },
@@ -1673,7 +1808,8 @@ export function PlaylistShell() {
     (editor !== null ||
       onboarding === "dialog" ||
       recOpen ||
-      statement !== null) &&
+      statement !== null ||
+      capture !== null) &&
     bridge !== null;
 
   // Peeks — hold Q, hold A, or the "Asomarte" button (UX-20: the same
@@ -1770,6 +1906,20 @@ export function PlaylistShell() {
       }
       if (event.repeat || peekHolderRef.current !== null) return;
       const key = event.key.toLowerCase();
+      // G: write down what you just spent; F: find any record (the panel
+      // opens if folded, its search box takes the focus).
+      if (key === "g") {
+        event.preventDefault();
+        setCapture({ movement: null, kind: "expense" });
+        return;
+      }
+      if (key === "f") {
+        event.preventDefault();
+        toggleRecords(true);
+        // After the commit that mounts the panel (when it was folded).
+        requestAnimationFrame(() => focusIfPossible(recordsQueryRef.current));
+        return;
+      }
       if (key === "q") {
         const target = futures.peekTarget();
         const doc = target ? futures.docOf(target.id) : null;
@@ -1818,7 +1968,7 @@ export function PlaylistShell() {
       window.removeEventListener("paste", onPaste);
       endPeek();
     };
-  }, [bridge, futures, core, editorOpen, commandOpen, today, startPeek, endPeek]);
+  }, [bridge, futures, core, editorOpen, commandOpen, today, startPeek, endPeek, toggleRecords]);
 
   const createYear = React.useCallback(
     (doc: FinancialDocument) => {
@@ -1956,9 +2106,41 @@ export function PlaylistShell() {
           // UX-15/19: the futures button sits with "Nuevo" (never scrolled
           // away with the tools when the header is tight).
           actions={
-            futures ? (
-              <FuturesMenu bridge={bridge} futures={futures} inert={editorOpen} />
-            ) : null
+            <>
+              {futures ? (
+                <>
+                  {/* Open, the panel has its own "Registrar". */}
+                  {recordsOpen ? null : (
+                    <RecordMonthButton
+                      futures={futures}
+                      today={today}
+                      onRecord={() => setCapture({ movement: null, kind: "expense" })}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className="fin-icon-button fin-search-trigger"
+                    onClick={() => toggleRecords(!recordsOpen)}
+                    aria-label="Movimientos"
+                    aria-expanded={recordsOpen}
+                    aria-controls={recordsOpen ? RECORDS_PANEL_ID : undefined}
+                    title={
+                      recordsOpen
+                        ? "Ocultar tus movimientos"
+                        : "Mostrar tus movimientos: lo que pasó, ingresos, gastos, deudas y tarjetas (F)"
+                    }
+                    aria-keyshortcuts="F"
+                  >
+                    <svg viewBox="0 0 20 20" aria-hidden="true">
+                      <path d="M3.5 5h9M3.5 10h6M3.5 15h5" />
+                      <circle cx="14" cy="13" r="3" />
+                      <path d="m16.2 15.2 1.8 1.8" />
+                    </svg>
+                  </button>
+                  <FuturesMenu bridge={bridge} futures={futures} inert={editorOpen} />
+                </>
+              ) : null}
+            </>
           }
         />
       ) : null}
@@ -2000,7 +2182,7 @@ export function PlaylistShell() {
           tabIndex={0}
           role="application"
           aria-roledescription="línea de tiempo"
-          aria-label="Línea de tiempo. Alt+flechas recorre los objetos; Enter abre el seleccionado; Shift+F10 su menú; flechas mueven el día o el objeto; Supr borra; Esc vuelve a Seleccionar"
+          aria-label="Línea de tiempo. Alt+flechas recorre los objetos; Enter abre el seleccionado; Shift+F10 su menú; flechas izquierda y derecha mueven el día, o el objeto seleccionado si sus fechas están libres; arriba y abajo lo cambian de línea; Supr borra; Esc vuelve a Seleccionar"
           aria-describedby="fin-canvas-focus"
           onKeyDownCapture={(event) => {
             const key = event.key;
@@ -2037,6 +2219,7 @@ export function PlaylistShell() {
           // canvas only when that element is gone).
           <CommandBar
             bridge={bridge}
+            futures={futures}
             today={today}
             onClose={() => setCommandOpen(false)}
             fallbackFocus={getHost}
@@ -2162,6 +2345,34 @@ export function PlaylistShell() {
           ) : null}
         </div>
       </div>
+      {/* The records panel: a column at the right of the stage (it pushes
+          the canvas; the renderer's ResizeObserver follows). Below 900 px it
+          covers the stage instead (globals.css). */}
+      {recordsOpen && bridge && futures ? (
+        <MovementsPanel
+          bridge={bridge}
+          futures={futures}
+          today={today}
+          view={searchView}
+          onViewChange={setSearchView}
+          onFold={() => {
+            toggleRecords(false);
+            focusSoon(recordsTriggerFocus);
+          }}
+          onRecord={(kind) => setCapture({ movement: null, kind })}
+          onEditMovement={(movement) => setCapture({ movement, kind: movement.kind })}
+          onEditItem={(itemId) => {
+            if (bridge.getItem(itemId)) setEditor({ mode: "edit", id: itemId });
+          }}
+          onRevealItem={(itemId) => {
+            revealClips(bridge, [itemId]);
+            // The selected object is one key away (Enter, Supr, arrows).
+            focusIfPossible(getHost());
+          }}
+          inert={editorOpen}
+          queryRef={recordsQueryRef}
+        />
+      ) : null}
       </div>
       {editor && bridge ? (
         editor.mode === "edit" ? (
@@ -2169,6 +2380,10 @@ export function PlaylistShell() {
             key={"edit:" + editor.id}
             bridge={bridge}
             itemId={editor.id}
+            restore={editor.restore}
+            onDraftChange={(values, ui) =>
+              saveFormDraft({ form: "editor", mode: "edit", itemId: editor.id, values, ui })
+            }
             onClose={closeEditor}
             returnFocusFallback={getHost}
             today={today}
@@ -2176,6 +2391,7 @@ export function PlaylistShell() {
             // the statement comes back to this card's editor.
             onImportStatement={(cardId) => {
               setEditor(null);
+              clearFormDraft();
               setStatement({ cardId, text: "", returnTo: cardId });
             }}
           />
@@ -2185,6 +2401,16 @@ export function PlaylistShell() {
             bridge={bridge}
             draft={editor.draft}
             placement={editor.placement}
+            restore={editor.restore}
+            onDraftChange={(values, ui) =>
+              saveFormDraft({
+                form: "editor",
+                mode: "create",
+                values,
+                ui,
+                ...(editor.placement ? { placement: editor.placement } : {}),
+              })
+            }
             onClose={closeEditor}
             returnFocusFallback={getHost}
             today={today}
@@ -2208,6 +2434,25 @@ export function PlaylistShell() {
           currentCash={recCurrentCash}
           resultCash={recResult}
           fallbackFocus={() => recReviewRef.current ?? hostRef.current}
+        />
+      ) : null}
+      {capture && bridge && futures ? (
+        <MovementCaptureDialog
+          key={capture.movement?.id ?? "new"}
+          bridge={bridge}
+          futures={futures}
+          today={today}
+          movement={capture.movement}
+          initialKind={capture.kind}
+          restoreValues={capture.restore}
+          onValuesChange={(values) =>
+            saveFormDraft({ form: "capture", movementId: capture.movement?.id ?? null, values })
+          }
+          onClose={() => {
+            setCapture(null);
+            clearFormDraft();
+          }}
+          fallbackFocus={getHost}
         />
       ) : null}
       {statement && bridge ? (

@@ -86,6 +86,14 @@ export type PlaylistEditEvent =
       fromStart: number;
       toStart: number;
       deltaTracks: number;
+    }
+  | {
+      // A mute sweep (the Mute tool, or the right button with rightButton
+      // "mute") changed these clips; muted[i] is clipIds[i]'s new state.
+      kind: "mute";
+      clipIds: string[];
+      labels: string[];
+      muted: boolean[];
     };
 
 /** Clips a gesture in progress WILL affect on release (delete / slice). */
@@ -204,6 +212,32 @@ export interface PlaylistInteractionOptions {
   clipLevelGrip?: boolean;
   // Alt+← / Alt+→ moved the keyboard focus (the selection) to this clip.
   onClipFocus?: (clipId: string) => void;
+  // What moving clips may change. "free" (default, FL): time and row.
+  // "rows": the row only — a host whose clips' times come from elsewhere
+  // (e.g. dates set in a form) lets a drag move clips up / down between
+  // rows without ever shifting them in time; ←/→ then move the playhead
+  // even with a selection, ↑/↓ still move the selection between rows.
+  clipMoveAxis?: "free" | "rows";
+  // Clips carry a lock button (the renderer's clipTimeLock draws it before
+  // the title; `rectOf` = its getClipLockRect, where it was drawn). A click
+  // with Select / Draw toggles the clip's timeLocked (one undo entry) and
+  // tells `onToggle`; hovering it shows hints[locked ? 1 : 0]. A
+  // time-locked clip only moves between rows, never resizes (see
+  // PlaylistClip.timeLocked).
+  clipTimeLock?: {
+    rectOf: (clipId: string, out: PlaylistRect) => PlaylistRect | null;
+    hints?: readonly [unlocked: string, locked: string];
+    onToggle?: (clipId: string, locked: boolean) => void;
+  };
+  // What the right button does over the timeline. "tool" (default, FL): it
+  // depends on the tool (Draw / Paint / Mute delete the clips they sweep;
+  // nothing on empty space). "menu": it opens the context menu wherever it
+  // is pressed — a clip's or the empty space's — whatever the tool, and
+  // never deletes or mutes. "mute": it is the silencer — held, the cursor
+  // is the Mute tool's and every clip it crosses flips (muted ⇄ not; once
+  // per sweep), one undo entry, reported as a "mute" edit; no menu. The
+  // Zoom tool keeps "right button zooms out"; a row header keeps its menu.
+  rightButton?: "tool" | "menu" | "mute";
 }
 
 // Keyboard object roving (Alt+← / Alt+→): clips in date order, then row,
@@ -233,6 +267,13 @@ function hitClipId(hit: PlaylistHit): string | null {
     default:
       return null;
   }
+}
+
+// A dragged set with one time-locked clip only moves between rows (it
+// moves as a whole). O(n) per pointermove, no allocation.
+function anyTimeLocked(clips: readonly { timeLocked?: boolean }[]): boolean {
+  for (const clip of clips) if (clip.timeLocked === true) return true;
+  return false;
 }
 
 function sameIdSet(a: ReadonlySet<string>, b: readonly string[]): boolean {
@@ -326,10 +367,16 @@ function setCursor(
     return;
   }
 
+  // A mute sweep shows the Mute tool's cursor, whoever started it (the
+  // right button "silencer" too).
+  if (active?.kind === "mute-drag") {
+    host.style.cursor = cursors?.mute ?? getTool("mute").cursor;
+    return;
+  }
+
   if (
     active?.kind === "paint-drag" ||
     active?.kind === "delete-drag" ||
-    active?.kind === "mute-drag" ||
     active?.kind === "slip-drag" ||
     active?.kind === "slice-drag"
   ) {
@@ -399,6 +446,12 @@ function setCursor(
 
   if (hit.kind === "track-reorder-handle") {
     host.style.cursor = "grab";
+    return;
+  }
+
+  // The lock button of a clip (Select / Draw toggle it).
+  if (hit.kind === "clip-lock" && (toolId === "select" || toolId === "draw")) {
+    host.style.cursor = "pointer";
     return;
   }
 
@@ -638,6 +691,11 @@ function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
     return;
   }
 
+  if (hit.kind === "clip-lock") {
+    core.setHover({ kind: "clip-lock", clipId: hit.clip.id });
+    return;
+  }
+
   if (hit.kind === "automation-point") {
     core.setHover({
       kind: "automation-point",
@@ -702,6 +760,11 @@ export function createPlaylistInteractionController(
   const onPendingChange = options.onPendingChange;
   const onEdit = options.onEdit;
   const nudgeFeedbackMs = Math.max(0, options.nudgeFeedbackMs ?? 0);
+  const rowsOnly = options.clipMoveAxis === "rows";
+  const clipTimeLock = options.clipTimeLock;
+  const lockHints = clipTimeLock?.hints;
+  const rightButtonMenu = options.rightButton === "menu";
+  const rightButtonMute = options.rightButton === "mute";
   const hoverCardDelayMs = options.hoverCardDelayMs;
   const hoverTimeIndicator = options.hoverTimeIndicator === true;
   const clickToCreate = options.clickToCreate === true;
@@ -809,6 +872,15 @@ export function createPlaylistInteractionController(
     fromTrack: number;
     timer: ReturnType<typeof setTimeout> | null;
   } | null = null;
+  // The selection holds a time-locked clip (per key press, never per frame).
+  const selectionTimeLocked = (): boolean => {
+    const state = core.getState();
+    const ids = state.selection.clipIds;
+    if (ids.length === 0) return false;
+    const wanted = new Set(ids);
+    for (const clip of state.clips) if (clip.timeLocked === true && wanted.has(clip.id)) return true;
+    return false;
+  };
   const trackIndexOfClip = (clipId: string): number => {
     const state = core.getState();
     const clip = state.clips.find((candidate) => candidate.id === clipId);
@@ -856,6 +928,24 @@ export function createPlaylistInteractionController(
       ? { x: Math.max(metrics.trackHeaderWidth, view.rect.x), y: view.rect.y }
       : { x: metrics.trackHeaderWidth + 12, y: getTracksTop(metrics) + 24 };
     core.setTooltip({ kind: "hint", text, anchor });
+  };
+
+  // What the lock button does, under it (a fixed anchor: SET_TOOLTIP stays
+  // idempotent while the pointer rests).
+  const lockScratch = { x: 0, y: 0, width: 0, height: 0 };
+  const showLockHint = (clipId: string): void => {
+    if (!lockHints || !clipTimeLock) return;
+    const clip = core.getState().clips.find((candidate) => candidate.id === clipId);
+    const rect = clip ? clipTimeLock.rectOf(clipId, lockScratch) : null;
+    if (!clip || !rect) {
+      core.clearTooltip();
+      return;
+    }
+    core.setTooltip({
+      kind: "hint",
+      text: lockHints[clip.timeLocked === true ? 1 : 0],
+      anchor: { x: rect.x - 4, y: rect.y + rect.height + 30 },
+    });
   };
 
   // Tooltip text of the slice guide, recomputed only when it changes.
@@ -953,6 +1043,7 @@ export function createPlaylistInteractionController(
       ? { height: coarsePointer ? 24 : CLIP_LEVEL_GRIP_FINE_PX }
       : undefined,
     trackButtonSlop: options.trackButtonSlop,
+    clipLockRect: clipTimeLock?.rectOf,
   };
   // The right button ignores the thin track chrome (divisor, row buttons):
   // a press on a row line still opens the menu of what is under it.
@@ -1099,9 +1190,15 @@ export function createPlaylistInteractionController(
     // The level handle belongs to Select / Draw; every other tool sees the
     // clip itself.
     const levelTool = core.getState().tool === "select" || core.getState().tool === "draw";
+    const lockToggle =
+      rawHit.kind === "clip-lock" &&
+      event.button === 0 &&
+      levelTool &&
+      !(event.ctrlKey || event.metaKey || event.shiftKey || event.altKey);
     const hit: PlaylistHit =
       (rawHit.kind === "clip-level" && (!levelTool || event.button !== 0)) ||
-      (rawHit.kind === "clip-extend" && event.button !== 0)
+      (rawHit.kind === "clip-extend" && event.button !== 0) ||
+      (rawHit.kind === "clip-lock" && !lockToggle)
         ? { kind: "clip", clip: rawHit.clip, clipId: rawHit.clipId }
         : rawHit;
 
@@ -1147,6 +1244,17 @@ export function createPlaylistInteractionController(
       return;
     }
 
+    // The clip's lock button: fix / free its dates (one undo entry). The
+    // clip is not selected nor grabbed.
+    if (lockToggle && hit.kind === "clip-lock") {
+      const locked = hit.clip.timeLocked !== true;
+      core.setClipTimeLocked(hit.clipId, locked);
+      clipTimeLock?.onToggle?.(hit.clipId, locked);
+      showLockHint(hit.clipId);
+      event.preventDefault();
+      return;
+    }
+
     if (event.button === 2) {
       if (state.tool === "zoom") {
         zoomToolApplyOut({ core, metrics, point, hit, event });
@@ -1169,6 +1277,61 @@ export function createPlaylistInteractionController(
         core.removeAutomationPoint(hit.clip.id, hit.pointId);
         event.preventDefault();
         return;
+      }
+
+      // "mute": the silencer, whatever the tool — no menu over the timeline.
+      if (
+        rightButtonMute &&
+        (hit.kind === "clip" ||
+          hit.kind === "resize-left" ||
+          hit.kind === "resize-right" ||
+          hit.kind === "automation-body" ||
+          hit.kind === "empty")
+      ) {
+        const touchedClipIds = new Set<string>();
+        const changed = new Map<string, boolean>();
+        core.beginGesture();
+        if (hit.kind !== "empty") {
+          touchedClipIds.add(hit.clip.id);
+          changed.set(hit.clip.id, hit.clip.muted === true);
+          core.setClipsMuted([hit.clip.id], hit.clip.muted !== true);
+        }
+        activeGesture = {
+          kind: "mute-drag",
+          pointerId: event.pointerId,
+          lastPoint: { ...point },
+          muted: true,
+          toggle: true,
+          touchedClipIds,
+          changed,
+        };
+        host.setPointerCapture?.(event.pointerId);
+        setCursor(host, hit, activeGesture, state.tool, toolCursors);
+        event.preventDefault();
+        return;
+      }
+
+      // "menu": the context menu, whatever the tool (no delete / mute sweep).
+      if (rightButtonMenu) {
+        if (
+          hit.kind === "clip" ||
+          hit.kind === "resize-left" ||
+          hit.kind === "resize-right" ||
+          hit.kind === "automation-body"
+        ) {
+          core.openClipContextMenu(hit.clip.id, point);
+          event.preventDefault();
+          return;
+        }
+        if (hit.kind === "empty") {
+          const time = Math.max(
+            0,
+            core.snapTime(screenXToTime(state, point.x, metrics), event.altKey, state),
+          );
+          core.openBackgroundContextMenu(time, screenYToTrackIndex(state, point.y, metrics), point);
+          event.preventDefault();
+          return;
+        }
       }
 
       // Draw, Paint and Mute tools: RMB on clips deletes; drag keeps deleting.
@@ -1741,6 +1904,8 @@ export function createPlaylistInteractionController(
           anchor: point,
           time: tooltipBeats,
         });
+      } else if (hit.kind === "clip-lock" && lockHints) {
+        showLockHint(hit.clipId);
       } else if (trackButtonHints && isTrackButtonHit(hit)) {
         // What the header button does, anchored under the button (a fixed
         // anchor: SET_TOOLTIP stays idempotent while the pointer rests).
@@ -1901,7 +2066,12 @@ export function createPlaylistInteractionController(
       const currentTime = screenXToTime(state, point.x, metrics);
       const rawPrimaryStart =
         primary.start + (currentTime - gesture.startPointerTime);
-      const primaryStart = core.snapTime(rawPrimaryStart, event.altKey, state);
+      // "rows" (or a time-locked clip in the set): the time never moves,
+      // only the row.
+      const primaryStart =
+        rowsOnly || anyTimeLocked(gesture.originals)
+          ? primary.start
+          : core.snapTime(rawPrimaryStart, event.altKey, state);
       const deltaTime = primaryStart - primary.start;
       const currentTrackIndex = screenYToTrackIndex(state, point.y, metrics);
       const trackDelta = currentTrackIndex - gesture.startTrackIndex;
@@ -2282,7 +2452,36 @@ export function createPlaylistInteractionController(
         false,
       );
       if (ids.length > 0) {
-        core.setClipsMuted(ids, gesture.muted);
+        // Toggle: each clip entered flips; else they all take `muted`. The
+        // state before the sweep is kept for the report.
+        const wanted = new Set(ids);
+        const toMute: string[] = [];
+        const toCount: string[] = [];
+        for (const clip of state.clips) {
+          if (!wanted.has(clip.id)) continue;
+          if (!gesture.changed.has(clip.id)) gesture.changed.set(clip.id, clip.muted === true);
+          const next = gesture.toggle ? clip.muted !== true : gesture.muted;
+          if ((clip.muted === true) === next) continue;
+          (next ? toMute : toCount).push(clip.id);
+        }
+        if (toMute.length > 0) core.setClipsMuted(toMute, true);
+        if (toCount.length > 0) core.setClipsMuted(toCount, false);
+      }
+      // Toggle: only what is under the pointer now is "inside" — once left,
+      // entering it again flips it again (no flicker while resting on it).
+      if (gesture.toggle) {
+        gesture.touchedClipIds.clear();
+        for (const view of core.getPresentation().visibleClipViews) {
+          const rect = view.rect;
+          if (
+            point.x >= rect.x &&
+            point.x <= rect.x + rect.width &&
+            point.y >= rect.y &&
+            point.y <= rect.y + rect.height
+          ) {
+            gesture.touchedClipIds.add(view.clip.id);
+          }
+        }
       }
       gesture.lastPoint = { ...point };
       event.preventDefault();
@@ -2426,6 +2625,26 @@ export function createPlaylistInteractionController(
       }
       sliceLabel = "";
       reportPending(null, []);
+    }
+
+    // Mute sweep: the host hears what changed (a locked row kept its own;
+    // a clip flipped back to how it was is not news).
+    if (activeGesture.kind === "mute-drag" && onEdit && activeGesture.changed.size > 0) {
+      const before = activeGesture.changed;
+      const ids: string[] = [];
+      const labels: string[] = [];
+      const states: boolean[] = [];
+      for (const clip of core.getState().clips) {
+        const was = before.get(clip.id);
+        const now = clip.muted === true;
+        // Flipped twice (passed over again) = as it was: not reported.
+        if (was !== undefined && now !== was) {
+          ids.push(clip.id);
+          labels.push(clip.label);
+          states.push(now);
+        }
+      }
+      if (ids.length > 0) onEdit({ kind: "mute", clipIds: ids, labels, muted: states });
     }
 
     // Delete sweep: deferred = delete everything marked now (inside the
@@ -2971,7 +3190,7 @@ export function createPlaylistInteractionController(
       };
       if (horizontal) {
         const step = cmd ? metrics.beatsPerBar : event.shiftKey ? 4 : 1;
-        if (hasSelection) {
+        if (hasSelection && !rowsOnly && !selectionTimeLocked()) {
           nudgeWithFeedback(dir * step, 0);
         } else {
           core.nudgePlayPositionBy(dir * step);

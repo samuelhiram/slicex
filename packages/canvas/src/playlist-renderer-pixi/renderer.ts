@@ -1,4 +1,6 @@
 export * from "./renderer-impl";
+// Text width of a clip card (for hosts that size tags to their text).
+export { clipTextWidthPx } from "./clip-node-registry";
 // Theme palettes (read-only), for hosts that check their own colours
 // against the canvas surfaces (e.g. contrast tests of clip kinds).
 export {

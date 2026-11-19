@@ -94,6 +94,14 @@ body,
   --focus-ring-color: var(--accent);
   --focus-ring: 2px solid var(--focus-ring-color);
 
+  /* Forms (estándar v2): a field is its own surface with a fine border; the
+     side sheet's "Vista previa" sits on a recessed grey. */
+  --field-bg: #ffffff;
+  --field-border: #d4d7df;
+  --field-border-hover: #b5bac6;
+  --field-shadow: 0 1px 1px rgba(16, 24, 40, 0.05);
+  --sheet-aside: #f6f7f9;
+
   --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 0 0 1px rgba(16, 24, 40, 0.03);
   /* Cards: soft and diffuse, never a hard outline. */
   --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.06);
@@ -151,6 +159,13 @@ body,
   --placeholder: #9696a1;
   --focus-ring-color: var(--accent);
   --focus-ring: 2px solid var(--focus-ring-color);
+
+  /* Fields a step lighter than the dialog (not sunk into a darker well). */
+  --field-bg: #232329;
+  --field-border: #3a3a43;
+  --field-border-hover: #50505b;
+  --field-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+  --sheet-aside: #161619;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.35),
@@ -2850,6 +2865,31 @@ label.fin-ends__option {
   color: var(--subtle);
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* A range (the records panel's "Elegir fechas…"): the days between its
+   ends in a soft band; the ends keep the selected fill and round only
+   their outer side. */
+.fin-cal__day[data-in-range]:not([data-selected]) {
+  border-radius: 0;
+  background: var(--accent-soft);
+}
+
+.fin-cal__day[data-in-range][data-first-in-range]:not([data-last-in-range]) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.fin-cal__day[data-in-range][data-last-in-range]:not([data-first-in-range]) {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.fin-cal__hint {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
 }
 
 .fin-editor__suffix {
@@ -5745,4 +5785,1635 @@ kbd {
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
+}
+
+/* --- Lo que pasó: "Registrar" (G) and the records panel (F) ---------------
+   MovementCaptureDialog.tsx / MovementsPanel.tsx. Secondary controls in
+   the header (soft fills): "Nuevo" stays the one primary action. */
+.fin-record {
+  padding: 0 12px;
+}
+
+/* "Registrar gasto · este mes $1,000" (the panel folded): the month's
+   spending stays in sight, quieter than the action. */
+.fin-record__month {
+  margin-left: 2px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The panel's own "Registrar" (its one primary action). */
+.fin-records__record {
+  flex: none;
+  height: 32px;
+  margin-top: -2px;
+  padding: 0 12px 0 10px;
+}
+
+.fin-search-trigger svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* The capture: amount first and large, quick selectors under it. Anchored
+   at the top, not centred: when it grows (an error, "Pagado con" for an
+   expense) nothing above moves under the pointer. */
+.playlist-shell__modal.fin-capture {
+  align-self: start;
+  width: min(460px, calc(100vw - 16px));
+  margin-top: min(6vh, 48px);
+}
+
+.fin-capture__kind {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 3px;
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+
+.fin-capture__kind-option {
+  flex: 1 1 0;
+  height: 34px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.fin-capture__kind-option:hover {
+  color: var(--text);
+}
+
+.fin-capture__kind-option[data-checked="true"] {
+  background: var(--segment-active);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+.fin-capture__kind-option:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.fin-capture__amount-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fin-capture__sign {
+  flex: none;
+  color: var(--fin-negative-text);
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-capture[data-kind="income"] .fin-capture__sign {
+  color: var(--fin-positive);
+}
+
+.fin-editor.fin-capture input.fin-capture__amount {
+  height: 52px;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.fin-capture__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 16px;
+}
+
+.fin-repeat__preset.fin-capture__chip {
+  height: 30px;
+}
+
+.fin-capture__notes,
+.fin-capture input[type="time"] {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  box-shadow: var(--field-shadow);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.fin-capture input[type="time"] {
+  height: 36px;
+  padding: 0 12px;
+}
+
+.fin-capture__notes {
+  padding: 8px 12px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.fin-capture__notes::placeholder {
+  color: var(--placeholder);
+}
+
+.fin-capture__notes:focus,
+.fin-capture input[type="time"]:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.fin-capture__outcome {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The records panel (MovementsPanel.tsx): a card at the right of the
+   stage, about a quarter of the screen, that pushes the canvas (the
+   renderer's ResizeObserver follows; one resize per fold, no animated
+   width). Header and filters stay; the list scrolls with sticky day heads.
+   Narrower than 900 px it covers the stage from the right instead. */
+.fin-records {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: clamp(320px, 25vw, 560px);
+  min-height: 0;
+  margin-left: var(--gap-card, 8px);
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.fin-records__header {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px 10px 2px 18px;
+}
+
+.fin-records__heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fin-records__title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fin-records__figure {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 28px;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-records__figure[data-tone="negative"] {
+  color: var(--fin-negative-text);
+}
+
+.fin-records__caption {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-records__fold {
+  margin-top: -6px;
+}
+
+.fin-records__controls {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.fin-records__sections .fin-records__section {
+  flex: 1 1 0;
+  justify-content: center;
+}
+
+.fin-records__section:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.fin-records__query {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  box-shadow: var(--field-shadow);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.fin-records__query::placeholder {
+  color: var(--placeholder);
+}
+
+.fin-records__query:hover {
+  border-color: var(--field-border-hover);
+}
+
+.fin-records__query:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.fin-records__filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.fin-records__filter-row .fin-select.fin-records__select {
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
+
+/* The dates: ‹ [▦ Hoy · mié 18 nov] › Hoy — the day walker, or the picked
+   range (RecordsDateBar.tsx). One row, the middle button takes the room. */
+.fin-records__datebar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fin-records__step,
+.fin-records__today {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.fin-records__step {
+  width: 32px;
+  padding: 0;
+}
+
+.fin-records__step svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fin-records__today {
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fin-records__step:hover:not(:disabled),
+.fin-records__today:hover {
+  background: var(--surface-3);
+}
+
+.fin-records__step:disabled {
+  color: var(--subtle);
+  cursor: default;
+  opacity: 0.5;
+}
+
+.fin-records__date {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  box-shadow: var(--field-shadow);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fin-records__date:hover {
+  border-color: var(--field-border-hover);
+}
+
+.fin-records__date[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.fin-records__date svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.fin-records__date-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-records__step:focus-visible,
+.fin-records__today:focus-visible,
+.fin-records__date:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Plan kinds and categories: chips that wrap (a segmented control of five
+   would not fit a quarter of the screen). */
+.fin-records__kinds,
+.fin-records__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fin-records__kind,
+.fin-records__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.fin-records__kind:hover:not([data-active="true"]),
+.fin-records__chip:hover:not(:disabled, [data-active="true"]) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.fin-records__chip strong {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-records__kind[data-active="true"],
+.fin-records__chip[data-active="true"] {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.fin-records__chip[data-active="true"] strong {
+  color: var(--on-ink);
+}
+
+.fin-records__kind:focus-visible,
+.fin-records__chip:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.fin-records__chip:disabled {
+  cursor: default;
+}
+
+.fin-records__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 12px;
+}
+
+.fin-records__list:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.fin-records__days,
+.fin-records__rows,
+.fin-records__items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fin-records__day-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 18px 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fin-records__day-net {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-records__row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 18px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.fin-records__row-main {
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+button.fin-records__row-main:hover {
+  background: var(--hover);
+}
+
+button.fin-records__row-main:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.fin-records__line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fin-records__name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fin-records__concept {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fin-records__amount {
+  flex: none;
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-records__amount[data-tone="negative"] {
+  color: var(--fin-negative-text);
+}
+
+.fin-records__amount[data-tone="positive"] {
+  color: var(--fin-positive);
+}
+
+.fin-records__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-records__notes {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.fin-records__pill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.fin-records__pill--quiet {
+  background: var(--surface-3);
+  color: var(--muted);
+}
+
+/* "En tu plan": name + amount (editable in place), the cadence, then the
+   next date with the quick actions. */
+.fin-records__item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.fin-records__item:last-child {
+  border-bottom: 0;
+}
+
+.fin-records__item[data-included="false"] .fin-records__concept {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.fin-records__foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.fin-records__foot > .fin-records__meta {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fin-records__toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fin-records__toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.fin-records__action {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fin-records__action:hover {
+  background: var(--hover);
+}
+
+.fin-records__action:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.fin-records__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin: 36px 18px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.fin-records__empty p {
+  max-width: 300px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.fin-records__empty .fin-records__empty-title {
+  margin-bottom: -6px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fin-records__empty .fin-records__empty-hint {
+  font-size: 12px;
+}
+
+/* The header's records button shows when the panel is open. */
+.fin-search-trigger[aria-expanded="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+@media (max-width: 899.98px) {
+  .fin-records {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 9;
+    width: min(100%, 380px);
+    margin-left: 0;
+    box-shadow: var(--shadow-pop);
+  }
+}
+
+/* The plan's amounts, edited in place. */
+.fin-records__inline {
+  width: 96px;
+  padding: 2px 4px;
+  border: 0;
+  border-bottom: 1px dashed var(--muted);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  cursor: text;
+}
+
+.fin-records__inline:hover {
+  border-bottom-style: solid;
+  border-bottom-color: var(--text);
+}
+
+.fin-records__inline:focus,
+.fin-records__inline:focus-visible {
+  border-bottom-color: transparent;
+  border-radius: 4px;
+  outline: var(--focus-ring);
+  outline-offset: 0;
+}
+
+.fin-records__inline[aria-invalid="true"] {
+  border-bottom-color: var(--fin-negative);
+  color: var(--fin-negative-text);
+}
+
+@media (max-width: 480px) {
+  .fin-record__month {
+    display: none;
+  }
+
+  .fin-record__words {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .fin-record {
+    width: 36px;
+    padding: 0;
+  }
+}
+
+/* ==========================================================================
+   Formularios — estándar v2 (2026-11-18). One look for every form: the item
+   editor (a side sheet with its live "Vista previa"), "Registrar", Rec, the
+   statement paste and the onboarding.
+   - Labels above, in the text colour; help in muted 12 px.
+   - Fields are their own surface (--field-bg) with a fine border and a hair
+     of shadow, 36 px, 8 px corners; the 2 px focus ring of UX-63 stays.
+   - Choices ("Se repite", the quick selectors) are tiles: outlined, the
+     chosen one in the accent (no white blocks on the dark theme).
+   - Dialog buttons are rectangles (8 px); still ONE filled primary (--ink).
+   - Header and footer divided from the body by a hairline.
+   Later in the file than the rules it refines: same selectors win by order.
+   ========================================================================== */
+
+/* --- Dialog frame ------------------------------------------------------- */
+.playlist-shell__modal > .playlist-shell__modal-header {
+  padding: 16px 16px 14px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.playlist-shell__modal .fin-editor__title {
+  font-size: 17px;
+}
+
+.playlist-shell__modal-body.fin-editor__body,
+.fin-rec .playlist-shell__modal-body,
+.fin-statement .playlist-shell__modal-body {
+  padding: 20px 24px 24px;
+}
+
+.fin-editor__actions,
+.fin-rec .fin-editor__actions,
+.fin-statement .fin-editor__actions {
+  margin: 20px -24px -24px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--line);
+}
+
+/* --- Labels, help, sections --------------------------------------------- */
+.fin-editor__label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.fin-editor__optional {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.fin-editor__hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fin-editor__section {
+  gap: 18px 16px;
+  padding-top: 20px;
+}
+
+.fin-editor__section--head,
+.fin-editor__section--outcome {
+  padding-top: 0;
+}
+
+.fin-editor__section-title,
+h3.fin-editor__section-title {
+  margin-bottom: -4px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+/* --- Fields -------------------------------------------------------------- */
+.fin-editor input[type="text"],
+.fin-editor input[type="number"],
+.fin-editor input[type="time"],
+.fin-editor select,
+.fin-rec input[type="text"],
+.fin-rec .fin-rec__actual select,
+.fin-rec .fin-rec__actual input,
+.fin-onboarding input[type="text"],
+.fin-onboarding select {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background-color: var(--field-bg);
+  box-shadow: var(--field-shadow);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.fin-rec .fin-rec__actual select,
+.fin-rec .fin-rec__actual input {
+  height: 32px;
+  font-size: 13px;
+}
+
+.fin-editor select,
+.fin-onboarding select,
+.fin-rec .fin-rec__actual select {
+  padding-right: 32px;
+}
+
+.fin-editor input[type="text"]:hover,
+.fin-editor input[type="number"]:hover,
+.fin-editor select:hover,
+.fin-rec input[type="text"]:hover,
+.fin-onboarding input[type="text"]:hover,
+.fin-onboarding select:hover,
+.fin-capture__notes:hover,
+.fin-capture input[type="time"]:hover {
+  border-color: var(--field-border-hover);
+}
+
+.fin-editor input[type="text"]:focus,
+.fin-editor input[type="number"]:focus,
+.fin-editor select:focus,
+.fin-rec input[type="text"]:focus,
+.fin-onboarding input[type="text"]:focus,
+.fin-onboarding select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.fin-editor input:disabled,
+.fin-editor select:disabled {
+  box-shadow: none;
+  opacity: 0.55;
+}
+
+.fin-statement__input {
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background-color: var(--field-bg);
+  box-shadow: var(--field-shadow);
+}
+
+.fin-ends input[type="radio"],
+.fin-editor input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+/* --- Choices as tiles ("Se repite", quick selectors) ---------------------- */
+.fin-repeat__presets {
+  gap: 8px;
+}
+
+.fin-repeat__preset {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  box-shadow: var(--field-shadow);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.fin-repeat__preset:hover {
+  border-color: var(--field-border-hover);
+  background: var(--field-bg);
+}
+
+.fin-repeat__preset[data-checked="true"],
+.fin-repeat__preset[data-checked="true"]:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* --- Buttons -------------------------------------------------------------- */
+.fin-editor__button {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  box-shadow: var(--field-shadow);
+  font-size: 13px;
+}
+
+.fin-editor__button:hover:not(:disabled) {
+  border-color: var(--field-border-hover);
+  background: var(--field-bg);
+}
+
+.fin-editor__button--primary,
+.fin-editor__button--primary:hover:not(:disabled) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.fin-editor__button--primary:hover:not(:disabled) {
+  border-color: var(--ink-hover);
+  background: var(--ink-hover);
+}
+
+.fin-editor__button--danger {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.fin-editor__button--danger:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--fin-negative-soft);
+}
+
+/* --- Readback / effect (the form's answer) -------------------------------- */
+.fin-readback {
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+
+.fin-readback__sentence {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.fin-readback__date {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  background: var(--raised);
+}
+
+/* ==========================================================================
+   The item editor as a side sheet (FinancialEditorModal: .fin-sheet): the
+   form on the left, "Vista previa" on the right — the schedule in words,
+   the next dates and what it does to your cash, live — header and actions
+   fixed, each column scrolling on its own. One column under 900 px.
+   ========================================================================== */
+.playlist-shell__modal-overlay.fin-sheet-overlay {
+  grid-template-rows: minmax(0, 1fr);
+  place-items: stretch end;
+  padding: var(--gap-card);
+  animation: fin-fade-in 160ms ease-out;
+}
+
+.playlist-shell__modal.fin-sheet {
+  display: flex;
+  flex-direction: column;
+  width: min(1080px, calc(100vw - 2 * var(--gap-card)));
+  min-width: 0;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  overflow: hidden;
+  animation: fin-sheet-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.fin-sheet > .playlist-shell__modal-header {
+  flex: none;
+  position: static;
+  padding: 18px 18px 16px 28px;
+}
+
+.fin-sheet .fin-editor__title {
+  font-size: 19px;
+}
+
+.playlist-shell__modal-body.fin-sheet__body {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  padding: 0;
+}
+
+.fin-sheet__main {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 28px 32px;
+  overscroll-behavior: contain;
+}
+
+.fin-sheet__main > .fin-editor__grid,
+.fin-sheet__main > .fin-editor__locked {
+  max-width: 660px;
+}
+
+.fin-sheet__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px;
+  border-left: 1px solid var(--line);
+  background: var(--sheet-aside);
+  overscroll-behavior: contain;
+}
+
+.fin-sheet__preview-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.fin-sheet__preview-hint {
+  margin: -6px 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fin-sheet__preview .fin-editor__section--outcome {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.fin-sheet__preview .fin-readback {
+  background: var(--raised);
+}
+
+.fin-sheet__preview .fin-readback__date {
+  background: var(--surface-2);
+}
+
+/* What it does to your cash closes the preview, like a total. */
+.fin-sheet__preview .fin-effect {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.fin-sheet .fin-editor__actions {
+  position: static;
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 14px 24px;
+  border-top: 1px solid var(--line);
+  background: var(--raised);
+}
+
+@keyframes fin-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes fin-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playlist-shell__modal-overlay.fin-sheet-overlay,
+  .playlist-shell__modal.fin-sheet {
+    animation: none;
+  }
+}
+
+/* One column: the preview follows the form in the same scroll. */
+@media (max-width: 900px) {
+  .playlist-shell__modal-body.fin-sheet__body {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .fin-sheet__main,
+  .fin-sheet__preview {
+    flex: none;
+    overflow: visible;
+  }
+
+  .fin-sheet__main {
+    padding: 20px 20px 24px;
+  }
+
+  .fin-sheet__preview {
+    padding: 20px;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .fin-sheet .fin-editor__actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin-top: auto;
+    padding: 12px 20px;
+  }
+
+  .fin-sheet > .playlist-shell__modal-header {
+    padding: 14px 14px 12px 20px;
+  }
+}
+
+/* Radios drawn with the tokens (the native ones are white discs on the dark
+   theme): a ring on the field surface, the chosen one an accent dot. */
+.fin-editor input[type="radio"],
+.fin-onboarding input[type="radio"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--field-border-hover);
+  border-radius: 50%;
+  background: var(--field-bg);
+  box-shadow: var(--field-shadow);
+  cursor: pointer;
+  appearance: none;
+}
+
+.fin-editor input[type="radio"]:checked,
+.fin-onboarding input[type="radio"]:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--field-bg);
+}
+
+.fin-editor input[type="radio"]:disabled,
+.fin-onboarding input[type="radio"]:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.fin-capture__outcome {
+  border: 1px solid var(--line);
+}
+
+/* The onboarding's group titles read like every other label. */
+.fin-onboarding__label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* A loan's "Intereses": the tiles, then (with interest) its rate — half a
+   row, like the other amounts. */
+.fin-editor__interest > .fin-editor__field {
+  max-width: 320px;
+  margin-top: 4px;
+}
+
+/* ==========================================================================
+   Controles — estándar v2: THE select (ui/select.tsx, Radix Select in the
+   tokens), checkboxes drawn with the tokens, number fields without the OS
+   spinners. No native picker shows anywhere.
+   ========================================================================== */
+
+/* The trigger: a field like any other. */
+.fin-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px 0 12px;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  box-shadow: var(--field-shadow);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.fin-select[data-size="sm"] {
+  width: auto;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  font-size: 13px;
+}
+
+.fin-select:hover:not([data-disabled]) {
+  border-color: var(--field-border-hover);
+}
+
+.fin-select:focus-visible {
+  border-color: var(--accent);
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.fin-select[data-state="open"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.fin-select[aria-invalid="true"] {
+  border-color: var(--fin-negative);
+}
+
+.fin-select[data-disabled] {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.fin-select__value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fin-select[data-placeholder] .fin-select__value {
+  color: var(--placeholder);
+}
+
+.fin-select__chevron {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.fin-select[data-state="open"] .fin-select__chevron {
+  transform: rotate(180deg);
+}
+
+.fin-select__chevron svg,
+.fin-select__scroll svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The list: a floating card over everything (dialogs included). */
+.fin-select__content {
+  z-index: 1000;
+  min-width: max(var(--radix-select-trigger-width), 160px);
+  max-width: min(420px, calc(100vw - 16px));
+  max-height: min(var(--radix-select-content-available-height), 340px);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-family: var(--font-sans);
+  transform-origin: var(--radix-select-content-transform-origin);
+  animation: fin-select-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes fin-select-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fin-select__content {
+    animation: none;
+  }
+}
+
+.fin-select__viewport {
+  padding: 4px;
+}
+
+.fin-select__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.3;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+
+.fin-select__content[data-size="sm"] .fin-select__item {
+  min-height: 30px;
+  font-size: 13px;
+}
+
+.fin-select__item[data-highlighted] {
+  background: var(--hover);
+}
+
+.fin-select__item[data-state="checked"] {
+  font-weight: 600;
+}
+
+.fin-select__item[data-disabled] {
+  color: var(--muted);
+  cursor: default;
+}
+
+.fin-select__item-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.fin-select__hint {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.fin-select__check {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--accent);
+}
+
+.fin-select__check svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fin-select__scroll {
+  display: grid;
+  place-items: center;
+  height: 22px;
+  color: var(--muted);
+  cursor: default;
+}
+
+.fin-select__scroll:not(.fin-select__scroll--down) svg {
+  transform: rotate(180deg);
+}
+
+/* Inline uses: the day control and the repeat unit keep their width. */
+.fin-editor__payday .fin-select,
+.fin-day-select.fin-select {
+  width: auto;
+  min-width: 92px;
+}
+
+.fin-repeat__custom .fin-select {
+  width: auto;
+  min-width: 96px;
+}
+
+.fin-navctl__span-wrap {
+  display: inline-flex;
+}
+
+.fin-navctl__span.fin-select {
+  height: 26px;
+  border-color: transparent;
+  background: var(--surface-2);
+  box-shadow: none;
+  font-weight: 600;
+}
+
+.playlist-shell__snap-field .playlist-shell__snap-select.fin-select {
+  height: 30px;
+  padding-left: 28px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 600;
+}
+
+.playlist-shell__snap-field .playlist-shell__snap-select.fin-select:hover {
+  background: var(--hover);
+}
+
+/* Checkboxes drawn with the tokens (the native one is a white square on
+   the dark theme). */
+input[type="checkbox"] {
+  display: inline-grid;
+  flex: none;
+  place-content: center;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--field-border-hover);
+  border-radius: 4px;
+  background: var(--field-bg);
+  box-shadow: var(--field-shadow);
+  cursor: pointer;
+  appearance: none;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+input[type="checkbox"]::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  transform: scale(0);
+  box-shadow: inset 1em 1em var(--on-accent);
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+  transition: transform 120ms ease;
+}
+
+input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+input[type="checkbox"]:checked::before {
+  transform: scale(1);
+}
+
+input[type="checkbox"]:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* Number fields: typed, never spun (no OS spinners). */
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+/* "≈ 5 meses" is the current span (no preset matches it), not a hint. */
+.fin-navctl__span.fin-select[data-placeholder] .fin-select__value {
+  color: var(--text);
+}
+
+/* ==========================================================================
+   Header v3 (2026-11-18): three calm groups instead of eleven controls in
+   a row — the plan's state (verdict + today's cash + "Más cifras", where
+   the reserve now lives), the tools (icons only, like Figma: name and key
+   in the tooltip and the accessible name; the magnet joins them as one
+   more icon) and the actions (Buscar, Registrar, futures, Nuevo). Nothing
+   says "all is fine" twice. Later than every header rule on purpose.
+   ========================================================================== */
+
+/* No alerts: the verdict already says it. The chip stays the same button
+   (UX-26), only hidden, and comes back with the first alert. */
+.fin-summary__chip[data-state="ok"] {
+  display: none;
+}
+
+/* Tools: icons only, square; the active one keeps its accent ring. */
+.fin-summary .playlist-shell__tool-label,
+.fin-summary .playlist-shell__tool[data-active="true"] .playlist-shell__tool-label,
+.fin-summary .playlist-shell__tool-hotkey,
+.fin-summary .playlist-shell__tool[data-active="true"] .playlist-shell__tool-hotkey {
+  display: none;
+}
+
+.fin-summary .playlist-shell__tool,
+.fin-summary .playlist-shell__tool[data-active="true"] {
+  justify-content: center;
+  width: 32px;
+  padding: 0;
+}
+
+.fin-summary .playlist-shell__tool-icon {
+  width: 15px;
+  height: 15px;
+}
+
+/* The magnet: one more icon of the tool group (its mode is in the
+   tooltip and in the list); "Imán" stays its accessible name. */
+.fin-summary .playlist-shell__snap {
+  margin-left: 2px;
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
+}
+
+.fin-summary .playlist-shell__snap .playlist-shell__snap-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.fin-summary .playlist-shell__snap-field .playlist-shell__snap-select.fin-select {
+  gap: 2px;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  padding: 0 6px 0 30px;
+}
+
+.fin-summary .playlist-shell__snap-select .fin-select__value {
+  display: none;
+}
+
+/* Futures: on the main plan (and only one future), just its icon. */
+.fin-futures__trigger[data-quiet="true"] {
+  padding: 0 9px;
+}
+
+.fin-futures__trigger[data-quiet="true"] .fin-futures__name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+}
+
+/* Header v3 layout: the state group stays together (today's cash, then
+   "Más cifras" right after it, never pushed away); from 1200 px the tools
+   sit centred between the state and the actions. Phones keep their own
+   three-row layout. */
+@media (min-width: 481px) {
+  .playlist-shell--finance .fin-summary__metrics {
+    flex: 0 1 auto;
+  }
+}
+
+/* The figures that live in "Más cifras" at every width (BAR_METRICS in
+   FinancialSummaryBar.tsx keeps only "start" in the row) take no room: they
+   stay in the DOM (their descriptions) but out of the flow. */
+.fin-summary__metrics > [data-metric="lowest"],
+.fin-summary__metrics > [data-metric="horizon"],
+.fin-summary__metrics > [data-metric="debt"],
+.fin-summary__metrics > [data-metric="next"] {
+  display: none;
+}
+
+@media (min-width: 1200px) {
+  .playlist-shell--finance .fin-summary > .playlist-shell__bar {
+    margin-right: auto;
+    margin-left: auto;
+  }
 }

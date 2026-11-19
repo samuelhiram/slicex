@@ -68,6 +68,7 @@ export const drawTool: PlaylistTool = {
           start: clip.start,
           trackIndex: getTrackIndexById(state, clip.trackId),
           lane: clip.lane ?? 0,
+          ...(clip.timeLocked === true ? { timeLocked: true } : null),
         })),
       };
     }

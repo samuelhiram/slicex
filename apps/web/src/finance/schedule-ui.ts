@@ -254,6 +254,8 @@ export function withFrequencyParts(
   const n = recurrenceInterval({ interval: every });
   const next: FinancialRecurrence = { ...rule };
   delete next.interval;
+  // A single occurrence has a date by definition: no "sin día fijo".
+  if (unit === "once") delete next.flexibleDay;
   if (unit === "once") next.frequency = "once";
   else if (unit === "semimonthly") next.frequency = "semimonthly";
   else if (unit === "months") {
@@ -339,7 +341,29 @@ const MONTH_NAMES = [
 ];
 
 /** "cada 6 meses, el día 15" / "cada quincena (15 y fin de mes)" / "cada 10 días" … */
+/**
+ * A budget with no fixed day (FinancialRecurrence.flexibleDay): how often
+ * ("cada semana") and the period it is set aside for ("semana").
+ */
+export function budgetPeriod(rule: FinancialRecurrence): { every: string; period: string } {
+  const n = recurrenceInterval(rule);
+  switch (rule.frequency) {
+    case "daily":
+      return n > 1 ? { every: `cada ${n} días`, period: `periodo de ${n} días` } : { every: "cada día", period: "día" };
+    case "weekly":
+      return { every: "cada semana", period: "semana" };
+    case "biweekly":
+      return { every: "cada 14 días", period: "periodo de 14 días" };
+    case "semimonthly":
+      return { every: "cada quincena", period: "quincena" };
+    default:
+      if (n === 12) return { every: "cada año", period: "año" };
+      return n > 1 ? { every: `cada ${n} meses`, period: `periodo de ${n} meses` } : { every: "cada mes", period: "mes" };
+  }
+}
+
 export function cadenceText(rule: FinancialRecurrence): string {
+  if (rule.flexibleDay === true && rule.frequency !== "once") return `${budgetPeriod(rule).every}, sin día fijo`;
   const every = recurrenceInterval(rule);
   switch (rule.frequency) {
     case "once":

@@ -16,6 +16,7 @@
     "@mantine/dates": "9.7.3",
     "@mantine/form": "9.7.3",
     "@mantine/hooks": "9.7.3",
+    "@radix-ui/react-select": "2.4.1",
     "@sentry/cloudflare": "^9.0.0",
     "@sentry/react": "^9.0.0",
     "@slicex/canvas": "workspace:^",

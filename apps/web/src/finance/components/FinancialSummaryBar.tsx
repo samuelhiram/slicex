@@ -105,6 +105,9 @@ export const NEW_ITEM_OPTIONS: ReadonlyArray<{
 export const METRIC_KEYS = ["start", "lowest", "horizon", "debt", "next"] as const;
 export type MetricKey = (typeof METRIC_KEYS)[number];
 
+/** The figures the header row shows (header v3): today's cash only. */
+const BAR_METRICS: ReadonlySet<MetricKey> = new Set<MetricKey>(["start"]);
+
 const NO_SUBSCRIBE = () => () => {};
 const ZERO = () => 0;
 
@@ -165,7 +168,7 @@ function useOverflowKeys(
  * Selects the given clips and scrolls the first one (by date) into view.
  * Click handler only (O(clips) once).
  */
-function revealClips(bridge: FinancialBridgeApi, ids: readonly string[]): void {
+export function revealClips(bridge: FinancialBridgeApi, ids: readonly string[]): void {
   const core = bridge.core;
   if (ids.length === 0) return;
   core.setClipSelection([...ids]);
@@ -271,7 +274,14 @@ export function FinancialSummaryBar({
   const finalState =
     projection.finalCash < 0 ? "negative" : projection.finalCash < reserve ? "low" : "ok";
   const end = fmtDate(projection.endDate);
-  const overflow = useOverflowKeys(metricsRef, `${revision}:${simulated}`);
+  // Header v3: the bar keeps ONE figure, today's cash (and only while it
+  // fits); every other number lives in "Más cifras" at every width — the
+  // verdict already says the lowest point, the rest is one click away.
+  const measured = useOverflowKeys(metricsRef, `${revision}:${simulated}`);
+  const overflow = React.useMemo(
+    () => METRIC_KEYS.filter((key) => !BAR_METRICS.has(key) || measured.includes(key)),
+    [measured],
+  );
   const isHidden = (key: MetricKey) => overflow.includes(key);
 
   // What each number means + what yours say now (hover / focus card).
@@ -362,8 +372,10 @@ export function FinancialSummaryBar({
   const simMark = simulated ? <span className="fin-summary__sim"> (simulación)</span> : null;
 
   // One render function per number: the bar shows the ones that fit, "Más
-  // cifras" the rest (a second instance, same data).
-  const renderStart = (inMore: boolean) => (
+  // cifras" the rest (a second instance, same data). The bar keeps ONE
+  // editable figure (today's cash); the reserve is a setting: always in
+  // "Más cifras" (header v3, less to read at a glance).
+  const renderCash = (inMore: boolean) => (
     <>
       <div
         className="fin-summary__metric fin-summary__metric--editable"
@@ -385,6 +397,10 @@ export function FinancialSummaryBar({
           <PencilIcon />
         </span>
       </div>
+    </>
+  );
+  const renderReserve = (inMore: boolean) => (
+    <>
       <div
         className="fin-summary__metric fin-summary__metric--editable"
         {...(inMore ? { "aria-describedby": help.reserve.id } : help.reserve.triggerProps)}
@@ -473,7 +489,7 @@ export function FinancialSummaryBar({
           data-overflow={isHidden("start") ? "true" : undefined}
           inert={isHidden("start")}
         >
-          {renderStart(false)}
+          {renderCash(false)}
         </div>
         <button
           type="button"
@@ -554,14 +570,13 @@ export function FinancialSummaryBar({
       {help.horizon.tip}
       {help.debt.tip}
       {help.next.tip}
-      {overflow.length > 0 ? (
-        <MoreMetrics count={overflow.length + (overflow.includes("start") ? 1 : 0)} inert={inert}>
+      {
+        <MoreMetrics count={overflow.length + 1} inert={inert}>
           <dl className="fin-more__list">
-            {overflow.includes("start") ? (
-              <div className="fin-more__start" role="group" aria-label="Punto de partida">
-                {renderStart(true)}
-              </div>
-            ) : null}
+            <div className="fin-more__start" role="group" aria-label="Punto de partida">
+              {overflow.includes("start") ? renderCash(true) : null}
+              {renderReserve(true)}
+            </div>
             {overflow.includes("lowest") ? (
               <MoreRow
                 label={<>Tu punto más bajo{simMark}</>}
@@ -604,7 +619,7 @@ export function FinancialSummaryBar({
             ) : null}
           </dl>
         </MoreMetrics>
-      ) : null}
+      }
       {tools}
       <div className="fin-summary__spacer" />
       <div className="fin-summary__actions">

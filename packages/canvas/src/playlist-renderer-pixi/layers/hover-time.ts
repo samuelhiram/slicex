@@ -1,7 +1,9 @@
-// Hover-time indicator: a faint vertical line at the beat cell (a day, for
-// the finance host) under the pointer, across the overview lane and the
-// rows, plus the cell's name in a pill on the ruler's lower tier — where
-// dates are read, never over the curve or the clips' text. Reads
+// Hover-time indicator: a faint vertical line at the START of the beat cell
+// (a day, for the finance host) under the pointer — the same line as the
+// playhead, the clips' event marks and the steps of the curve — across the
+// overview lane and the rows, plus the cell's name in a pill (centred on the
+// cell) on the ruler's lower tier: where dates are read, never over the
+// curve or the clips' text. Reads
 // state.hoverTime (set by the controller with `hoverTimeIndicator`).
 //
 // Its own Graphics + text layer above the overview lane, cleared every frame
@@ -68,7 +70,10 @@ export function drawHoverTime(
         .fill({ color: COLORS.hover, alpha: HOVER_BAND_ALPHA });
     }
   }
-  graphics
-    .rect(Math.round(center), lineTop, 1, bottom - lineTop)
-    .fill({ color: COLORS.hover, alpha: HOVER_LINE_ALPHA });
+  // The line on the cell's start (hidden when that edge is scrolled off).
+  if (cellLeft >= left) {
+    graphics
+      .rect(Math.round(cellLeft), lineTop, 1, bottom - lineTop)
+      .fill({ color: COLORS.hover, alpha: HOVER_LINE_ALPHA });
+  }
 }

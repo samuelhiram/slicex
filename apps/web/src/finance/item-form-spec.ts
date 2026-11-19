@@ -39,6 +39,11 @@ export type FormControl =
   | "count"
   /** A rate, with "%". */
   | "percent"
+  /**
+   * A loan's interest: "Sin intereses" (default) / "Con intereses", which
+   * shows its annual rate. Owns `annualRate` (no rate = no interest).
+   */
+  | "loan-interest"
   /** A read-only value computed from the others (Mensualidad). */
   | "computed"
   /** A card's payment: a fixed amount every month, or the whole statement. */
@@ -89,12 +94,14 @@ export interface FormFieldSpec {
 /**
  * How "Termina" is answered:
  * - "choice":  ◉ Nunca ○ El [fecha] (○ Después de [N] pagos when it repeats);
- * - "count":   Después de [N] pagos — required (a loan always ends: the
- *              payments you still owe);
+ * - "ends":    ◉ El [fecha] ○ Después de [N] pagos — required, no "Nunca"
+ *              (a loan always ends). The date is the default: whoever knows
+ *              the last payment's date writes it; the count is the other way
+ *              to say the same end;
  * - "derived": read-only, from the months (MSI); an end that cuts
  *              installments shows here with its fix.
  */
-export type EndMode = "choice" | "count" | "derived";
+export type EndMode = "choice" | "ends" | "derived";
 
 /** "Se repite": chosen (presets) or fixed every month (card, MSI). */
 export type RepeatMode = "choose" | "monthly";
@@ -181,7 +188,7 @@ export const ITEM_FORM_SPEC: Readonly<Record<FinancialItemKind, KindFormSpec>> =
   },
   loan: {
     repeat: "choose",
-    end: "count",
+    end: "ends",
     // Ordered by the decision (UX-08): what you owe → what you pay.
     amount: [
       { path: "balance", control: "money", width: "half", optional: true },
@@ -189,13 +196,8 @@ export const ITEM_FORM_SPEC: Readonly<Record<FinancialItemKind, KindFormSpec>> =
     ],
     when: [REPEAT, START, END],
     details: [
-      {
-        path: "annualRate",
-        control: "percent",
-        width: "half",
-        optional: true,
-        hint: "Tu plan no le suma intereses al préstamo: tu pago ya los incluye. La tasa ordena tus deudas y sirve para «Calcular pago».",
-      },
+      // Without interest by default; "Con intereses" asks for the rate.
+      { path: "annualRate", control: "loan-interest", width: "wide", optional: true },
       { path: "loanCalc", control: "loan-calc", width: "wide", shown: repeats },
       { path: "debtCheck", control: "debt-check", width: "wide" },
       { path: "payoffGoal", control: "payoff-goal", width: "wide", shown: (item) => repeats(item) && owes(item) },

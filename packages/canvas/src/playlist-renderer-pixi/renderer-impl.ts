@@ -22,6 +22,7 @@ import type {
   PlaylistCore,
   PlaylistDragAnnotation,
   PlaylistOverviewData,
+  PlaylistRect,
   PlaylistTrackMeta,
 } from "../playlist-core";
 import {
@@ -75,6 +76,10 @@ export interface PlaylistRendererCallbacks {
   // controller's clipExtend, passing the SAME predicate). Called once per
   // frame for the selected clip: O(1), a plain boolean.
   clipExtend?: (clipId: string) => boolean;
+  // Clips show a lock button before their title (pair with the
+  // controller's clipTimeLock, rectOf = getClipLockRect below): closed on a
+  // time-locked clip, open and quiet on a free one. Read once.
+  clipTimeLock?: boolean;
   // Host emphasis per clip: true = warm ring, "danger" = a red ring and a
   // dimmed card (e.g. what a delete sweep will remove). Called once per
   // VISIBLE clip per frame: O(1), a primitive; call invalidate() when it
@@ -146,6 +151,10 @@ export interface PlaylistRenderer {
   // (Pixi rasterises a Text once and caches it by text + style key). Never
   // per frame.
   refreshFonts: () => void;
+  // Where the lock button of `clipId` was drawn in the last frame (screen
+  // px, fills `out`), or null (none shown). O(1). Hand it to the
+  // controller's clipTimeLock.rectOf so a click lands where it is drawn.
+  getClipLockRect: (clipId: string, out: PlaylistRect) => PlaylistRect | null;
 }
 
 export function createPlaylistRenderer(
@@ -177,6 +186,7 @@ export function createPlaylistRenderer(
       getClipDetail: callbacks.getClipDetail,
       getClipSparkline: callbacks.getClipSparkline,
       getClipContent: callbacks.getClipContent,
+      timeLock: callbacks.clipTimeLock === true,
     },
   );
   // Overview lane (canon §3.10 cached layer): frame + curves rebuilt only
@@ -661,6 +671,9 @@ export function createPlaylistRenderer(
   return {
     invalidate() {
       requestRender();
+    },
+    getClipLockRect(clipId, out) {
+      return destroyed ? null : clipNodeRegistry.lockRectOf(clipId, out);
     },
     refreshFonts() {
       if (destroyed) return;

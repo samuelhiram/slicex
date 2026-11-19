@@ -4,7 +4,7 @@
 //
 // Direction of truth (see bridge-api.ts):
 //   playlist clip geometry ─► item dates      (drag, resize, slice, slip…)
-//   clip label / colour / mute ─► item name / colour / enabled
+//   clip label / colour / mute / lock ─► item name / colour / enabled / lockDates
 //   editor / add buttons ─► item ─► clip geometry
 //
 // Undo / redo: the playlist history is the single undo stack. Every state
@@ -26,8 +26,12 @@
 // and recompute the projection only when an item actually changed. React
 // listeners are notified only then.
 import {
+  applyMovementEffect,
   createDefaultFinancialItem,
   explainValley,
+  isEmptyMovementEffect,
+  withCardDebtDelta,
+  type MovementEffect,
   findLiquidityWarnings,
   nextPayment,
   projectFinancialDocument,
@@ -50,6 +54,7 @@ import {
   type DebtPayoffEstimate,
 } from "@slicex/core";
 import {
+  clipTextWidthPx,
   prefersReducedMotion,
   stepSeriesValueAt,
   type PlaylistClip,
@@ -83,7 +88,9 @@ import {
   canonicalItem,
   createFinancialPlaylistState,
   dateOf,
+  datesLockedByDefault,
   deriveRecurrence,
+  isDatesLocked,
   isPayoffPinned,
   isPointItem,
   isPointTrackOf,
@@ -115,6 +122,10 @@ const EMPTY_BARS: number[] = [];
 const DAY_DETAIL_MAX = 5;
 const NO_POINTS: readonly FinancialProjectionPoint[] = [];
 
+// Room a one-time event's tag keeps after its text for the lock (a short
+// card puts it beside the name and amount).
+const POINT_LOCK_ROOM = 26;
+
 interface Observed {
   start: number;
   duration: number;
@@ -135,7 +146,24 @@ interface DocSnapshot {
   items: FinancialItem[];
   initialCash: number;
   minimumCashReserve: number;
+  /** The reality booked when this snapshot was taken (see RealityStamp). */
+  reality: RealityStamp;
 }
+
+// Reality (real movements, applyReality) is NOT part of the plan's undo
+// history: undoing a plan edit never un-spends money. Each snapshot carries
+// the running total of reality booked through this bridge when it was
+// taken; restoring a snapshot adds what was booked since (cash, and each
+// card's debt). Immutable: a new stamp per booking, so "nothing booked
+// since" is one reference check.
+interface RealityStamp {
+  /** Signed cash booked so far. */
+  cash: number;
+  /** Signed debt booked so far, per card id. */
+  debts: ReadonlyMap<string, number>;
+}
+
+const NO_REALITY: RealityStamp = { cash: 0, debts: new Map() };
 
 const EPS = 1e-6;
 
@@ -227,6 +255,11 @@ function levelMain(item: FinancialItem, value: number, doc: FinancialDocument): 
   }
 }
 
+/** Money to cents (binary noise of repeated sums never accumulates). */
+function cents(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function easeInOut(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
@@ -260,7 +293,8 @@ export function describeItem(
     case "income":
       return `+${formatMoney(item.amount)} ${freq}`;
     case "expense":
-      return `−${formatMoney(item.amount)} ${freq}`;
+      // A budget with no fixed day says so on the timeline.
+      return `−${formatMoney(item.amount)} ${freq}${item.recurrence.flexibleDay === true ? " · presupuesto" : ""}`;
     case "loan":
       return item.balance !== undefined
         ? `−${formatMoney(item.paymentAmount)} ${freq} · resta ${formatMoney(item.balance)}`
@@ -295,6 +329,9 @@ export class FinancialBridge implements FinancialBridgeApi {
   // Document data per playlist state (history-aligned undo/redo).
   private readonly snapshots = new WeakMap<PlaylistState, DocSnapshot>();
   private snap: DocSnapshot;
+  // Reality booked so far (see RealityStamp). Every snapshot points at the
+  // stamp current when it was taken.
+  private reality: RealityStamp = NO_REALITY;
 
   // Last observed clip fields by clip id: tells a user edit (label changed
   // since last time) from a stale value, and gives templates their geometry.
@@ -308,6 +345,9 @@ export class FinancialBridge implements FinancialBridgeApi {
   private itemIndex = new Map<string, FinancialItem>();
   private readonly detailCache = new Map<string, string | null>();
   private detailDay = Number.NaN;
+  // Least drawn width of one-time events (their text), per revision.
+  private readonly minWidthCache = new Map<string, number>();
+  private minWidthRevision = -1;
   private debtAtDay: { revision: number; day: number; value: Map<string, number> } | null =
     null;
   // Renderer providers: rebuilt lazily once per revision, identity-stable.
@@ -342,6 +382,7 @@ export class FinancialBridge implements FinancialBridgeApi {
   private readonly pendingLabel = new Set<string>();
   private readonly pendingUnique = new Set<string>();
   private readonly pendingNoSlice = new Set<string>();
+  private readonly pendingTimeLock = new Set<string>();
   private readonly pendingOffset = new Set<string>();
   private readonly pendingRepin = new Set<string>();
   private correctionQueued = false;
@@ -396,6 +437,7 @@ export class FinancialBridge implements FinancialBridgeApi {
       items: this.doc.items,
       initialCash: this.doc.initialCash,
       minimumCashReserve: this.doc.minimumCashReserve,
+      reality: this.reality,
     };
     this.rebuildIndex();
     const state = core.getState();
@@ -458,6 +500,26 @@ export class FinancialBridge implements FinancialBridgeApi {
 
   // Follows the playhead day (debt left, interest share, MSI n/12): the
   // cache is per (revision, day), so it changes at most once per day.
+  /**
+   * A one-time event (one date: no range, not open-ended) is a tag as wide
+   * as its name and amount at any zoom — never "+$…" — plus room for its
+   * lock beside the text on a short card; 0 for everything else (their span
+   * is their dates). The core's clipMinWidthPx: O(1), cached per revision.
+   */
+  clipMinWidth(clipId: string): number {
+    if (this.minWidthRevision !== this.revision) {
+      this.minWidthCache.clear();
+      this.minWidthRevision = this.revision;
+    }
+    const cached = this.minWidthCache.get(clipId);
+    if (cached !== undefined) return cached;
+    const item = this.itemIndex.get(clipId);
+    const width =
+      item && isPointItem(item) ? clipTextWidthPx(item.name, describeItem(item, this.doc)) + POINT_LOCK_ROOM : 0;
+    this.minWidthCache.set(clipId, width);
+    return width;
+  }
+
   getClipDetail(clipId: string): string | null {
     const day = this.playheadDay();
     if (day !== this.detailDay) {
@@ -777,9 +839,8 @@ export class FinancialBridge implements FinancialBridgeApi {
       const date = dateOf(this.doc, day);
       const snapshot = this.snapshotAt(date);
       const lines = [`Caja ${formatMoneyWhole(snapshot.cash)}`];
-      // The grey line of the lane, named (it has no hover of its own).
-      if (snapshot.debt > 0.5) lines.push(`Deuda ${formatMoneyWhole(snapshot.debt)}`);
-      // That day's cash movements, one line per item (in event order).
+      // That day's cash movements, one line per item: what comes in first,
+      // then what goes out (each group in event order; sort is stable).
       const totals = new Map<string, { name: string; delta: number }>();
       for (const point of this.pointsOn(date)) {
         if (point.cashDelta === 0) continue;
@@ -787,13 +848,18 @@ export class FinancialBridge implements FinancialBridgeApi {
         if (entry) entry.delta += point.cashDelta;
         else totals.set(point.itemId, { name: point.name, delta: point.cashDelta });
       }
-      const moves = [...totals.values()].filter((entry) => Math.round(entry.delta) !== 0);
+      const moves = [...totals.values()]
+        .filter((entry) => Math.round(entry.delta) !== 0)
+        .sort((a, b) => (b.delta > 0 ? 1 : 0) - (a.delta > 0 ? 1 : 0));
       const shown = moves.length > DAY_DETAIL_MAX ? DAY_DETAIL_MAX - 1 : moves.length;
       for (let i = 0; i < shown; i += 1) {
         const { name, delta } = moves[i]!;
         lines.push(`${delta > 0 ? "+" : "−"}${formatMoneyWhole(Math.abs(delta))} ${name}`);
       }
       if (shown < moves.length) lines.push(`y ${moves.length - shown} más`);
+      // The grey line of the lane, named (it has no hover of its own): last,
+      // after what came in and what went out.
+      if (snapshot.debt > 0.5) lines.push(`Deuda ${formatMoneyWhole(snapshot.debt)}`);
       text = lines.join("\n");
     }
     this.dayDetailCache = { projection: this.projection, day, text };
@@ -984,8 +1050,10 @@ export class FinancialBridge implements FinancialBridgeApi {
       this.applying -= 1;
     }
     const state = this.core.getState();
-    const snapshot = this.snapshots.get(state);
-    if (snapshot) {
+    const stored = this.snapshots.get(state);
+    if (stored) {
+      // A parked future comes back with the reality booked while it was parked.
+      const snapshot = this.withRealitySince(stored);
       this.doc = {
         ...this.doc,
         items: snapshot.items,
@@ -1022,6 +1090,7 @@ export class FinancialBridge implements FinancialBridgeApi {
       items: canonical.items,
       initialCash: canonical.initialCash,
       minimumCashReserve: canonical.minimumCashReserve,
+      reality: this.reality,
     };
     this.archiveBySource.clear();
     this.applying += 1;
@@ -1113,6 +1182,7 @@ export class FinancialBridge implements FinancialBridgeApi {
         color: itemColor(item),
         sourceId: id,
         noSlice: !isSliceable(item),
+        timeLocked: isDatesLocked(item),
       });
       if (geometry.contentOffset !== 0) {
         this.core.setClipContentOffset(id, geometry.contentOffset);
@@ -1143,6 +1213,7 @@ export class FinancialBridge implements FinancialBridgeApi {
     const ratio = clip.stretchRatio && clip.stretchRatio > 0 ? clip.stretchRatio : 1;
     const offset = geometry.contentOffset * ratio;
     const noSlice = !isSliceable(next);
+    const timeLocked = isDatesLocked(next);
 
     // The edited item becomes the base the sync derives the target from;
     // siblings (e.g. group members dragged along by the move) are derived
@@ -1171,6 +1242,9 @@ export class FinancialBridge implements FinancialBridgeApi {
       const color = itemColor(next);
       if (clip.color !== color) this.core.setClipColor(clip.id, color);
       if ((clip.noSlice === true) !== noSlice) this.core.setClipNoSlice(clip.id, noSlice);
+      if ((clip.timeLocked === true) !== timeLocked) {
+        this.core.setClipTimeLocked(clip.id, timeLocked);
+      }
       // Amount-only edits don't change the playlist; give them their own
       // undo step anyway so undo/redo stays aligned with the document.
       if (this.core.getState() === before) this.core.touch();
@@ -1202,6 +1276,52 @@ export class FinancialBridge implements FinancialBridgeApi {
     this.commitTouch();
   }
 
+  // Reality is booked outside the plan's undo history (see RealityStamp):
+  // no playlist touch, so Ctrl+Z of a plan edit never takes it back. Locked
+  // rows don't stop it either — a lock guards the plan, not what happened.
+  applyReality(effect: MovementEffect): void {
+    if (this.destroyed || isEmptyMovementEffect(effect)) return;
+    let debts = this.reality.debts;
+    if (effect.debts.length > 0) {
+      const next = new Map(debts);
+      for (const debt of effect.debts) next.set(debt.accountId, cents((next.get(debt.accountId) ?? 0) + debt.amount));
+      debts = next;
+    }
+    this.reality = { cash: cents(this.reality.cash + effect.cash), debts };
+    this.doc = applyMovementEffect(this.doc, effect);
+    this.recompute();
+    const state = this.core.getState();
+    this.snapshots.set(state, this.snap);
+    // A card's payoff-pinned end follows its debt.
+    if (effect.debts.length > 0) this.sweepInvariants(state);
+  }
+
+  // `snapshot` plus the reality booked since it was taken (the same object
+  // when nothing was). The result carries the current stamp.
+  private withRealitySince(snapshot: DocSnapshot): DocSnapshot {
+    const now = this.reality;
+    const then = snapshot.reality;
+    if (then === now) return snapshot;
+    let items = snapshot.items;
+    if (now.debts !== then.debts) {
+      let changed = false;
+      const next = items.map((item) => {
+        if (item.kind !== "credit-card") return item;
+        const delta = cents((now.debts.get(item.id) ?? 0) - (then.debts.get(item.id) ?? 0));
+        const updated = withCardDebtDelta(item, delta);
+        if (updated !== item) changed = true;
+        return updated;
+      });
+      if (changed) items = next;
+    }
+    return {
+      items,
+      initialCash: cents(snapshot.initialCash + now.cash - then.cash),
+      minimumCashReserve: snapshot.minimumCashReserve,
+      reality: now,
+    };
+  }
+
   destroy(): void {
     this.destroyed = true;
     this.subscription.unsubscribe();
@@ -1224,9 +1344,13 @@ export class FinancialBridge implements FinancialBridgeApi {
   }
 
   private handlePlaylistState(state: PlaylistState): void {
-    const snapshot = this.snapshots.get(state);
-    if (snapshot) {
-      // Undo / redo (or a re-notify of a known state).
+    const stored = this.snapshots.get(state);
+    if (stored) {
+      // Undo / redo (or a re-notify of a known state). The plan goes back;
+      // the reality booked since that state stays (withRealitySince: the
+      // same object, no allocation, when nothing was booked since).
+      const snapshot = this.withRealitySince(stored);
+      if (snapshot !== stored) this.snapshots.set(state, snapshot);
       const changed = snapshot !== this.snap;
       if (changed) {
         this.doc = {
@@ -1241,7 +1365,8 @@ export class FinancialBridge implements FinancialBridgeApi {
         state.clips !== this.lastClips || state.tracks !== this.lastTracks;
       if (clipsChanged) this.observe(state);
       if (changed) this.recompute();
-      if (clipsChanged) this.sweepInvariants(state);
+      // A card debt moved by reality may move its payoff-pinned end.
+      if (clipsChanged || snapshot !== stored) this.sweepInvariants(state);
       return;
     }
     if (state.clips === this.lastClips && state.tracks === this.lastTracks) {
@@ -1333,17 +1458,27 @@ export class FinancialBridge implements FinancialBridgeApi {
     }
     const enabled =
       clip.muted === true || excludedTracks.has(clip.trackId) ? false : undefined;
+    // A free item moved by hand to have an end stays free (lockDates false);
+    // the lock button flips it; back to the default leaves no flag.
+    const locked = clip.timeLocked === true;
+    const lockDefault = datesLockedByDefault(
+      recurrence === item.recurrence ? item : ({ ...item, recurrence } as FinancialItem),
+    );
+    const lockDates = locked === lockDefault ? undefined : locked;
 
     if (
       recurrence === item.recurrence &&
       name === item.name &&
       color === item.color &&
       enabled === item.enabled &&
+      lockDates === item.lockDates &&
       payment === undefined
     ) {
       return item;
     }
     const next = { ...item, recurrence, name } as FinancialItem;
+    if (lockDates === undefined) delete next.lockDates;
+    else next.lockDates = lockDates;
     if (payment !== undefined) (next as { paymentAmount?: number }).paymentAmount = payment;
     if (color === undefined) delete next.color;
     else next.color = color;
@@ -1601,6 +1736,12 @@ export class FinancialBridge implements FinancialBridgeApi {
     );
     if (clip.muted === true || excludedTracks.has(clip.trackId)) item.enabled = false;
     else delete item.enabled;
+    // A copy keeps its clip's lock; a generic stamp takes the default of
+    // what it became (sweepInvariants sets its clip).
+    delete item.lockDates;
+    if (!generic && (clip.timeLocked === true) !== datesLockedByDefault(item)) {
+      item.lockDates = clip.timeLocked === true;
+    }
 
     const result = canonicalItem(item);
     if (clip.label !== result.name || clip.color !== itemColor(result)) {
@@ -1681,6 +1822,7 @@ export class FinancialBridge implements FinancialBridgeApi {
         }
       }
       if ((clip.noSlice === true) !== !isSliceable(item)) this.pendingNoSlice.add(clip.id);
+      if ((clip.timeLocked === true) !== isDatesLocked(item)) this.pendingTimeLock.add(clip.id);
       if (isPointItem(item)) {
         if (clip.start > EPS && Math.abs(clip.contentOffset ?? 0) > EPS) {
           this.pendingOffset.add(clip.id);
@@ -1703,6 +1845,7 @@ export class FinancialBridge implements FinancialBridgeApi {
     this.pendingLabel.clear();
     this.pendingUnique.clear();
     this.pendingNoSlice.clear();
+    this.pendingTimeLock.clear();
     this.pendingOffset.clear();
     this.pendingRepin.clear();
   }
@@ -1718,6 +1861,7 @@ export class FinancialBridge implements FinancialBridgeApi {
       this.pendingLabel.size === 0 &&
       this.pendingUnique.size === 0 &&
       this.pendingNoSlice.size === 0 &&
+      this.pendingTimeLock.size === 0 &&
       this.pendingOffset.size === 0 &&
       this.pendingRepin.size === 0
     ) {
@@ -1730,6 +1874,7 @@ export class FinancialBridge implements FinancialBridgeApi {
       const labels = Array.from(this.pendingLabel);
       const unique = Array.from(this.pendingUnique);
       const noSlice = Array.from(this.pendingNoSlice);
+      const timeLocks = Array.from(this.pendingTimeLock);
       const offsets = Array.from(this.pendingOffset);
       const repin = Array.from(this.pendingRepin);
       this.clearPending();
@@ -1761,6 +1906,12 @@ export class FinancialBridge implements FinancialBridgeApi {
             if (!hit) continue;
             const want = !isSliceable(hit.item);
             if ((hit.clip.noSlice === true) !== want) this.core.setClipNoSlice(id, want);
+          }
+          for (const id of timeLocks) {
+            const hit = target(id);
+            if (!hit) continue;
+            const want = isDatesLocked(hit.item);
+            if ((hit.clip.timeLocked === true) !== want) this.core.setClipTimeLocked(id, want);
           }
           for (const id of offsets) {
             const hit = target(id);
@@ -1827,12 +1978,14 @@ export class FinancialBridge implements FinancialBridgeApi {
     if (
       this.snap.items !== doc.items ||
       this.snap.initialCash !== doc.initialCash ||
-      this.snap.minimumCashReserve !== doc.minimumCashReserve
+      this.snap.minimumCashReserve !== doc.minimumCashReserve ||
+      this.snap.reality !== this.reality
     ) {
       this.snap = {
         items: doc.items,
         initialCash: doc.initialCash,
         minimumCashReserve: doc.minimumCashReserve,
+        reality: this.reality,
       };
     }
     this.projection = projectFinancialDocument(this.doc);

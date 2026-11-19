@@ -69,7 +69,7 @@ export type DateFieldProps = DateFieldBaseProps &
     | { optional: true; onChange: (iso: string | undefined) => void }
   );
 
-const CALENDAR_LABELS: CalendarAriaLabels = {
+export const CALENDAR_LABELS: CalendarAriaLabels = {
   previousMonth: "Mes anterior",
   nextMonth: "Mes siguiente",
   previousYear: "Año anterior",
@@ -81,7 +81,7 @@ const CALENDAR_LABELS: CalendarAriaLabels = {
 };
 
 // Our classes on Mantine's parts: colours / sizes from the tokens (globals.css).
-const CALENDAR_CLASSES = {
+export const CALENDAR_CLASSES = {
   calendarHeader: "fin-cal__header",
   calendarHeaderControl: "fin-cal__nav",
   calendarHeaderLevel: "fin-cal__level",
@@ -93,11 +93,11 @@ const CALENDAR_CLASSES = {
 
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 /** "Noviembre 2026". */
-const monthTitle = (date: string) => capitalize(dayjs(date).locale("es").format("MMMM YYYY"));
+export const monthTitle = (date: string) => capitalize(dayjs(date).locale("es").format("MMMM YYYY"));
 /** "domingo 15 de noviembre de 2026" (what a screen reader says for a day). */
-const dayLabel = (date: string) => dayjs(date).locale("es").format("dddd D [de] MMMM [de] YYYY");
+export const calendarDayLabel = (date: string) => dayjs(date).locale("es").format("dddd D [de] MMMM [de] YYYY");
 
-function CalendarIcon() {
+export function CalendarIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
       <rect x="2.5" y="3.5" width="11" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.3" />
@@ -323,7 +323,7 @@ export function DateField(props: DateFieldProps) {
             highlightToday
             size="sm"
             monthLabelFormat={monthTitle}
-            getDayAriaLabel={dayLabel}
+            getDayAriaLabel={calendarDayLabel}
             ariaLabels={CALENDAR_LABELS}
             classNames={CALENDAR_CLASSES}
           />

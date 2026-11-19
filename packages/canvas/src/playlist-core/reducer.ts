@@ -124,6 +124,7 @@ function hoversEqual(a: PlaylistHover, b: PlaylistHover): boolean {
     case "resize-left":
     case "resize-right":
     case "clip-extend":
+    case "clip-lock":
       return a.clipId === (b as { clipId: string }).clipId;
     case "automation-point":
       return (
@@ -229,6 +230,8 @@ export function playlistReducer(
       );
     case "SET_CLIP_NO_SLICE":
       return setClipNoSlice(state, action.clipId, action.noSlice);
+    case "SET_CLIP_TIME_LOCKED":
+      return setClipTimeLocked(state, action.clipId, action.timeLocked);
     case "TOUCH":
       // Deliberately NOT idempotent: the new identity is the point. Never
       // dispatched at UI frequency (canon §4 does not apply).
@@ -1144,6 +1147,28 @@ function setClipNoSlice(
       return { ...clip, noSlice: true };
     }
     const { noSlice: _drop, ...rest } = clip;
+    return rest as PlaylistClip;
+  });
+  return changed ? { ...state, clips } : state;
+}
+
+// Same contract as setClipNoSlice: idempotent (same state, no undo entry),
+// `false` drops the key.
+function setClipTimeLocked(
+  state: PlaylistState,
+  clipId: string,
+  timeLocked: boolean,
+): PlaylistState {
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId || (clip.timeLocked === true) === timeLocked) {
+      return clip;
+    }
+    changed = true;
+    if (timeLocked) {
+      return { ...clip, timeLocked: true };
+    }
+    const { timeLocked: _drop, ...rest } = clip;
     return rest as PlaylistClip;
   });
   return changed ? { ...state, clips } : state;

@@ -3,6 +3,7 @@ import {
   sortedUpperBound,
   type PlaylistClipContent,
   type PlaylistClipPresentation,
+  type PlaylistRect,
 } from "../playlist-core";
 import {
   CANVAS_FONT_FAMILY,
@@ -57,6 +58,15 @@ const TITLE_Y = 5;
 // Conservative advance of the 12px / 600 title font (no canvas measuring:
 // deterministic and headless-safe, same approach as the detail line).
 const TITLE_CHAR_PX = 7.2;
+// Lock button (providers.timeLock): a translucent padlock in the card's
+// BOTTOM-LEFT corner, sliding with the title (sticky) so it stays in view;
+// it takes no room from the text. On a card too short for that (stacked
+// lanes) it moves BESIDE the name / amount block, centred on the card. The
+// box (hit area and hover chip) is LOCK_BOX square around the glyph. Only a
+// card whose text is hidden (narrower than LOCK_MIN_WIDTH) shows none.
+const LOCK_BOX = 22;
+const LOCK_MIN_WIDTH = 44;
+const LOCK_INSET = 3;
 
 interface ClipNode {
   container: Container;
@@ -93,6 +103,11 @@ interface ClipNode {
   contentPxPerBeat: number;
   // Host highlight the overlay was last drawn with.
   highlighted: boolean | "danger";
+  // Lock button (providers.timeLock): its own small Graphics, redrawn only
+  // when its look changes (lockKey: state bits; -1 = never drawn), placed by
+  // transform every frame with the title.
+  lock: Graphics | null;
+  lockKey: number;
   // Visual hash captures everything that would force a redraw. Position and
   // size are kept separate so we can skip a redraw when only x/y changed.
   hash: string;
@@ -196,6 +211,11 @@ export interface ClipNodeProviders {
   getClipDetail?: ClipDetailProvider;
   getClipSparkline?: ClipSparklineProvider;
   getClipContent?: ClipContentProvider;
+  // Clips carry a lock button before their title (pair with the
+  // controller's clipTimeLock, whose rectOf reads lockRectOf): closed and
+  // bright on a time-locked clip, open and quiet on a free one, a soft chip
+  // under the pointer.
+  timeLock?: boolean;
 }
 
 function getSparklineBars(
@@ -238,6 +258,8 @@ export function clipVisualHash(
     ratio,
     offset,
     view.groupId ?? "",
+    // A time-locked clip shows no resize grips.
+    view.clip.timeLocked === true ? 1 : 0,
     detail ?? "",
   ].join("|");
 }
@@ -273,6 +295,19 @@ export function truncateClipDetail(text: string, width: number): string {
     text,
     Math.floor((width - DETAIL_PAD_X - CLIP_TEXT_RIGHT_PAD) / DETAIL_CHAR_PX),
   );
+}
+
+/**
+ * Px a card needs to show `title` and `detail` whole: the same conservative
+ * advances and pads as the truncation (headless-safe, no measuring). For a
+ * host that sizes tags to their text (PlaylistLayoutOptions.clipMinWidthPx).
+ */
+export function clipTextWidthPx(title: string, detail: string | null): number {
+  const text = Math.max(
+    TITLE_PAD_X + title.length * TITLE_CHAR_PX,
+    detail ? DETAIL_PAD_X + detail.length * DETAIL_CHAR_PX : 0,
+  );
+  return Math.ceil(text + CLIP_TEXT_RIGHT_PAD + 1);
 }
 
 // Title of a clip of `width` px (same pads as the detail line). Truncated
@@ -562,6 +597,44 @@ const CLIP_TAG_TINT_SCALE = 0.45;
 const CLIP_DAY_TINT_SCALE = 2.2;
 const CLIP_EXTENT_MIN_PX = 8;
 
+// Look bits of a lock button: 1 shown free · 2 shown fixed · +4 under the
+// pointer · +8 muted. 0 = hidden.
+const LOCK_FREE = 1;
+const LOCK_FIXED = 2;
+const LOCK_HOVER = 4;
+const LOCK_MUTED = 8;
+
+// A padlock in a LOCK_BOX square, translucent until the pointer is on it:
+// closed and filled when the dates are fixed, open (shackle lifted off its
+// left post) and outlined, quieter still, when they are free. Under the
+// pointer it is opaque on a soft chip ("this is a button").
+function drawLockLocal(g: Graphics, look: number, palette: PixiPaletteColors): void {
+  g.clear();
+  const fixed = (look & LOCK_FIXED) !== 0;
+  const hovered = (look & LOCK_HOVER) !== 0;
+  const muted = (look & LOCK_MUTED) !== 0;
+  if (hovered) g.roundRect(0, 0, LOCK_BOX, LOCK_BOX, 6).fill({ color: palette.text, alpha: 0.14 });
+  const color = palette.text;
+  const alpha = hovered ? 1 : muted ? 0.3 : fixed ? 0.55 : 0.38;
+  const cx = LOCK_BOX / 2;
+  const top = LOCK_BOX / 2 - 0.5;
+  if (fixed) {
+    g.moveTo(cx - 4, top)
+      .lineTo(cx - 4, top - 3)
+      .arc(cx, top - 3, 4, Math.PI, 0)
+      .lineTo(cx + 4, top)
+      .stroke({ color, alpha, width: 1.7 });
+    g.roundRect(cx - 6, top, 12, 9, 2).fill({ color, alpha });
+  } else {
+    g.moveTo(cx + 4, top)
+      .lineTo(cx + 4, top - 5)
+      .arc(cx, top - 5, 4, 0, Math.PI, true)
+      .lineTo(cx - 4, top - 3)
+      .stroke({ color, alpha, width: 1.7 });
+    g.roundRect(cx - 5.5, top + 0.5, 11, 8, 2).stroke({ color, alpha, width: 1.5 });
+  }
+}
+
 // px of the card that is the clip's real extent (content.extent, beats),
 // or the whole width.
 export function contentExtentPx(
@@ -663,7 +736,12 @@ function drawClipOverlayLocal(
   const textBottom = view.titleRect.height + DETAIL_LINE_HEIGHT + 2;
   const gripTop = height - textBottom >= 12 ? textBottom : 6;
   const gripHeight = Math.min(16, height - gripTop - 6);
-  if ((view.hovered || view.selected) && width >= 24 && gripHeight >= 6) {
+  if (
+    (view.hovered || view.selected) &&
+    view.clip.timeLocked !== true &&
+    width >= 24 &&
+    gripHeight >= 6
+  ) {
     const gripY = gripTop + (height - gripTop - 6 - gripHeight) / 2;
     const inset = Math.min(4, view.resizeLeftRect.width / 2);
     // Selected: in the selection accent, like the rest of its handles (a
@@ -762,6 +840,10 @@ export interface ClipNodeRegistry {
   // `stickyLeft`: screen x of the visible timeline's left edge; titles of
   // clips starting before it stick to it (default: no sticking).
   syncFrame(parent: Container, views: PlaylistClipPresentation[], stickyLeft?: number): void;
+  // Screen rect of the lock button drawn on `clipId` in the last frame
+  // (fills `out`), or null when it shows none (off-screen, too narrow, no
+  // providers.timeLock). O(1). The controller's clipTimeLock.rectOf.
+  lockRectOf(clipId: string, out: PlaylistRect): PlaylistRect | null;
   // Re-rasterises every node's labels with the fonts available now (a web
   // font that finished loading after the nodes were created). Once, never
   // per frame.
@@ -783,6 +865,12 @@ export function createClipNodeRegistry(
   const levelHandles = providers.levelHandles === true && providers.levelGrip !== true;
   const isClipHighlighted = providers.isClipHighlighted;
   const badges = providers.badges !== false;
+  const timeLock = providers.timeLock === true;
+  // Px the title gives to the lock on a clip `width` wide.
+  // The card shows a lock: its text shows (labels need 44 x 24) and the
+  // box fits its height.
+  const lockFits = (view: PlaylistClipPresentation): boolean =>
+    timeLock && view.rect.width >= LOCK_MIN_WIDTH && view.rect.height >= Math.max(24, LOCK_BOX + 2);
 
   // Secondary line under the title bar. Created lazily ONCE per node (same
   // factory pattern as the title label), never per frame.
@@ -856,6 +944,7 @@ export function createClipNodeRegistry(
       hideText(node.label);
       hideText(node.ratioBadge);
       hideText(node.offsetBadge);
+      if (node.lock) node.lock.visible = false;
       return 0;
     }
     if (node.labelSource !== view.clip.label || node.labelWidth !== width) {
@@ -941,6 +1030,46 @@ export function createClipNodeRegistry(
     return shift;
   }
 
+  // The lock: bottom-left (or beside the text on a short card), placed by
+  // transform with the title's sticky shift after the labels are laid out;
+  // redrawn only when its look changes.
+  function placeLock(node: ClipNode, view: PlaylistClipPresentation, shift: number): void {
+    let lock = node.lock;
+    if (!lock) {
+      lock = new Graphics();
+      node.lock = lock;
+      node.container.addChild(lock);
+    }
+    const look =
+      (view.clip.timeLocked === true ? LOCK_FIXED : LOCK_FREE) |
+      (view.lockHovered ? LOCK_HOVER : 0) |
+      (view.effectivelyMuted ? LOCK_MUTED : 0);
+    if (look !== node.lockKey) {
+      drawLockLocal(lock, look, palette);
+      node.lockKey = look;
+    }
+    const height = view.rect.height;
+    // The corner only when the box clears the title + detail lines (the
+    // glyph has its own padding in the box, so it sits on the bottom edge).
+    if (height - LOCK_BOX >= view.titleRect.height + DETAIL_LINE_HEIGHT) {
+      lock.x = TITLE_PAD_X - LOCK_INSET + shift;
+      lock.y = height - LOCK_BOX;
+    } else {
+      // The same conservative advances as the sticky text (no canvas
+      // measuring: deterministic and headless-safe).
+      const label = node.label !== null && node.label.visible;
+      const detail = node.detail !== null && node.detail.visible;
+      const textEnd = Math.max(
+        TITLE_PAD_X + shift,
+        label ? TITLE_PAD_X + shift + node.labelDisplay.length * TITLE_CHAR_PX : 0,
+        detail ? DETAIL_PAD_X + shift + node.detailDisplay.length * DETAIL_CHAR_PX : 0,
+      );
+      lock.x = Math.round(Math.min(textEnd + 6, view.rect.width - LOCK_BOX - LOCK_INSET - 2));
+      lock.y = Math.round((height - LOCK_BOX) / 2);
+    }
+    lock.visible = true;
+  }
+
   function createNode(): ClipNode {
     const container = new Container();
     container.eventMode = "none";
@@ -966,6 +1095,8 @@ export function createClipNodeRegistry(
       contentStart: 0,
       contentPxPerBeat: 0,
       highlighted: false,
+      lock: null,
+      lockKey: -1,
       hash: "",
       width: 0,
       height: 0,
@@ -1058,6 +1189,10 @@ export function createClipNodeRegistry(
       }
       const shift = applyLabels(node, view, detailVisible, stickyLeft);
       applyDetail(node, view, detail, detailVisible, shift);
+      if (timeLock) {
+        if (lockFits(view)) placeLock(node, view, shift);
+        else if (node.lock) node.lock.visible = false;
+      }
     }
     // Hide nodes whose clips are off-screen this frame. We keep them
     // parented so future frames can show them again in O(1) — only
@@ -1081,6 +1216,7 @@ export function createClipNodeRegistry(
         // TexturePool tear-down crash (canon §3 + dispose-text history).
         node.body.destroy();
         node.overlay.destroy();
+        node.lock?.destroy();
         if (node.label) node.label.removeFromParent();
         if (node.ratioBadge) node.ratioBadge.removeFromParent();
         if (node.offsetBadge) node.offsetBadge.removeFromParent();
@@ -1093,7 +1229,10 @@ export function createClipNodeRegistry(
   }
 
   function invalidate(): void {
-    for (const node of cache.values()) node.hash = "";
+    for (const node of cache.values()) {
+      node.hash = "";
+      node.lockKey = -1;
+    }
   }
 
   function refreshText(): void {
@@ -1107,5 +1246,15 @@ export function createClipNodeRegistry(
     }
   }
 
-  return { syncFrame, refreshText, invalidate, destroy };
+  function lockRectOf(clipId: string, out: PlaylistRect): PlaylistRect | null {
+    const node = cache.get(clipId);
+    if (!node || !node.container.visible || !node.lock || !node.lock.visible) return null;
+    out.x = node.container.x + node.lock.x;
+    out.y = node.container.y + node.lock.y;
+    out.width = LOCK_BOX;
+    out.height = LOCK_BOX;
+    return out;
+  }
+
+  return { syncFrame, refreshText, invalidate, destroy, lockRectOf };
 }

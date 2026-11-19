@@ -88,6 +88,15 @@ interface PlaylistClipBase {
   // Copy / paste / clone / duplicate keep it (they spread the clip). Toggled
   // with core.setClipNoSlice (undoable). Absent / false = sliceable.
   noSlice?: boolean;
+  // Host-owned "its time span is fixed" flag. Gestures never move it in
+  // time nor change its length or phase: a drag moves it between rows only,
+  // its edges and the extend grabber don't resize it, Slip leaves it, and
+  // ←/→ move the playhead instead of nudging it. Programmatic edits
+  // (moveClips / resizeClip from a host form) still apply. Toggled with
+  // core.setClipTimeLocked (undoable) or the lock button the controller /
+  // renderer draw on clips when the host asks (clipTimeLock). Absent /
+  // false = free. Pair with noSlice when a cut must not alter it either.
+  timeLocked?: boolean;
   // Lane inside its track (0 = top; absent = 0). Clips that overlap in
   // time stack in different lanes instead of covering each other. Set by
   // the core's lane layout (lanes.ts): a drag drops a clip on the lane under
@@ -343,6 +352,8 @@ export type PlaylistHover =
   | { kind: "resize-right"; clipId: string }
   // The extend grabber of the selected clip (getClipExtendHandle).
   | { kind: "clip-extend"; clipId: string }
+  // The lock button of a clip (controller clipTimeLock.rectOf).
+  | { kind: "clip-lock"; clipId: string }
   | { kind: "automation-point"; clipId: string; pointId: string }
   | { kind: "track"; trackId: string }
   | { kind: "marker"; markerId: string }

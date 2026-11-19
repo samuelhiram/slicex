@@ -25,6 +25,7 @@ import type { ActualRecord, FinancialProjectionPoint, ISODate } from "@slicex/co
 import { formatDateShort, formatMoneyWhole, formatSignedMoneyWhole } from "../format";
 import { useOverlay } from "../../ui/use-overlay";
 import { amountTextSchema, amountValue, bindField, firstError } from "./form-kit";
+import { Select } from "../../ui/select";
 
 export interface RecDialogProps {
   /** Past events (old start → yesterday) that moved cash. */
@@ -234,19 +235,21 @@ export function RecDialog({
                       <td className="fin-table__num">{formatSignedMoneyWhole(point.cashDelta)}</td>
                       <td>
                         <div className="fin-rec__actual">
-                          <select
-                            {...statusInput}
-                            onChange={(event) => {
-                              statusInput.onChange(event);
+                          <Select
+                            size="sm"
+                            value={String(statusInput.value)}
+                            onValueChange={(next) => {
+                              form.setFieldValue(`rows.${index}.status`, next as RecRowStatus);
                               // A hidden amount has nothing left to fix.
                               form.clearFieldError(`rows.${index}.amount`);
                             }}
                             aria-label={`Qué pasó con ${point.name} el ${formatDateShort(point.date)}`}
-                          >
-                            <option value="happened">Pasó</option>
-                            <option value="edited">Otro monto</option>
-                            <option value="skipped">No pasó</option>
-                          </select>
+                            options={[
+                              { value: "happened", label: "Pasó" },
+                              { value: "edited", label: "Otro monto" },
+                              { value: "skipped", label: "No pasó" },
+                            ]}
+                          />
                           {status === "edited" ? (
                             <>
                               <input

@@ -16,6 +16,7 @@ import type {
   FinancialSnapshot,
   ISODate,
   LiquidityWarning,
+  MovementEffect,
   UpcomingPayment,
   ValleyExplanation,
   ValleyFix,
@@ -111,6 +112,13 @@ export interface FinancialBridgeApi {
 
   setInitialCash(amount: number): void;
   setMinimumCashReserve(amount: number): void;
+  /**
+   * Books what really happened (a real movement recorded, edited or
+   * deleted) on today's cash and card debts. NOT a plan undo step: undoing
+   * or redoing plan edits keeps it (each history state is restored plus the
+   * reality booked since). Its undo is booking the opposite effect.
+   */
+  applyReality(effect: MovementEffect): void;
 
   /** beat → ISO date (floors to the day). */
   dateAtBeat(beat: number): ISODate;

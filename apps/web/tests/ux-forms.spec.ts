@@ -3,11 +3,13 @@
 // onboarding. Pure helpers (format, schedule-ui, item-schema,
 // editor-readback, buildYear) and the forms headless against a small
 // in-memory bridge (real @slicex/core projection, fake playlist core).
+import { chooseOption, readOptions, shownText } from "./select-helpers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
+  applyMovementEffect,
   addDays,
   createDefaultFinancialItem,
   diffDays,
@@ -21,6 +23,7 @@ import {
   type FinancialItemKind,
   type InstallmentPlanItem,
   type LoanItem,
+  type MovementEffect,
 } from "@slicex/core";
 import type { PlaylistCore } from "@slicex/canvas";
 import type { FinancialBridgeApi, FinancialPreview, PreviewEffect } from "../src/finance/bridge-api";
@@ -113,6 +116,7 @@ function createFakeBridge(initial: FinancialDocument) {
       return item.id;
     }),
     setInitialCash: (amount: number) => commit({ ...doc, initialCash: amount }),
+    applyReality: (effect: MovementEffect) => commit(applyMovementEffect(doc, effect)),
     setMinimumCashReserve: (amount: number) => commit({ ...doc, minimumCashReserve: amount }),
     dateAtBeat: (beat: number) => addDays(doc.startDate, Math.floor(beat)),
     beatAtDate: (date: string) => diffDays(doc.startDate, date),
@@ -215,7 +219,7 @@ function field<T extends HTMLElement = HTMLInputElement>(label: string): T {
     (el) => el.textContent?.replace("(opcional)", "").trim() === label,
   );
   const byFor = named instanceof HTMLLabelElement && named.htmlFor ? document.getElementById(named.htmlFor) : null;
-  const control = byFor ?? named?.closest(".fin-editor__field")?.querySelector("input, select");
+  const control = byFor ?? named?.closest(".fin-editor__field")?.querySelector("input, select, .fin-select");
   if (!control) throw new Error(`field "${label}" not found`);
   return control as T;
 }
@@ -229,11 +233,7 @@ function typeInto(input: HTMLInputElement, text: string) {
 }
 
 function choose(select: HTMLSelectElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
-  act(() => {
-    setter.call(select, value);
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  chooseOption(select, value);
 }
 
 function click(element: HTMLElement) {
@@ -317,7 +317,7 @@ describe("UX-35: parseDateInput reads relative words and a bare day", () => {
 
 // --- UX-34: first payment and payday ---------------------------------------------
 
-describe("UX-34: 'Primer pago' is the first payment; 'Día' moves it forward", () => {
+describe("UX-34: 'Próximo pago' is the first payment; 'Día' moves it forward", () => {
   it("firstPayment / startOnFirstPayment keep the same payments", () => {
     const pay = { frequency: "monthly" as const, startDate: START, anchorDate: "2026-11-25" };
     expect(firstPayment(pay)).toBe("2026-11-25");
@@ -350,7 +350,7 @@ describe("item-schema: UX-01 / UX-07 / UX-08 / UX-30 / UX-32 rules", () => {
     expect(itemFormErrors({ ...owes, paymentAmount: 0 }, []).paymentAmount).toBeUndefined();
   });
 
-  it("UX-08: a repeating loan asks how many payments are left", () => {
+  it("UX-08: a repeating loan asks when it ends (its last payment's date or the payments left)", () => {
     const loan: LoanItem = {
       id: "l",
       kind: "loan",
@@ -358,7 +358,13 @@ describe("item-schema: UX-01 / UX-07 / UX-08 / UX-30 / UX-32 rules", () => {
       paymentAmount: 1500,
       recurrence: { frequency: "monthly", startDate: START },
     };
-    expect(itemFormErrors(loan, [])["recurrence.endDate"]).toBe("Escribe cuántos pagos te faltan");
+    expect(itemFormErrors(loan, [])["recurrence.endDate"]).toBe(
+      "Escribe la fecha del último pago o cuántos pagos te faltan",
+    );
+    // Its end date alone answers it: no payment count needed.
+    expect(
+      itemFormErrors({ ...loan, recurrence: { ...loan.recurrence, endDate: "2027-06-18" } }, [])["recurrence.endDate"],
+    ).toBeUndefined();
     // One form: the end is "Termina" for every kind (a loan answers it with
     // the payments it still owes).
     expect(fieldLabel("recurrence.endDate", loan)).toBe("Termina");
@@ -541,26 +547,49 @@ describe("UX-08: a loan crosses balance, payment and payments left", () => {
       [...document.querySelectorAll(`.fin-editor__section--${section} .fin-editor__label`)].map((el) =>
         el.textContent?.replace("(opcional)", "").trim(),
       );
-    // Ordered by the decision: owed → pay; the payments left are its
-    // "Termina", in "Cuándo" like every kind's end.
+    // Ordered by the decision: owed → pay; its "Termina" (a date, or the
+    // payments left) is in "Cuándo" like every kind's end.
     expect(labelsIn("amount")).toEqual(["¿Cuánto debes hoy?", "¿Cuánto pagas?"]);
     expect(labelsIn("when")).toContain("Termina");
-    expect(field("Termina").value).toBe("");
+    const count = () => document.querySelector<HTMLInputElement>('[aria-label="Número de pagos"]')!;
+    expect(count().value).toBe("");
     typeInto(field("¿Cuánto debes hoy?"), "10000");
     typeInto(field("¿Cuánto pagas?"), "1500");
-    typeInto(field("Termina"), "13");
+    typeInto(count(), "13");
     expect(checkLines()[0]).toBe(
       "13 × $1,500 = $19,500, más de lo que cuesta tu saldo de $10,000: lo liquidas en 7 pagos.Ajustar a 7 pagos",
     );
     click(mustButton("Ajustar a 7 pagos"));
-    expect(field("Termina").value).toBe("7");
+    expect(count().value).toBe("7");
     click(mustButton("Calcular pago: $1,428.58"));
     expect(field("¿Cuánto pagas?").value).toBe("1428.58");
     expect(document.querySelector(".fin-editor__check-line")!.getAttribute("data-tone")).toBe("positive");
-    // The rate is said to be informative.
-    expect(document.querySelector('[data-field-path="annualRate"]')!.textContent).toContain("tu pago ya los incluye");
+    // Without interest by default; "Con intereses" asks for the rate, said
+    // to be informative (the payment already includes the interest).
+    const interest = () => document.querySelector('[data-field-path="annualRate"]')!;
+    expect(interest().textContent).toContain("Sin intereses");
+    expect(document.querySelector('[aria-label="Tasa anual"], .fin-editor__interest input')).toBeNull();
+    click(mustButton("Con intereses"));
+    expect(interest().textContent).toContain("ya los incluye");
+    typeInto(field("Tasa anual"), "24");
+    click(mustButton("Sin intereses"));
+    expect(document.querySelector(".fin-editor__interest input")).toBeNull();
     click(mustButton("Guardar"));
     expect(bridge.addItem.mock.calls[0]![0]).toMatchObject({ kind: "loan", balance: 10000, paymentAmount: 1428.58 });
+    expect((bridge.addItem.mock.calls[0]![0] as LoanItem).annualRate).toBeUndefined();
+  });
+
+  it("a loan with a rate opens 'Con intereses'; the rate is saved", () => {
+    const bridge = createFakeBridge(docWith([]));
+    const draft = { ...bridge.createDraftItem("loan"), annualRate: 18 } as FinancialItem;
+    openEditor({ bridge, draft });
+    expect(mustButton("Con intereses").getAttribute("aria-checked")).toBe("true");
+    expect(field("Tasa anual").value).toBe("18");
+    typeInto(field("Tasa anual"), "24");
+    typeInto(field("¿Cuánto pagas?"), "1500");
+    typeInto(document.querySelector<HTMLInputElement>('[aria-label="Fecha de fin"]')!, "18/06/2027");
+    click(mustButton("Guardar"));
+    expect(bridge.addItem.mock.calls[0]![0]).toMatchObject({ kind: "loan", annualRate: 24 });
   });
 });
 
@@ -645,7 +674,7 @@ describe("UX-30: amounts are asked, cards are not guessed", () => {
     openEditor({ bridge, draft: bridge.createDraftItem("card-purchase") });
     expect(field("Monto").value).toBe("");
     const select = field<HTMLSelectElement>("Tarjeta");
-    expect(select.selectedOptions[0]?.textContent).toBe("Selecciona…");
+    expect(shownText(select)).toBe("Elige una tarjeta…");
     click(mustButton("Guardar"));
     expect(bridge.addItem).not.toHaveBeenCalled();
     expect(errorText()).toBe("Monto: escribe el monto.");
@@ -688,7 +717,7 @@ describe("UX-31: the kind is a field of the one form; switching never loses what
   });
 });
 
-describe("UX-34: the onboarding's pay opens as 'Primer cobro 25/11/2026 · Día 25'", () => {
+describe("UX-34: the onboarding's pay opens as 'Próximo cobro 25/11/2026 · Día 25'", () => {
   it("a window that starts before its first payday shows the payday", () => {
     const pay: FinancialItem = {
       id: "mi-sueldo",
@@ -699,8 +728,8 @@ describe("UX-34: the onboarding's pay opens as 'Primer cobro 25/11/2026 · Día 
     };
     const bridge = createFakeBridge(docWith([pay]));
     openEditor({ bridge, itemId: pay.id });
-    expect(field("Primer cobro").value).toBe("25/11/2026");
-    expect(document.querySelector<HTMLSelectElement>('select[aria-label="Día de cobro"]')!.value).toBe("25");
+    expect(field("Próximo cobro").value).toBe("25/11/2026");
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Día de cobro"]')!.value).toBe("25");
   });
 });
 
@@ -804,7 +833,7 @@ describe("UX-12 / UX-24: the onboarding shows the year before creating it", () =
         el.getAttribute("aria-label") === label ||
         el.closest("label")?.querySelector(".fin-editor__label")?.textContent?.startsWith(label),
     )!;
-  const select = (label: string) => document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+  const select = (label: string) => document.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!;
   const submit = () =>
     act(() => {
       document
@@ -985,6 +1014,50 @@ describe("Formulario único: every kind opens the same skeleton", () => {
     choose(field<HTMLSelectElement>("Tipo"), "loan");
     expect(field("Nombre")).toBe(name);
     expect(sectionLabels("amount")).toEqual(["¿Cuánto debes hoy?", "¿Cuánto pagas?"]);
-    expect(sectionLabels("details")[0]).toBe("Tasa anual");
+    expect(sectionLabels("details")[0]).toBe("Intereses");
+  });
+});
+
+describe("a budget with no fixed day ('Sin día fijo (presupuesto)')", () => {
+  const budgetBox = () =>
+    [...document.querySelectorAll<HTMLLabelElement>("label.fin-editor__check")]
+      .find((label) => label.textContent?.includes("Sin día fijo"))
+      ?.querySelector<HTMLInputElement>('input[type="checkbox"]') ?? null;
+
+  it("a weekly expense: no date asked, set aside at the start of each week from today, saved as such", () => {
+    const bridge = createFakeBridge(docWith([]));
+    openEditor({ bridge, draft: bridge.createDraftItem("expense") });
+    typeInto(field("Nombre"), "Salidas");
+    typeInto(field("Monto"), "1500");
+    // A single expense has a date by definition: no budget box.
+    expect(budgetBox()).toBeNull();
+    click(preset("Cada semana"));
+    expect(budgetBox()!.checked).toBe(false);
+    click(budgetBox()!);
+    // The date (and its day) is gone; the readback says how it is booked.
+    expect(document.querySelector('[aria-label="Abrir calendario: Próximo pago"]')).toBeNull();
+    expect(readbacks()[0]).toBe(
+      "Apartas $1,500 cada semana, sin día fijo: el plan lo descuenta al empezar cada semana, desde el mié 11 nov 2026.",
+    );
+    expect(document.querySelector(".fin-readback__label")?.textContent).toBe("Se aparta:");
+    click(mustButton("Guardar"));
+    expect(bridge.addItem.mock.calls[0]![0]).toMatchObject({
+      kind: "expense",
+      amount: 1500,
+      recurrence: { frequency: "weekly", startDate: START, flexibleDay: true },
+    });
+  });
+
+  it("turning it off brings the date back; an income never offers it", () => {
+    const bridge = createFakeBridge(docWith([]));
+    openEditor({ bridge, draft: bridge.createDraftItem("expense") });
+    click(preset("Cada mes"));
+    click(budgetBox()!);
+    expect(budgetBox()!.checked).toBe(true);
+    click(budgetBox()!);
+    expect(budgetBox()!.checked).toBe(false);
+    expect(field("Próximo pago").value).toBe("11/11/2026");
+    choose(field<HTMLSelectElement>("Tipo"), "income");
+    expect(budgetBox()).toBeNull();
   });
 });

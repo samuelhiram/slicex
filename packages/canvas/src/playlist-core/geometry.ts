@@ -27,6 +27,11 @@ export interface PlaylistLayoutOptions {
   // false: no virtual "Track N" rows below the real tracks, and the vertical
   // extent / scroll stop at the last real track (see PlaylistCoreOptions).
   virtualTracks?: boolean;
+  // A clip's least DRAWN width in px, whatever the zoom (0 = its span): a
+  // host whose one-time events are tags as wide as their name and amount.
+  // The rect (hit-test, renderer) grows; the time span does not. Called
+  // per clip near the viewport on each presentation: O(1), host-cached.
+  clipMinWidthPx?: (clip: PlaylistClip) => number;
 }
 
 // Height of the overview lane (0 when the metrics have none). Defensive

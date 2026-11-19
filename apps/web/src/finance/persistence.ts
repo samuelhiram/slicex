@@ -4,8 +4,8 @@
 // person's year across reloads today.
 //
 // Never throws: a blocked / full / corrupted storage just means "no save".
-import { FinancialDocumentSchema, FinancialItemSchemaStrict } from "@slicex/contracts";
-import type { FinancialDocument, FinancialItem, ISODate, LedgerEntry } from "@slicex/core";
+import { FinancialDocumentSchema, FinancialItemSchemaStrict, MovementSchema } from "@slicex/contracts";
+import type { FinancialDocument, FinancialItem, ISODate, LedgerEntry, Movement } from "@slicex/core";
 import { parseTrackLayout, type FinancialTrackLayout } from "./mapping";
 
 export const PLAN_STORAGE_KEY = "slicex.plan.v1";
@@ -30,6 +30,12 @@ export interface SavedPlan {
   branches: SavedBranch[];
   /** What really happened, as recorded by "Rec" (oldest first). */
   ledger: LedgerEntry[];
+  /**
+   * Real movements recorded by hand ("Registrar", oldest first): ONE journal
+   * for every future. Their effect is already in each future's cash / card
+   * debts. Absent in plans saved before it existed (read as none).
+   */
+  movements?: Movement[];
 }
 
 function storage(): Storage | null {
@@ -56,6 +62,20 @@ function parseDocument(value: unknown): FinancialDocument | null {
     if (item.success) items.push(item.data as FinancialItem);
   }
   return { ...doc.data, items };
+}
+
+/**
+ * The journal read back: a movement that is not valid is dropped alone (the
+ * rest of the journal survives), like an item of the plan.
+ */
+function parseMovements(value: unknown): Movement[] {
+  if (!Array.isArray(value)) return [];
+  const movements: Movement[] = [];
+  for (const raw of value) {
+    const movement = MovementSchema.safeParse(raw);
+    if (movement.success) movements.push(movement.data as Movement);
+  }
+  return movements;
 }
 
 export function parsePlan(raw: string | null): SavedPlan | null {
@@ -103,6 +123,7 @@ export function parsePlan(raw: string | null): SavedPlan | null {
         };
       }),
       ledger: Array.isArray(value.ledger) ? value.ledger : [],
+      ...(Array.isArray(value.movements) ? { movements: parseMovements(value.movements) } : {}),
     };
   } catch {
     return null;

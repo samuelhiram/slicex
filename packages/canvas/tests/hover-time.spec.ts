@@ -147,6 +147,23 @@ describe("hover-time indicator — the renderer layer", () => {
     expect(text.children.length).toBe(1);
   });
 
+  it("the line sits on the cell's start (like the playhead and the event marks), not its middle", () => {
+    const core = createPlaylistCore(createDemoPlaylistState(), { metrics: M });
+    core.setViewportSize(WIDTH, HEIGHT);
+    core.updateViewport({ pxPerBeat: 40, scrollX: 0 });
+    core.setHoverTime(4);
+    const graphics = new Graphics();
+    const rects: Array<{ x: number; width: number }> = [];
+    const original = graphics.rect.bind(graphics);
+    graphics.rect = ((x: number, y: number, width: number, height: number) => {
+      rects.push({ x, width });
+      return original(x, y, width, height);
+    }) as typeof graphics.rect;
+    drawHoverTime(graphics, new Container(), core.getPresentation(), null);
+    const line = rects.find((rect) => rect.width === 1)!;
+    expect(line.x).toBe(Math.round(M.trackHeaderWidth + 4 * 40));
+  });
+
   it("a cell scrolled out of the timeline draws nothing", () => {
     const core = createPlaylistCore(createDemoPlaylistState(), { metrics: M });
     core.setViewportSize(WIDTH, HEIGHT);

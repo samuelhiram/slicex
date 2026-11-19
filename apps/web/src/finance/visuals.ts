@@ -30,7 +30,7 @@ import {
   formatSignedMoneyWhole,
 } from "./format";
 import { derivedRowTitle, frequencyShort, KIND_ACCENT } from "./labels";
-import { beatOf, horizonBeat, isPointItem } from "./mapping";
+import { beatOf, horizonBeat } from "./mapping";
 
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
@@ -107,7 +107,8 @@ function endOfDaySeries(
 
 /**
  * Where inside its day an event / mark is drawn (beats): at the day's start,
- * on the same line as the playhead and the step of the cash curve.
+ * on the same line as the playhead, the hover line and the step of the cash
+ * curve.
  */
 export const EVENT_DAY_OFFSET = 0;
 
@@ -425,10 +426,11 @@ export function buildClipContents(
       return Math.sign(v) * (0.18 + 0.82 * relative);
     });
     const item = itemById.get(id);
+    // A one-time event is a tag as wide as its name and amount
+    // (clipMinWidth), the WHOLE tag in its kind's colour like its siblings
+    // (2026-11-18: no faint "rest of the tag" any more; UX-41's one-day
+    // extent is gone): its day is its left edge, where the accent bar sits.
     const content: PlaylistClipContent = { kind: "events", beats, values };
-    // A one-day event is drawn a week wide so its name fits: its real day
-    // is the card, the rest a faint tag (the day reads without hover).
-    if (item && isPointItem(item)) content.extent = 1;
     if (item && KIND_ACCENT[item.kind] !== "solid") content.accent = KIND_ACCENT[item.kind];
     contents.set(id, content);
   }

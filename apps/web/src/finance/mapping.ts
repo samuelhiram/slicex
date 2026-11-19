@@ -102,6 +102,39 @@ export function isPayoffPinned(item: FinancialItem): boolean {
   );
 }
 
+/**
+ * Whether its dates are fixed on the timeline when the person never chose:
+ * a window with a start AND an end (an expense "until June", a loan with
+ * its last payment) and an MSI plan (its months are its range) are fixed;
+ * a one-time event (one date) and anything open-ended — revolving cards and
+ * balance loans included, whose end is a result (their right edge is the
+ * "free by then" goal-seek) — move freely.
+ */
+export function datesLockedByDefault(item: FinancialItem): boolean {
+  if (item.kind === "installment-plan") return true;
+  if (isPointItem(item) || isPayoffPinned(item)) return false;
+  return item.recurrence.endDate !== undefined;
+}
+
+/** Whether dragging it on the timeline leaves its dates alone (its clip's lock). */
+export function isDatesLocked(item: FinancialItem): boolean {
+  return item.lockDates ?? datesLockedByDefault(item);
+}
+
+/**
+ * `item` with its lock set to `locked`: stored (lockDates) only when it
+ * differs from the default, so a lock put back where it was leaves no
+ * trace. The same item when nothing changes.
+ */
+export function withDatesLocked<T extends FinancialItem>(item: T, locked: boolean): T {
+  const explicit = locked !== datesLockedByDefault(item);
+  if (explicit ? item.lockDates === locked : item.lockDates === undefined) return item;
+  const next = { ...item };
+  if (explicit) next.lockDates = locked;
+  else delete next.lockDates;
+  return next;
+}
+
 export function beatOf(doc: FinancialDocument, date: ISODate): number {
   return diffDays(doc.startDate, date);
 }
@@ -270,6 +303,7 @@ export function deriveRecurrence(
   }
   const next: FinancialRecurrence = { frequency: rule.frequency, startDate };
   if (rule.interval !== undefined) next.interval = rule.interval;
+  if (rule.flexibleDay === true) next.flexibleDay = true;
   if (endDate !== undefined) next.endDate = endDate;
   if (nextAnchor !== undefined) next.anchorDate = nextAnchor;
   return next;
@@ -349,6 +383,7 @@ export function itemToClip(
   if (geometry.contentOffset !== 0) clip.contentOffset = geometry.contentOffset;
   if (item.enabled === false) clip.muted = true;
   if (!isSliceable(item)) clip.noSlice = true;
+  if (isDatesLocked(item)) clip.timeLocked = true;
   return clip;
 }
 
