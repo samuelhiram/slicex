@@ -31,7 +31,9 @@ export interface PlaylistLayoutOptions {
   // host whose one-time events are tags as wide as their name and amount.
   // The rect (hit-test, renderer) grows; the time span does not. Called
   // per clip near the viewport on each presentation: O(1), host-cached.
-  clipMinWidthPx?: (clip: PlaylistClip) => number;
+  // `height` / `titleHeight`: the card's and its title bar's (the text
+  // layout the host sizes for depends on them).
+  clipMinWidthPx?: (clip: PlaylistClip, height: number, titleHeight: number) => number;
 }
 
 // Height of the overview lane (0 when the metrics have none). Defensive

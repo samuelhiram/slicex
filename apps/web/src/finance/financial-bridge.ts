@@ -54,7 +54,7 @@ import {
   type DebtPayoffEstimate,
 } from "@slicex/core";
 import {
-  clipTextWidthPx,
+  clipCardWidthPx,
   prefersReducedMotion,
   stepSeriesValueAt,
   type PlaylistClip,
@@ -122,9 +122,19 @@ const EMPTY_BARS: number[] = [];
 const DAY_DETAIL_MAX = 5;
 const NO_POINTS: readonly FinancialProjectionPoint[] = [];
 
-// Room a one-time event's tag keeps after its text for the lock (a short
-// card puts it beside the name and amount).
-const POINT_LOCK_ROOM = 26;
+/**
+ * The dates an item covers, as its card shows them next to its lock:
+ * "9 dic 2026" (one date), "1 dic 2026 – 1 sep 2027" (a window), "13 nov
+ * 2026 – Indefinido" (open-ended), a debt or MSI up to its payoff ("… – 10
+ * jun 2028"; "– Indefinido" when the estimate never clears it).
+ */
+export function describePeriod(item: FinancialItem, payoff?: DebtPayoffEstimate): string {
+  const start = formatDateLong(item.recurrence.startDate);
+  if (isPointItem(item)) return start;
+  if (item.recurrence.endDate !== undefined) return `${start} – ${formatDateLong(item.recurrence.endDate)}`;
+  if (payoff?.payoffDate) return `${start} – ${formatDateLong(payoff.payoffDate)}`;
+  return `${start} – Indefinido`;
+}
 
 interface Observed {
   start: number;
@@ -345,9 +355,12 @@ export class FinancialBridge implements FinancialBridgeApi {
   private itemIndex = new Map<string, FinancialItem>();
   private readonly detailCache = new Map<string, string | null>();
   private detailDay = Number.NaN;
-  // Least drawn width of one-time events (their text), per revision.
-  private readonly minWidthCache = new Map<string, number>();
+  // Least drawn width of one-time events (their text) per card height,
+  // and every card's dates; both per revision.
+  private readonly minWidthCache = new Map<string, { height: number; titleHeight: number; width: number }>();
   private minWidthRevision = -1;
+  private readonly periodCache = new Map<string, string | null>();
+  private periodRevision = -1;
   private debtAtDay: { revision: number; day: number; value: Map<string, number> } | null =
     null;
   // Renderer providers: rebuilt lazily once per revision, identity-stable.
@@ -502,22 +515,41 @@ export class FinancialBridge implements FinancialBridgeApi {
   // cache is per (revision, day), so it changes at most once per day.
   /**
    * A one-time event (one date: no range, not open-ended) is a tag as wide
-   * as its name and amount at any zoom — never "+$…" — plus room for its
-   * lock beside the text on a short card; 0 for everything else (their span
-   * is their dates). The core's clipMinWidthPx: O(1), cached per revision.
+   * as its name, amount, lock and date at any zoom — never "+$…" — laid out
+   * as a card of `height` draws it (clipCardWidthPx); 0 for everything else
+   * (their span is their dates). The core's clipMinWidthPx: O(1), cached
+   * per revision and card height.
    */
-  clipMinWidth(clipId: string): number {
+  clipMinWidth(clipId: string, height: number, titleHeight: number): number {
     if (this.minWidthRevision !== this.revision) {
       this.minWidthCache.clear();
       this.minWidthRevision = this.revision;
     }
     const cached = this.minWidthCache.get(clipId);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined && cached.height === height && cached.titleHeight === titleHeight) {
+      return cached.width;
+    }
     const item = this.itemIndex.get(clipId);
     const width =
-      item && isPointItem(item) ? clipTextWidthPx(item.name, describeItem(item, this.doc)) + POINT_LOCK_ROOM : 0;
-    this.minWidthCache.set(clipId, width);
+      item && isPointItem(item)
+        ? clipCardWidthPx(item.name, describeItem(item, this.doc), this.getClipPeriod(clipId), height, titleHeight)
+        : 0;
+    this.minWidthCache.set(clipId, { height, titleHeight, width });
     return width;
+  }
+
+  /** The dates a card shows next to its lock (describePeriod). O(1), cached per revision. */
+  getClipPeriod(clipId: string): string | null {
+    if (this.periodRevision !== this.revision) {
+      this.periodCache.clear();
+      this.periodRevision = this.revision;
+    }
+    const cached = this.periodCache.get(clipId);
+    if (cached !== undefined) return cached;
+    const item = this.itemIndex.get(clipId);
+    const text = item ? describePeriod(item, this.payoffs().get(item.id)) : null;
+    this.periodCache.set(clipId, text);
+    return text;
   }
 
   getClipDetail(clipId: string): string | null {

@@ -629,7 +629,7 @@ function createClipViews(
   state: PlaylistState,
   metrics: PlaylistMetrics,
   cache: TrackLayoutCache,
-  minWidthPx?: (clip: PlaylistClip) => number,
+  minWidthPx?: (clip: PlaylistClip, height: number, titleHeight: number) => number,
 ): PlaylistClipPresentation[] {
   const selectedClipIds = new Set(state.selection.clipIds);
   const hoveredClipId =
@@ -681,10 +681,7 @@ function createClipViews(
   const rulerOffset = getTracksTop(metrics) - state.viewport.scrollY;
 
   for (const clip of state.clips) {
-    // A host minimum width (a tag as wide as its text) also reaches right.
-    const minWidth = minWidthPx ? minWidthPx(clip) : 0;
-    const clipEnd = Math.max(clip.start + clip.duration, clip.start + minWidth / pxPerBeat);
-    if (clipEnd < visibleStartTime || clip.start > visibleEndTime) {
+    if (clip.start > visibleEndTime) {
       continue;
     }
     const trackIndex = cache.trackIndexById.get(clip.trackId);
@@ -697,12 +694,21 @@ function createClipViews(
     if (trackTop > visibleEndLocalY) continue;
     // Stacked lanes: the clip takes one lane of the row (lanes.ts).
     const laneHeight = cache.laneHeights[trackIndex]!;
+    // A host minimum width (a tag as wide as its text) also reaches right.
+    const cardHeight = laneHeight - metrics.clipPaddingY * 2;
+    const minWidth = minWidthPx
+      ? minWidthPx(clip, cardHeight, Math.min(metrics.clipTitleHeight, cardHeight))
+      : 0;
+    const clipEnd = Math.max(clip.start + clip.duration, clip.start + minWidth / pxPerBeat);
+    if (clipEnd < visibleStartTime) {
+      continue;
+    }
 
     const rect = {
       x: headerOffset + clip.start * pxPerBeat,
       y: rulerOffset + trackTop + (clip.lane ?? 0) * laneHeight + metrics.clipPaddingY,
       width: Math.max(clip.duration * pxPerBeat, minWidth),
-      height: laneHeight - metrics.clipPaddingY * 2,
+      height: cardHeight,
     };
     const titleRect = getClipTitleRect(state, clip, metrics);
     const handleHeight =

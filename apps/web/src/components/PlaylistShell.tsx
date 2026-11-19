@@ -1525,7 +1525,7 @@ export function PlaylistShell() {
         // to draw, paste or drop on; rows are never removed by themselves.
         // One-time events are tags as wide as their name and amount at any
         // zoom (the bridge, created right below, sizes them).
-        clipMinWidthPx: (clip) => financial?.clipMinWidth(clip.id) ?? 0,
+        clipMinWidthPx: (clip, height, titleHeight) => financial?.clipMinWidth(clip.id, height, titleHeight) ?? 0,
       });
       const bridgeInstance = new FinancialBridge(instance, doc);
       financial = bridgeInstance;
@@ -1649,8 +1649,10 @@ export function PlaylistShell() {
         // UX-39: the amount grip is a fixed target (where the hit-test is).
         clipLevelGrip: true,
         clipExtend: (clipId) => bridgeInstance.canExtend(clipId),
-        // The lock button on each card (pairs with the controller's clipTimeLock).
+        // The lock button on each card (pairs with the controller's clipTimeLock),
+        // with the dates it fixes right after it.
         clipTimeLock: true,
+        getClipPeriod: (clipId) => bridgeInstance.getClipPeriod(clipId),
         onError: (reason) => {
           setError(reason instanceof Error ? reason.message : "Renderer failed.");
         },

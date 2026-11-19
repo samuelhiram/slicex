@@ -67,6 +67,11 @@ const TITLE_CHAR_PX = 7.2;
 const LOCK_BOX = 22;
 const LOCK_MIN_WIDTH = 44;
 const LOCK_INSET = 3;
+// The dates a card covers (providers.getClipPeriod: "1 dic 2026 – 1 sep
+// 2027", "13 nov 2026 – Indefinido", "9 dic 2026") sit right after the lock,
+// on its row: what the lock fixes, next to it.
+const PERIOD_GAP = 2;
+const PERIOD_FONT_SIZE = 11;
 
 interface ClipNode {
   container: Container;
@@ -108,6 +113,13 @@ interface ClipNode {
   // transform every frame with the title.
   lock: Graphics | null;
   lockKey: number;
+  // The dates next to the lock (providers.getClipPeriod); display string
+  // cached per (source, width, height) — never rebuilt per frame.
+  period: Text | null;
+  periodSource: string | null;
+  periodWidth: number;
+  periodHeight: number;
+  periodDisplay: string;
   // Visual hash captures everything that would force a redraw. Position and
   // size are kept separate so we can skip a redraw when only x/y changed.
   hash: string;
@@ -211,11 +223,14 @@ export interface ClipNodeProviders {
   getClipDetail?: ClipDetailProvider;
   getClipSparkline?: ClipSparklineProvider;
   getClipContent?: ClipContentProvider;
-  // Clips carry a lock button before their title (pair with the
-  // controller's clipTimeLock, whose rectOf reads lockRectOf): closed and
-  // bright on a time-locked clip, open and quiet on a free one, a soft chip
-  // under the pointer.
+  // Clips carry a lock button (pair with the controller's clipTimeLock,
+  // whose rectOf reads lockRectOf): closed on a time-locked clip, open and
+  // quieter on a free one, opaque on a soft chip under the pointer.
   timeLock?: boolean;
+  // The dates a clip covers, drawn after its lock (with timeLock). Called
+  // once per VISIBLE clip per frame: O(1) cached, the SAME string while
+  // unchanged; null = none.
+  getClipPeriod?: (clipId: string) => string | null;
 }
 
 function getSparklineBars(
@@ -308,6 +323,47 @@ export function clipTextWidthPx(title: string, detail: string | null): number {
     detail ? DETAIL_PAD_X + detail.length * DETAIL_CHAR_PX : 0,
   );
   return Math.ceil(text + CLIP_TEXT_RIGHT_PAD + 1);
+}
+
+/** The lock row: the card's bottom-left corner, or beside the text on a card too short for it. */
+function lockBeside(height: number, titleHeight: number): boolean {
+  return height - LOCK_BOX < titleHeight + DETAIL_LINE_HEIGHT;
+}
+
+/** Local x where the text block (title + detail) ends, without the sticky shift. */
+function textBlockEnd(titleChars: number, detailChars: number): number {
+  return Math.max(
+    TITLE_PAD_X + titleChars * TITLE_CHAR_PX,
+    detailChars > 0 ? DETAIL_PAD_X + detailChars * DETAIL_CHAR_PX : 0,
+  );
+}
+
+/** Local x where the lock box starts (beside mode: after the text block). */
+function lockRowStart(beside: boolean, blockEnd: number): number {
+  return beside ? blockEnd + 6 : TITLE_PAD_X - LOCK_INSET;
+}
+
+/**
+ * Px a lock-carrying card (providers.timeLock) of `height` needs to show
+ * its title, detail, lock and dates whole — the same layout and estimates
+ * the drawing uses (headless-safe). For hosts that size tags to their text
+ * (PlaylistLayoutOptions.clipMinWidthPx).
+ */
+export function clipCardWidthPx(
+  title: string,
+  detail: string | null,
+  period: string | null,
+  height: number,
+  titleHeight: number,
+): number {
+  const detailChars = detail && height >= titleHeight + DETAIL_MIN_BODY_HEIGHT ? detail.length : 0;
+  const block = textBlockEnd(title.length, detailChars);
+  const beside = lockBeside(height, titleHeight);
+  const row =
+    lockRowStart(beside, block) +
+    LOCK_BOX +
+    (period ? PERIOD_GAP + period.length * DETAIL_CHAR_PX : 0);
+  return Math.ceil(Math.max(block, row) + CLIP_TEXT_RIGHT_PAD + 1);
 }
 
 // Title of a clip of `width` px (same pads as the detail line). Truncated
@@ -804,7 +860,7 @@ function drawClipOverlayLocal(
 
 function ensureText(
   node: ClipNode,
-  key: "label" | "ratioBadge" | "offsetBadge" | "detail",
+  key: "label" | "ratioBadge" | "offsetBadge" | "detail" | "period",
   factory: () => Text,
 ): Text {
   let existing = node[key];
@@ -866,6 +922,7 @@ export function createClipNodeRegistry(
   const isClipHighlighted = providers.isClipHighlighted;
   const badges = providers.badges !== false;
   const timeLock = providers.timeLock === true;
+  const getClipPeriod = timeLock ? providers.getClipPeriod : undefined;
   // Px the title gives to the lock on a clip `width` wide.
   // The card shows a lock: its text shows (labels need 44 x 24) and the
   // box fits its height.
@@ -924,10 +981,18 @@ export function createClipNodeRegistry(
   function stickyShift(node: ClipNode, view: PlaylistClipPresentation, left: number): number {
     const hidden = left - view.rect.x;
     if (!(hidden > 0)) return 0;
-    const textWidth = Math.max(
+    const block = Math.max(
       TITLE_PAD_X + node.labelDisplay.length * TITLE_CHAR_PX,
       DETAIL_PAD_X + node.detailDisplay.length * DETAIL_CHAR_PX,
     );
+    // The lock row slides with the text: it must fit too.
+    const row =
+      timeLock && lockFits(view)
+        ? lockRowStart(lockBeside(view.rect.height, view.titleRect.height), block) +
+          LOCK_BOX +
+          (node.periodDisplay ? PERIOD_GAP + node.periodDisplay.length * DETAIL_CHAR_PX : 0)
+        : 0;
+    const textWidth = Math.max(block, row);
     const room = view.rect.width - textWidth - CLIP_TEXT_RIGHT_PAD;
     return Math.round(Math.max(0, Math.min(hidden, room)));
   }
@@ -947,11 +1012,7 @@ export function createClipNodeRegistry(
       if (node.lock) node.lock.visible = false;
       return 0;
     }
-    if (node.labelSource !== view.clip.label || node.labelWidth !== width) {
-      node.labelSource = view.clip.label;
-      node.labelWidth = width;
-      node.labelDisplay = truncateClipTitle(view.clip.label, width);
-    }
+    refreshTitle(node, view);
     const shift = stickyShift(node, view, stickyLeft);
     if (node.labelDisplay.length === 0) {
       hideText(node.label);
@@ -1030,6 +1091,45 @@ export function createClipNodeRegistry(
     return shift;
   }
 
+  function refreshTitle(node: ClipNode, view: PlaylistClipPresentation): void {
+    const width = view.rect.width;
+    if (node.labelSource !== view.clip.label || node.labelWidth !== width) {
+      node.labelSource = view.clip.label;
+      node.labelWidth = width;
+      node.labelDisplay = truncateClipTitle(view.clip.label, width);
+    }
+  }
+
+  // The dates' display: truncated to the room the lock row leaves (by
+  // width / height / the text it follows, not by the sticky shift), so it is
+  // rebuilt only when one of those changes.
+  function refreshPeriod(
+    node: ClipNode,
+    view: PlaylistClipPresentation,
+    period: string | null,
+    detailVisible: boolean,
+  ): void {
+    const width = view.rect.width;
+    const height = view.rect.height;
+    if (node.periodSource === period && node.periodWidth === width && node.periodHeight === height) return;
+    node.periodSource = period;
+    node.periodWidth = width;
+    node.periodHeight = height;
+    if (period === null || period.length === 0) {
+      node.periodDisplay = "";
+      return;
+    }
+    const block = textBlockEnd(
+      node.labelDisplay.length,
+      detailVisible ? node.detailDisplay.length : 0,
+    );
+    const start = lockRowStart(lockBeside(height, view.titleRect.height), block) + LOCK_BOX + PERIOD_GAP;
+    node.periodDisplay = truncateToChars(
+      period,
+      Math.floor((width - start - CLIP_TEXT_RIGHT_PAD) / DETAIL_CHAR_PX),
+    );
+  }
+
   // The lock: bottom-left (or beside the text on a short card), placed by
   // transform with the title's sticky shift after the labels are laid out;
   // redrawn only when its look changes.
@@ -1050,24 +1150,43 @@ export function createClipNodeRegistry(
     }
     const height = view.rect.height;
     // The corner only when the box clears the title + detail lines (the
-    // glyph has its own padding in the box, so it sits on the bottom edge).
-    if (height - LOCK_BOX >= view.titleRect.height + DETAIL_LINE_HEIGHT) {
-      lock.x = TITLE_PAD_X - LOCK_INSET + shift;
+    // glyph has its own padding in the box, so it sits on the bottom edge);
+    // else beside the text block. The same conservative advances as the
+    // sticky text (no canvas measuring: deterministic and headless-safe).
+    const beside = lockBeside(height, view.titleRect.height);
+    if (!beside) {
+      lock.x = lockRowStart(false, 0) + shift;
       lock.y = height - LOCK_BOX;
     } else {
-      // The same conservative advances as the sticky text (no canvas
-      // measuring: deterministic and headless-safe).
       const label = node.label !== null && node.label.visible;
       const detail = node.detail !== null && node.detail.visible;
-      const textEnd = Math.max(
-        TITLE_PAD_X + shift,
-        label ? TITLE_PAD_X + shift + node.labelDisplay.length * TITLE_CHAR_PX : 0,
-        detail ? DETAIL_PAD_X + shift + node.detailDisplay.length * DETAIL_CHAR_PX : 0,
-      );
-      lock.x = Math.round(Math.min(textEnd + 6, view.rect.width - LOCK_BOX - LOCK_INSET - 2));
+      const block = textBlockEnd(label ? node.labelDisplay.length : 0, detail ? node.detailDisplay.length : 0);
+      lock.x = Math.round(Math.min(lockRowStart(true, block) + shift, view.rect.width - LOCK_BOX - LOCK_INSET - 2));
       lock.y = Math.round((height - LOCK_BOX) / 2);
     }
     lock.visible = true;
+
+    // The dates, right after the lock, on its row.
+    if (!node.periodDisplay) {
+      hideText(node.period);
+      return;
+    }
+    const color = view.effectivelyMuted ? palette.textMuted : palette.text;
+    const text = ensureText(node, "period", () =>
+      new Text({
+        text: node.periodDisplay,
+        style: {
+          fill: color,
+          fontFamily: CANVAS_FONT_FAMILY,
+          fontSize: PERIOD_FONT_SIZE,
+          fontWeight: "500" as any,
+        },
+      }),
+    );
+    applyText(text, node.periodDisplay, color, PERIOD_FONT_SIZE, "500");
+    text.alpha = view.effectivelyMuted ? 0.6 : 0.72;
+    text.x = lock.x + LOCK_BOX + PERIOD_GAP;
+    text.y = lock.y + Math.round((LOCK_BOX - DETAIL_LINE_HEIGHT) / 2);
   }
 
   function createNode(): ClipNode {
@@ -1097,6 +1216,11 @@ export function createClipNodeRegistry(
       highlighted: false,
       lock: null,
       lockKey: -1,
+      period: null,
+      periodSource: null,
+      periodWidth: -1,
+      periodHeight: -1,
+      periodDisplay: "",
       hash: "",
       width: 0,
       height: 0,
@@ -1181,17 +1305,26 @@ export function createClipNodeRegistry(
         node.width = view.rect.width;
         node.height = view.rect.height;
       }
-      // The detail's display string feeds the sticky width: refresh it first.
+      // The detail's, title's and dates' display strings feed the sticky
+      // width: refresh them first.
       if (detail !== null && (node.detailSource !== detail || node.detailWidth !== view.rect.width)) {
         node.detailSource = detail;
         node.detailWidth = view.rect.width;
         node.detailDisplay = truncateClipDetail(detail, view.rect.width);
       }
+      if (getClipPeriod) {
+        refreshTitle(node, view);
+        refreshPeriod(node, view, getClipPeriod(view.clip.id), detailVisible);
+      }
       const shift = applyLabels(node, view, detailVisible, stickyLeft);
       applyDetail(node, view, detail, detailVisible, shift);
       if (timeLock) {
-        if (lockFits(view)) placeLock(node, view, shift);
-        else if (node.lock) node.lock.visible = false;
+        if (lockFits(view)) {
+          placeLock(node, view, shift);
+        } else {
+          if (node.lock) node.lock.visible = false;
+          hideText(node.period);
+        }
       }
     }
     // Hide nodes whose clips are off-screen this frame. We keep them
@@ -1205,6 +1338,7 @@ export function createClipNodeRegistry(
       hideText(node.ratioBadge);
       hideText(node.offsetBadge);
       hideText(node.detail);
+      hideText(node.period);
     }
   }
 
@@ -1221,6 +1355,7 @@ export function createClipNodeRegistry(
         if (node.ratioBadge) node.ratioBadge.removeFromParent();
         if (node.offsetBadge) node.offsetBadge.removeFromParent();
         if (node.detail) node.detail.removeFromParent();
+        if (node.period) node.period.removeFromParent();
       } catch {
         // noop — best-effort cleanup
       }
@@ -1243,6 +1378,7 @@ export function createClipNodeRegistry(
       node.ratioBadge?.style.update();
       node.offsetBadge?.style.update();
       node.detail?.style.update();
+      node.period?.style.update();
     }
   }
 

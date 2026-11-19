@@ -118,7 +118,7 @@ export interface PlaylistCoreOptions {
   //     destination to the last real track.
   virtualTracks?: boolean;
   // See PlaylistLayoutOptions.clipMinWidthPx.
-  clipMinWidthPx?: (clip: PlaylistClip) => number;
+  clipMinWidthPx?: (clip: PlaylistClip, height: number, titleHeight: number) => number;
 }
 
 export interface PlaylistSubscription {

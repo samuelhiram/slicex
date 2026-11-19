@@ -80,6 +80,10 @@ export interface PlaylistRendererCallbacks {
   // controller's clipTimeLock, rectOf = getClipLockRect below): closed on a
   // time-locked clip, open and quiet on a free one. Read once.
   clipTimeLock?: boolean;
+  // The dates a clip covers, drawn after its lock (with clipTimeLock):
+  // "1 dic 2026 – 1 sep 2027". Called once per VISIBLE clip per frame: O(1)
+  // cached, the SAME string while unchanged; null = none.
+  getClipPeriod?: (clipId: string) => string | null;
   // Host emphasis per clip: true = warm ring, "danger" = a red ring and a
   // dimmed card (e.g. what a delete sweep will remove). Called once per
   // VISIBLE clip per frame: O(1), a primitive; call invalidate() when it
@@ -187,6 +191,7 @@ export function createPlaylistRenderer(
       getClipSparkline: callbacks.getClipSparkline,
       getClipContent: callbacks.getClipContent,
       timeLock: callbacks.clipTimeLock === true,
+      getClipPeriod: callbacks.getClipPeriod,
     },
   );
   // Overview lane (canon §3.10 cached layer): frame + curves rebuilt only
