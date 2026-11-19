@@ -18,7 +18,7 @@ import {
   type PlaylistState,
 } from "../src/playlist-core";
 import { createPlaylistInteractionController, hitTestPlaylist } from "../src/playlist-interaction";
-import { createClipNodeRegistry } from "../src/playlist-renderer-pixi/clip-node-registry";
+import { clipCardWidthPx, createClipNodeRegistry } from "../src/playlist-renderer-pixi/clip-node-registry";
 import { COLORS } from "../src/playlist-renderer-pixi/palette";
 
 const M = DEFAULT_PLAYLIST_METRICS;
@@ -285,7 +285,11 @@ function drawn(start: number, duration: number, scrollBeats: number, timeLocked 
   core.setViewportSize(WIDTH, HEIGHT);
   core.updateViewport({ pxPerBeat: PX, scrollX: scrollBeats * PX, scrollY: 0 });
   if (rowHeight !== undefined) core.setTrackHeight(0, rowHeight);
-  const registry = createClipNodeRegistry(COLORS, { timeLock: true, getClipDetail: () => "-$7,500 /mes" });
+  const registry = createClipNodeRegistry(COLORS, {
+    timeLock: true,
+    getClipDetail: () => "-$7,500 /mes",
+    getClipPeriod: () => "10 nov 2026 – 10 abr 2027",
+  });
   const parent = new Container();
   const views = core.getPresentation().visibleClipViews;
   registry.syncFrame(parent, views, M.trackHeaderWidth);
@@ -293,7 +297,13 @@ function drawn(start: number, duration: number, scrollBeats: number, timeLocked 
   // The title (truncated on a narrow card): the first Text of the node.
   const title = node.children.find((child) => child instanceof Text) as Text | undefined;
   const lock = registry.lockRectOf("c0", { x: 0, y: 0, width: 0, height: 0 });
+  const period = node.children.find((child) => child instanceof Text && child.text.includes("nov 2026")) as
+    | Text
+    | undefined;
   return {
+    periodX: period && period.visible ? node.x + period.x : Number.NaN,
+    periodY: period && period.visible ? node.y + period.y : Number.NaN,
+    periodText: period && period.visible ? period.text : null,
     rect: views[0]!.rect,
     lock,
     titleX: title ? node.x + title.x : Number.NaN,
@@ -334,5 +344,31 @@ describe("the lock sits in the bottom-left corner", () => {
     expect(drawn(5, 50, 0, false).lock).not.toBeNull();
     // 2 beats = 40 px.
     expect(drawn(5, 2, 0).lock).toBeNull();
+  });
+});
+
+describe("the dates it covers, right after the lock", () => {
+  it("on the lock's row, whole on a long card", () => {
+    const { lock, periodX, periodY, periodText } = drawn(5, 50, 0);
+    expect(periodText).toBe("10 nov 2026 – 10 abr 2027");
+    expect(periodX).toBeGreaterThanOrEqual(lock!.x + lock!.width);
+    expect(periodX - (lock!.x + lock!.width)).toBeLessThan(6);
+    expect(periodY).toBeGreaterThanOrEqual(lock!.y);
+    expect(periodY).toBeLessThan(lock!.y + lock!.height);
+  });
+
+  it("beside the text on a short card too; cut to fit a narrow one", () => {
+    const short = drawn(5, 50, 0, true, 44);
+    expect(short.periodText).toBe("10 nov 2026 – 10 abr 2027");
+    expect(short.periodX).toBeGreaterThan(short.lock!.x);
+    // 7 beats = 140 px: the dates are cut, never past the card.
+    const narrow = drawn(5, 7, 0);
+    expect(narrow.periodText!.endsWith("…")).toBe(true);
+  });
+
+  it("clipCardWidthPx fits what the card draws", () => {
+    const tall = clipCardWidthPx("Bono", "+$4,000", "9 dic 2026", 58, 20);
+    expect(tall).toBeGreaterThanOrEqual(8 + 22 + 2 + "9 dic 2026".length * 6.7);
+    expect(clipCardWidthPx("Bono", "+$4,000", "9 dic 2026", 40, 20)).toBeGreaterThan(tall);
   });
 });

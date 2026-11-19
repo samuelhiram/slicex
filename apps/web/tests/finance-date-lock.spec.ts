@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { FinancialDocument, FinancialItem } from "@slicex/core";
 import { createPlaylistCore } from "@slicex/canvas";
-import { FinancialBridge } from "../src/finance/financial-bridge";
+import { describePeriod, FinancialBridge } from "../src/finance/financial-bridge";
 import {
   FINANCE_PLAYLIST_METRICS,
   createFinancialPlaylistState,
@@ -186,15 +186,56 @@ describe("the clip's lock is the item's", () => {
 });
 
 describe("one-time events are as wide as their name and amount", () => {
-  it("a tag width for one-time events, none for windows; it follows a rename", () => {
+  it("a tag width for one-time events, none for windows; it follows a rename and the card's height", () => {
     const { bridge } = setup();
-    const width = bridge.clipMinWidth("bono");
-    expect(width).toBeGreaterThan(11 + "Bono".length * 7.2);
-    expect(bridge.clipMinWidth("sal")).toBe(0);
-    expect(bridge.clipMinWidth("loan")).toBe(0);
+    const width = bridge.clipMinWidth("bono", 58, 20);
+    // Its date ("9 dic 2026") after the lock, at least.
+    expect(width).toBeGreaterThan(8 + 22 + "9 dic 2026".length * 6.7);
+    expect(bridge.clipMinWidth("sal", 58, 20)).toBe(0);
+    expect(bridge.clipMinWidth("loan", 58, 20)).toBe(0);
+    // A short card puts lock + date beside the text: wider.
+    expect(bridge.clipMinWidth("bono", 40, 20)).toBeGreaterThan(width);
     const bono = bridge.getItem("bono")!;
-    expect(bridge.replaceItem({ ...bono, name: "Bono de fin de año" })).toBe(true);
-    expect(bridge.clipMinWidth("bono")).toBeGreaterThan(width);
+    expect(bridge.replaceItem({ ...bono, name: "Bono de fin de año y algo más" })).toBe(true);
+    expect(bridge.clipMinWidth("bono", 40, 20)).toBeGreaterThan(bridge.clipMinWidth("bono", 58, 20) - 1);
+  });
+});
+
+describe("every card says the dates it covers", () => {
+  it("one date, a window, open-ended, a debt to its payoff", () => {
+    const { bridge } = setup();
+    expect(bridge.getClipPeriod("bono")).toBe("9 dic 2026");
+    expect(bridge.getClipPeriod("loan")).toBe("10 nov 2026 – 10 abr 2027");
+    expect(bridge.getClipPeriod("sal")).toBe("13 nov 2026 – Indefinido");
+    const card: FinancialItem = {
+      id: "c",
+      name: "Nu",
+      kind: "credit-card",
+      balance: 3000,
+      annualRate: 0,
+      cutDay: 5,
+      dueDay: 15,
+      minimumPayment: 300,
+      recurrence: { frequency: "monthly", startDate: START },
+    };
+    expect(
+      describePeriod(card, {
+        accountId: "c",
+        name: "Nu",
+        kind: "credit-card",
+        payoffDate: "2027-02-15",
+        totalInterest: 0,
+        totalPaid: 3000,
+      } as never),
+    ).toBe("7 nov 2026 – 15 feb 2027");
+    expect(describePeriod(card)).toBe("7 nov 2026 – Indefinido");
+  });
+
+  it("follows an edit of the dates", () => {
+    const { bridge } = setup();
+    const sal = bridge.getItem("sal")!;
+    bridge.replaceItem({ ...sal, recurrence: { ...sal.recurrence, endDate: "2027-09-01" } });
+    expect(bridge.getClipPeriod("sal")).toBe("13 nov 2026 – 1 sep 2027");
   });
 });
 
