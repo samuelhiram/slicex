@@ -53,13 +53,13 @@ export function createTrackMetaSource(
 // row.titleY: "full" / "compact" / "mini" by row height), shared with the
 // hit-test so the toggles are drawn where they are clicked.
 const NAME_X = 30;
-const NAME_SIZE = 13;
-const NAME_CHAR_PX = 7.6;
+const NAME_SIZE = 14;
+const NAME_CHAR_PX = 8.2;
 const DOT_X = 17;
 const DOT_RADIUS = 4;
 const SUBTITLE_Y = 28;
-const SUBTITLE_SIZE = 11;
-const SUBTITLE_CHAR_PX = 6.2;
+const SUBTITLE_SIZE = 12;
+const SUBTITLE_CHAR_PX = 6.8;
 const METER_HEIGHT = 3;
 // Compact rows: the meter under the subtitle, when the row has room.
 const COMPACT_METER_Y = 46;

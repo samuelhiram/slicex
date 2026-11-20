@@ -477,6 +477,12 @@ Clips de una misma línea que se pisan en el tiempo van en carriles (`clip.lane`
 
 - **Fuera de un gesto** y sólo si cambiaron clips/tracks: `settleLanes`, O(n log n)
   (búsqueda binaria por carril, sin O(k²)). Hover / playhead / viewport: 0 trabajo.
+- **Anchos dibujados** (`PlaylistLayoutOptions.clipMinWidthPx`: una etiqueta de un día tan
+  ancha como su nombre): los carriles separan las tarjetas *dibujadas* — dos pasadas O(n log n),
+  primero por tiempo (el carril propio, `homeLane`) y luego en cascada por inicio. Su ancho en
+  beats depende del zoom, pero el zoom se lee en **niveles de ×1.25** (cada uno tomado en su
+  extremo más alejado, así nada se toca dentro del nivel): se re-asienta sólo al cruzar de
+  nivel, nunca por cuadro de zoom. Sin `clipMinWidthPx`, el viewport sigue costando 0.
 - **Dentro de un gesto** (drag, resize…): `provisionalLanes`, O(n) por move — nada se
   reacomoda, sólo se ajusta `track.lanes` (base al abrir el gesto + carril libre). El
   asentado ocurre UNA vez en `endGesture`, dentro de la misma entrada de undo.

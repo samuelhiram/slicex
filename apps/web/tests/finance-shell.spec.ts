@@ -170,6 +170,10 @@ vi.mock("../src/finance/financial-bridge", async () => {
     getClipSparkline() {
       return null;
     }
+    // No card drawn wider than its time (the shell relays its lanes out once).
+    clipMinWidth() {
+      return 0;
+    }
     // One stable object each, like the real cached providers.
     private readonly overview: import("@slicex/canvas").PlaylistOverviewData = {
       title: "Cash",
@@ -573,25 +577,36 @@ describe("the lock on each object: fixed or free dates", () => {
   });
 });
 
-describe("react-9: nothing covers the playhead readout", () => {
-  it("sits in the money lane's header cell; the rails open below the lane", async () => {
+describe("react-9: the day's reading and 'Pagar deudas' live in the header", () => {
+  it("the reading follows the verdict; 'Pagar deudas' is a header button whose rail opens beside the stage; no time navigator on the canvas", async () => {
     loadGlobalsCss();
     await mountShell();
     const readout = document.querySelector<HTMLElement>(".fin-readout")!;
-    expect(readout.classList.contains("fin-readout--lane")).toBe(true);
-    expect(readout.closest(".playlist-shell__stage")).not.toBeNull();
-    expect(readout.closest(".playlist-shell__bar")).toBeNull();
-    // Inside the lane band (ruler + lane), which no rail covers.
-    const style = getComputedStyle(readout);
-    expect(style.position).toBe("absolute");
-    expect(style.top).toContain("--pl-ruler-h");
+    expect(readout.classList.contains("fin-readout--header")).toBe(true);
+    expect(readout.closest(".fin-summary")).not.toBeNull();
+    expect(readout.closest(".playlist-shell__stage")).toBeNull();
+    // Right after the alerts (what is left of the verdict block), before the other figures.
+    const verdict = document.querySelector(".fin-verdict")!;
+    expect(verdict.compareDocumentPosition(readout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      readout.compareDocumentPosition(document.querySelector(".fin-summary__metrics")!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // "Pagar deudas": a button of the header's actions.
+    const toggle = document.querySelector<HTMLButtonElement>(".fin-side__tab")!;
+    expect(toggle.closest(".fin-summary__actions")).not.toBeNull();
+    expect(toggle.textContent).toContain("Pagar deudas");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
     // UX-47: the open rail is a column BESIDE the stage (it pushes the
-    // canvas), so it can never cover the readout or the row headers.
-    click(document.querySelector(".fin-side__tab"));
+    // canvas), so it never covers the row headers.
+    click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     const rail = document.querySelector<HTMLElement>(".fin-side:not(.fin-side--collapsed)")!;
     expect(rail).not.toBeNull();
     expect(rail.closest(".playlist-shell__stage")).toBeNull();
     expect(rail.closest(".playlist-shell__side-slot")).not.toBeNull();
+    // The time navigator ("‹ Hoy ›", the range, − / +) is gone.
+    expect(document.querySelector(".fin-navctl")).toBeNull();
   });
 
   it("is compact: weekday date, cash and debt on one line", async () => {
@@ -629,7 +644,7 @@ describe("Ola 1 wiring: providers, money lane, endless tracks", () => {
     expect(meta).toBe(bridge.getTrackMeta.mock.results.at(-1)!.value);
   });
 
-  it("creates the core with the 112px money lane and endless tracks (tall window)", async () => {
+  it("creates the core with the 80px money lane and endless tracks (tall window)", async () => {
     withWindowHeight(1000);
     const { bridge } = await mountShell();
     const options = hoisted.coreOptions[0]!;
@@ -638,13 +653,13 @@ describe("Ola 1 wiring: providers, money lane, endless tracks", () => {
     // Everything else is the finance metrics (weeks as bars, year zoom).
     expect(options.metrics).toEqual({
       ...FINANCE_PLAYLIST_METRICS,
-      overviewLaneHeight: 112,
+      overviewLaneHeight: 80,
     });
-    expect(bridge.core.metrics.overviewLaneHeight).toBe(112);
+    expect(bridge.core.metrics.overviewLaneHeight).toBe(80);
     // DOM overlays align below ruler + lane through these two variables.
     const shell = document.querySelector<HTMLElement>(".playlist-shell")!;
     expect(shell.dataset.density).toBe("comfortable");
-    expect(shell.style.getPropertyValue("--pl-lane-h")).toBe("112px");
+    expect(shell.style.getPropertyValue("--pl-lane-h")).toBe("80px");
     expect(shell.style.getPropertyValue("--pl-ruler-h")).toBe(
       `${FINANCE_PLAYLIST_METRICS.rulerHeight}px`,
     );
@@ -657,12 +672,12 @@ describe("Ola 1 wiring: providers, money lane, endless tracks", () => {
     expect(options.metrics).toEqual({
       ...FINANCE_PLAYLIST_METRICS,
       trackHeight: 60,
-      overviewLaneHeight: 96,
+      overviewLaneHeight: 72,
     });
     expect(bridge.core.metrics.trackHeight).toBe(60);
     const shell = document.querySelector<HTMLElement>(".playlist-shell")!;
     expect(shell.dataset.density).toBe("compact");
-    expect(shell.style.getPropertyValue("--pl-lane-h")).toBe("96px");
+    expect(shell.style.getPropertyValue("--pl-lane-h")).toBe("72px");
   });
 });
 

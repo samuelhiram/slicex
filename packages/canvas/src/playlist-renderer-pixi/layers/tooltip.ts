@@ -78,13 +78,13 @@ export function drawTooltip(
     .fill({ color: COLORS.tooltipBackground, alpha: 0.96 });
   addText(ctx.textLayer, text, x + TOOLTIP_PADDING_X, y + 4, {
     color: COLORS.tooltipText,
-    size: 11,
+    size: 12,
     weight: "600",
   });
   for (let i = 0; i < lines.length; i += 1) {
     addText(ctx.textLayer, lines[i]!, x + TOOLTIP_PADDING_X, y + 4 + (i + 1) * TOOLTIP_DETAIL_HEIGHT, {
       color: COLORS.tooltipText,
-      size: 11,
+      size: 12,
       weight: "500",
     });
   }

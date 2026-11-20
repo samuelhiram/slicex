@@ -65,7 +65,8 @@ import {
 } from "../finance/records-panel-state";
 import { StatementDialog } from "../finance/components/StatementDialog";
 import { ValleyCard } from "../finance/components/ValleyCard";
-import { NavControls, NavHelp } from "../finance/components/NavControls";
+import { NavHelp } from "../finance/components/NavControls";
+import { ZoomPad } from "../finance/components/ZoomPad";
 import { createFinancialPlaylistState } from "../finance/mapping";
 import {
   displayRowLabel,
@@ -1529,6 +1530,9 @@ export function PlaylistShell() {
       });
       const bridgeInstance = new FinancialBridge(instance, doc);
       financial = bridgeInstance;
+      // The core laid its lanes out before the bridge could say how wide
+      // each one-time card is drawn: again now, so none covers another.
+      instance.relayoutLanes();
       const futuresInstance = new Futures(bridgeInstance, plan.saved);
       setCore(instance);
       setBridge(bridgeInstance);
@@ -2098,6 +2102,16 @@ export function PlaylistShell() {
           onOpenCommand={() => setCommandOpen(true)}
           futures={futures}
           plan={planActions}
+          // Date · cash · debt of the marked (or hovered) day, big, right
+          // after the verdict.
+          reading={
+            <PlayheadReadout
+              bridge={bridge}
+              className="fin-readout--header"
+              keyboardIntentRef={keyIntentRef}
+              followHover
+            />
+          }
           tools={
             // Tools + futures inside the header card: nothing floats over
             // the ruler dates or the money lane.
@@ -2119,6 +2133,18 @@ export function PlaylistShell() {
                       onRecord={() => setCapture({ movement: null, kind: "expense" })}
                     />
                   )}
+                </>
+              ) : null}
+              {/* "Pagar deudas": its rail opens beside the stage (UX-47). */}
+              <FinancialSidePanel
+                bridge={bridge}
+                futures={futures}
+                today={today}
+                slot={sideSlot}
+                placement="header"
+              />
+              {futures ? (
+                <>
                   <button
                     type="button"
                     className="fin-icon-button fin-search-trigger"
@@ -2159,22 +2185,8 @@ export function PlaylistShell() {
       <div className="playlist-shell__workspace">
       <div className="playlist-shell__side-slot" ref={setSideSlot} inert={editorOpen} />
       <div className="playlist-shell__stage" inert={editorOpen}>
-        {core && navigator && bridge ? (
-          <NavControls core={core} navigator={navigator} bridge={bridge} />
-        ) : null}
-        {/* Date · cash · debt at the playhead, in the money lane's header
-            cell (rails open below the lane: nothing covers it). */}
-        {bridge ? (
-          <PlayheadReadout
-            bridge={bridge}
-            className="fin-readout--lane"
-            keyboardIntentRef={keyIntentRef}
-            followHover
-          />
-        ) : null}
-        {bridge ? (
-          <FinancialSidePanel bridge={bridge} futures={futures} today={today} slot={sideSlot} />
-        ) : null}
+        {/* The table's corner: drag it — ↔ zoom, ↕ the lines' height. */}
+        {core ? <ZoomPad core={core} /> : null}
         {/* UX-04: the keys come first in its name (the gestures are in
             "Cómo moverte"); a navigation key marks the next day change as
             keyboard driven, so the day's reading is spoken. */}
@@ -2388,6 +2400,8 @@ export function PlaylistShell() {
             }
             onClose={closeEditor}
             returnFocusFallback={getHost}
+            // The edited object stays clear behind the editor's blur.
+            spotlightHost={getHost}
             today={today}
             // UX-51: the editor only calls it with nothing unsaved; closing
             // the statement comes back to this card's editor.

@@ -50,47 +50,84 @@ const CLIP_MUTED_TINT_SCALE = 0.4;
 const CLIP_ACCENT_WIDTH = 3;
 const CLIP_ACCENT_INSET = 4;
 const CLIP_RESIZE_ALPHA = 0.32;
-const TITLE_FONT_SIZE = 12;
+const TITLE_FONT_SIZE = 13;
+// The name and amount lines get a thin outline in the card's own colour: a
+// payment bar running behind them stops at each letter's edge, so the text
+// stays crisp over the full-height bars. Pixi draws an outlined text half
+// the outline further right and down: HALO_SHIFT puts the letters back.
+const TEXT_HALO_WIDTH = 2;
+const HALO_SHIFT = TEXT_HALO_WIDTH / 2;
 const TITLE_PAD_X = 11;
 // Right edge kept free of text: the resize grip column + a margin.
 export const CLIP_TEXT_RIGHT_PAD = 6;
 const TITLE_Y = 5;
 // Conservative advance of the 12px / 600 title font (no canvas measuring:
 // deterministic and headless-safe, same approach as the detail line).
-const TITLE_CHAR_PX = 7.2;
+const TITLE_CHAR_PX = 7.8;
 // The card's THIRD ROW (providers.timeLock), under the name and the
 // amount, holds TWO different things side by side:
-//   - the lock: an icon-only button (translucent padlock; a soft square
-//     under the pointer) — the only part that reacts to the pointer;
+//   - the lock: a BUTTON tucked into the card's bottom-left CORNER — a tab
+//     flush with the left and bottom edges (its outer corner the card's
+//     own radius, its inner one a generous curve), a solid fill under the
+//     card's outline: the corner seems to swallow it. Stronger when the
+//     dates are fixed and under the pointer — the only part that reacts to
+//     it;
 //   - the dates it covers (providers.getClipPeriod: "1 dic 2026 – 1 sep
 //     2027", "13 nov 2026 – Indefinido", "9 dic 2026"): an information tag
 //     with a calendar glyph, opaque in the card's own colour a shade lighter
 //     (darker on a light theme), no border, the card's soft corners, the
 //     amount line's grey — part of the card, and payment marks never run
 //     under the dates.
-// The row slides with the title (sticky); on a card too short for a third
-// row (stacked lanes) it sits BESIDE the name / amount block, centred. Only
-// a card whose text is hidden (narrower than LOCK_MIN_WIDTH) shows none.
+// The row slides with the title (sticky: the tab then hugs the visible left
+// edge, its corner square like that edge); on a card too short for a third
+// row (stacked lanes) it sits BESIDE the name / amount block, centred, the
+// lock a bordered badge there. Only a card whose text is hidden (narrower
+// than LOCK_MIN_WIDTH) shows none.
 const LOCK_MIN_WIDTH = 44;
-// The lock starts this far left of the text column (clear of the accent bar).
-const LOCK_INSET = 3;
-const LOCK_BOX = 18;
+// The lock button beside a short card's text: a badge a little wider than
+// tall (a button, not a dot), as tall as the dates tag.
+const LOCK_W = 24;
+const LOCK_H = 18;
+// The corner tab: its width (its height runs from TAB_PAD_TOP above the
+// row to the card's bottom) and its inner corner's radius.
+const TAB_W = 30;
+// The tab reaches TAB_PAD_TOP above the dates it sits beside.
+const TAB_PAD_TOP = 4;
+const TAB_INNER_RADIUS = 10;
+// Between the corner tab and the dates tag.
+const TAB_DATE_GAP = 8;
+// The third row's margin to the card's bottom edge: tight cards, roomy ones.
+const ROW_BOTTOM_TIGHT = 2;
+const ROW_BOTTOM_ROOMY = 4;
+const ROW_ROOMY_MIN_HEIGHT = 64;
+// On a card shorter than that with its row under the text, the name and
+// the amount ride this much higher: the air goes between the amount and
+// the row instead of above the name.
+const TIGHT_TITLE_LIFT = 2;
+const TIGHT_DETAIL_LIFT = 4;
 // Between the lock button and the dates tag: two things, not one.
 const LOCK_DATE_GAP = 6;
-const CHIP_H = 18;
+const CHIP_H = 16;
 const CHIP_RADIUS = 5;
 const DATE_PAD = 6;
 const CAL_ICON = 10;
 const CAL_GAP = 5;
-const PERIOD_FONT_SIZE = 11;
+const PERIOD_FONT_SIZE = 12;
 // How much of the theme's ink the dates tag's fill takes over the card
-// colour; and the lock button's square under the pointer.
+// colour; and the lock button's: free · fixed · under the pointer.
 const CHIP_SHADE = 0.08;
-const LOCK_SHADE_HOVER = 0.16;
+const LOCK_SHADE_FREE = 0.1;
+const LOCK_SHADE_FIXED = 0.18;
+const LOCK_SHADE_HOVER = 0.26;
+// The lock button's width (the corner tab, or the badge beside a short
+// card's text) and the gap to the dates tag after it.
+const lockButtonW = (beside: boolean): number => (beside ? LOCK_W : TAB_W);
+const lockDateGap = (beside: boolean): number => (beside ? LOCK_DATE_GAP : TAB_DATE_GAP);
 // Px the third row takes with `chars` characters of dates (estimate:
 // layout, never drawing): the lock, then the dates tag.
-const chipPx = (chars: number): number =>
-  LOCK_BOX + (chars > 0 ? LOCK_DATE_GAP + DATE_PAD * 2 + CAL_ICON + CAL_GAP + chars * DETAIL_CHAR_PX : 0);
+const chipPx = (chars: number, beside: boolean): number =>
+  lockButtonW(beside) +
+  (chars > 0 ? lockDateGap(beside) + DATE_PAD * 2 + CAL_ICON + CAL_GAP + chars * DETAIL_CHAR_PX : 0);
 
 interface ClipNode {
   container: Container;
@@ -103,6 +140,14 @@ interface ClipNode {
   labelSource: string;
   labelWidth: number;
   labelDisplay: string;
+  // The outline colour the title / detail Text were last given (-1: none).
+  labelHalo: number;
+  detailHalo: number;
+  // The card's fill, cached by the clip colour string and muted state it
+  // was mixed from ("": stale — e.g. after a theme switch).
+  cardColorSource: string;
+  cardMuted: boolean;
+  cardFill: number;
   ratioBadge: Text | null;
   offsetBadge: Text | null;
   // Secondary line under the title (host-provided via getClipDetail).
@@ -112,6 +157,12 @@ interface ClipNode {
   // frames never allocate a new string.
   detailSource: string;
   detailWidth: number;
+  // Where the detail's display was cut for (its start x): DETAIL_PAD_X, or
+  // after the name on a short card's top line.
+  detailStart: number;
+  // The name's real width (measured once per display string; "": stale).
+  labelMeasured: string;
+  labelTextWidth: number;
   detailDisplay: string;
   // Sparkline array the body was last drawn with, as returned by the
   // per-renderer getClipSparkline provider (null = provider absent / returned
@@ -127,11 +178,15 @@ interface ClipNode {
   contentPxPerBeat: number;
   // Host highlight the overlay was last drawn with.
   highlighted: boolean | "danger";
-  // The lock button (providers.timeLock): its own small Graphics, redrawn
-  // only when its look / card colour change (lockKey; -1 = never drawn),
-  // placed by transform every frame with the title.
+  // The lock button (providers.timeLock): its own small Graphics (between
+  // the card's fill and its outline), redrawn only when its look / card
+  // colour / height change (lockKey; -1 = never drawn), placed by transform
+  // every frame with the title.
   lock: Graphics | null;
   lockKey: number;
+  // The lock's size as last placed (its hit area: lockRectOf).
+  lockW: number;
+  lockH: number;
   // The dates next to the lock (providers.getClipPeriod); display string
   // cached per (source, width, height) — never rebuilt per frame.
   period: Text | null;
@@ -306,15 +361,15 @@ export function clipVisualHash(
 }
 
 // Detail line layout (local coords). Shown only when the body has room.
-const DETAIL_FONT_SIZE = 11;
-const DETAIL_LINE_HEIGHT = 15;
+const DETAIL_FONT_SIZE = 12;
+const DETAIL_LINE_HEIGHT = 16;
 const DETAIL_MIN_BODY_HEIGHT = 14;
 const DETAIL_MIN_WIDTH = 36;
 export const DETAIL_PAD_X = 11;
 // Conservative average glyph width for the 11px / 600 detail font (Inter
 // digits measure ~6.6px). Same estimate style as the ratio badge: no canvas
 // measuring, so the truncation is deterministic and works headless.
-export const DETAIL_CHAR_PX = 6.7;
+export const DETAIL_CHAR_PX = 7.3;
 
 export function isClipDetailVisible(
   view: PlaylistClipPresentation,
@@ -356,9 +411,41 @@ function thirdRowTop(titleHeight: number): number {
   return titleHeight + 2 + DETAIL_LINE_HEIGHT;
 }
 
-/** No room for a third row: the chip goes beside the text block. */
+// What the third row needs under the amount: its chip, its bottom margin
+// and a couple of px of air. Any room beyond it goes between the amount and
+// the row (the row sits at the bottom).
+const THIRD_ROW_MIN_BAND = CHIP_H + ROW_BOTTOM_TIGHT + 2;
+// Between the name and the amount when they share the top line.
+const TITLE_DETAIL_GAP = 10;
+
+// Where the lock + dates go on a card of `height`:
+//   ROW_THIRD   a row of their own under the name and the amount;
+//   ROW_SECOND  (a short card) the amount's line: lock + dates at the
+//               bottom-left, and the amount moves up, inline with the
+//               name (to its right);
+//   ROW_BESIDE  (a card too short for two lines) beside the name.
+const ROW_THIRD = 0;
+const ROW_SECOND = 1;
+const ROW_BESIDE = 2;
+
+function rowMode(height: number, titleHeight: number): number {
+  if (height - thirdRowTop(titleHeight) >= THIRD_ROW_MIN_BAND) return ROW_THIRD;
+  if (height >= titleHeight + 2 + CHIP_H + ROW_BOTTOM_TIGHT) return ROW_SECOND;
+  return ROW_BESIDE;
+}
+
+/** No room for the row under the name: it goes beside the text block. */
 function lockBeside(height: number, titleHeight: number): boolean {
-  return height - thirdRowTop(titleHeight) < CHIP_H;
+  return rowMode(height, titleHeight) === ROW_BESIDE;
+}
+
+/** Local x where a short card's top line (the name, then its amount) ends (estimate). */
+function titleLineEnd(titleChars: number, detailChars: number): number {
+  return (
+    TITLE_PAD_X +
+    titleChars * TITLE_CHAR_PX +
+    (detailChars > 0 ? TITLE_DETAIL_GAP + detailChars * DETAIL_CHAR_PX : 0)
+  );
 }
 
 /** Local x where the text block (title, detail) ends, without the sticky shift. */
@@ -369,14 +456,24 @@ function textBlockEnd(titleChars: number, detailChars: number): number {
   );
 }
 
-/** Local x where the third row (lock, then dates) starts (beside mode: after the text block). */
+/** Local x where the third row (lock, then dates) starts: the card's left edge (the corner tab), or after the text block (beside). */
 function lockRowStart(beside: boolean, blockEnd: number): number {
-  return beside ? blockEnd + 8 : TITLE_PAD_X - LOCK_INSET;
+  return beside ? blockEnd + 8 : 0;
 }
 
 /** Local x where the third row ends; `periodChars` 0 = the lock alone. */
 function lockRowEnd(beside: boolean, blockEnd: number, periodChars: number): number {
-  return lockRowStart(beside, blockEnd) + chipPx(periodChars);
+  return lockRowStart(beside, blockEnd) + chipPx(periodChars, beside);
+}
+
+/** Local y of the third row (under the text): at the card's bottom, so the room left goes above it. */
+function cornerRowY(height: number): number {
+  return height - CHIP_H - (height >= ROW_ROOMY_MIN_HEIGHT ? ROW_BOTTOM_ROOMY : ROW_BOTTOM_TIGHT);
+}
+
+/** Height of the corner tab: from TAB_PAD_TOP above the row to the card's bottom. */
+function cornerTabHeight(height: number): number {
+  return height - cornerRowY(height) + TAB_PAD_TOP;
 }
 
 /**
@@ -393,8 +490,14 @@ export function clipCardWidthPx(
   titleHeight: number,
 ): number {
   const detailChars = detail && height >= titleHeight + DETAIL_MIN_BODY_HEIGHT ? detail.length : 0;
+  const periodChars = period ? period.length : 0;
+  if (rowMode(height, titleHeight) === ROW_SECOND) {
+    // The name and its amount on top; lock and dates on the line below.
+    const top = titleLineEnd(title.length, detail ? detail.length : 0);
+    return Math.ceil(Math.max(top, chipPx(periodChars, false)) + CLIP_TEXT_RIGHT_PAD + 1);
+  }
   const block = textBlockEnd(title.length, detailChars);
-  const row = lockRowEnd(lockBeside(height, titleHeight), block, period ? period.length : 0);
+  const row = lockRowEnd(lockBeside(height, titleHeight), block, periodChars);
   return Math.ceil(Math.max(block, row) + CLIP_TEXT_RIGHT_PAD + 1);
 }
 
@@ -428,9 +531,15 @@ function truncateToChars(text: string, maxChars: number): string {
 // Content area of the body: below the title bar (and the detail line when
 // it is shown, so the text stays readable), 3px above the bottom edge.
 const CONTENT_BOTTOM_PAD = 5;
-const CONTENT_EVENT_ALPHA_POS = 0.85;
-const CONTENT_EVENT_ALPHA_NEG = 0.55;
+// Event bars (payments): opaque enough to read at a glance, money out a
+// touch quieter than money in.
+const CONTENT_EVENT_ALPHA_POS = 1;
+const CONTENT_EVENT_ALPHA_NEG = 0.9;
+// Event bars are fine lines: marks of a rhythm, not blocks.
+const CONTENT_EVENT_WIDTH = 1.5;
 const CONTENT_LEVEL_FILL_ALPHA = 0.2;
+// A level (a debt's balance) needs this much height under the text.
+const LEVEL_MIN_AREA = 8;
 const CONTENT_LEVEL_LINE_ALPHA = 0.95;
 const MARK_DASH = 3;
 // Free space kept right of the accent bar: content never touches it.
@@ -458,8 +567,11 @@ function contentLeftPx(width: number, height: number): number {
 // x = (beat - clip.start) * pxPerBeat. Only what falls inside the clip window
 // [start, start + duration] is drawn; the window start is found by binary
 // search, so a long series costs O(log n + items inside the clip).
-//   events: one 2-3px bar per event; value > 0 rises from the bottom of the
-//           content area, value < 0 hangs from its top; |value| = height.
+//   events: one fine bar (CONTENT_EVENT_WIDTH) per event, every one the card's whole height
+//           (the accent bar's span: its full height minus the same inset),
+//           whatever its amount — an even rhythm of marks; the sign only
+//           sets the bar's opacity (money in / out reads from the colour).
+//           The text paints over them.
 //   level:  filled step area from the bottom; value / max = height.
 export function drawClipContent(
   body: Graphics,
@@ -475,8 +587,10 @@ export function drawClipContent(
   const top =
     view.titleRect.height + (detailVisible ? DETAIL_LINE_HEIGHT : 0) + 2;
   const bottom = height - CONTENT_BOTTOM_PAD;
+  // The area under the text (guide marks, a level); event bars take the
+  // card's whole height instead.
   const available = bottom - top;
-  if (available < 2 || width < 4) return;
+  if (width < 4) return;
   const start = clip.start;
   const end = start + clip.duration;
   const alphaScale = view.effectivelyMuted ? 0.45 : 1;
@@ -487,7 +601,7 @@ export function drawClipContent(
   // Guide marks (e.g. billing cuts): dashed vertical lines across the
   // content area, under the bars. Binary search to the first visible one.
   const marks = content.marks;
-  if (marks && marks.length > 0) {
+  if (marks && marks.length > 0 && available >= LEVEL_MIN_AREA) {
     let drew = false;
     for (let i = sortedUpperBound(marks, start - 1e-9); i < marks.length; i += 1) {
       const beat = marks[i]!;
@@ -508,8 +622,11 @@ export function drawClipContent(
     const beats = content.beats;
     const values = content.values;
     const count = Math.min(beats.length, values.length);
-    const barWidth = Math.min(3, Math.max(2, pxPerBeat * 0.6));
+    const barWidth = CONTENT_EVENT_WIDTH;
     const maxX = width - barWidth - 1;
+    // The card's whole height, inset like the accent bar.
+    const barTop = CLIP_ACCENT_INSET;
+    const span = height - CLIP_ACCENT_INSET * 2;
     // First event at or after the clip start.
     let index = sortedUpperBound(beats, start - 1e-9);
     for (; index < count; index += 1) {
@@ -517,31 +634,23 @@ export function drawClipContent(
       if (beat > end + 1e-9) break;
       const raw = values[index]!;
       if (raw === 0 || !Number.isFinite(raw)) continue;
-      const magnitude = Math.min(1, Math.abs(raw));
-      const h = Math.max(1, Math.round(available * magnitude));
       const center = (beat - start) * pxPerBeat;
       // On the accent (an event on the start day): the accent shows it.
       if (Math.round(center - barWidth / 2) < left) continue;
       const x = Math.min(maxX, Math.round(center - barWidth / 2));
-      if (raw > 0) {
-        body.rect(x, bottom - h, barWidth, h).fill({
-          color: ink,
-          alpha: CONTENT_EVENT_ALPHA_POS * alphaScale,
-        });
-      } else {
-        body.rect(x, top, barWidth, h).fill({
-          color: ink,
-          alpha: CONTENT_EVENT_ALPHA_NEG * alphaScale,
-        });
-      }
+      body.rect(x, barTop, barWidth, span).fill({
+        color: ink,
+        alpha: (raw > 0 ? CONTENT_EVENT_ALPHA_POS : CONTENT_EVENT_ALPHA_NEG) * alphaScale,
+      });
     }
     return;
   }
 
-  // level
+  // level — not in a sliver too thin to read (a short card's last line,
+  // where its text sits).
   const series = content.series;
   const max = content.max;
-  if (!(max > 0)) return;
+  if (!(max > 0) || available < LEVEL_MIN_AREA) return;
   const beats = series.beats;
   const values = series.values;
   const count = Math.min(beats.length, values.length);
@@ -686,28 +795,34 @@ const CLIP_DAY_TINT_SCALE = 2.2;
 const CLIP_EXTENT_MIN_PX = 8;
 
 // Look bits of a lock button: 1 shown free · 2 shown fixed · +4 under the
-// pointer · +8 muted. 0 = hidden.
+// pointer · +8 muted · +16 the corner tab (else the badge) · +32 its outer
+// corner square (sticky: it hugs the visible edge). 0 = hidden.
 const LOCK_FREE = 1;
 const LOCK_FIXED = 2;
 const LOCK_HOVER = 4;
 const LOCK_MUTED = 8;
+const LOCK_CORNER = 16;
+const LOCK_SQUARE = 32;
 
-// The lock button: a padlock in a LOCK_BOX square — closed and filled when
-// the dates are fixed, open (shackle lifted off its left post) and
-// outlined, quieter, when they are free; translucent at rest, opaque on a
-// soft square (the card's colour shaded toward the ink) under the pointer.
-function drawLockLocal(g: Graphics, look: number, card: number, palette: PixiPaletteColors): void {
-  g.clear();
-  const fixed = (look & LOCK_FIXED) !== 0;
-  const hovered = (look & LOCK_HOVER) !== 0;
-  const muted = (look & LOCK_MUTED) !== 0;
-  if (hovered) {
-    g.roundRect(0, 0, LOCK_BOX, LOCK_BOX, CHIP_RADIUS).fill({ color: mixColor(card, palette.text, LOCK_SHADE_HOVER) });
-  }
-  const color = palette.text;
-  const alpha = hovered ? 1 : muted ? 0.35 : fixed ? 0.8 : 0.5;
-  const cx = LOCK_BOX / 2;
-  const top = LOCK_BOX / 2 - 0.5;
+// A tab path in the bottom-left corner of a box (0, 0)-(w, h): square top-left
+// and bottom-right corners, `outer` the bottom-left radius, `inner` the
+// top-right one.
+function cornerTabPath(g: Graphics, x: number, y: number, w: number, h: number, outer: number, inner: number): void {
+  const ri = Math.max(0, Math.min(inner, w / 2, h / 2));
+  const ro = Math.max(0, Math.min(outer, w / 2, h / 2));
+  g.moveTo(x, y)
+    .lineTo(x + w - ri, y)
+    .arcTo(x + w, y, x + w, y + ri, ri)
+    .lineTo(x + w, y + h)
+    .lineTo(x + ro, y + h)
+    .arcTo(x, y + h, x, y + h - ro, ro)
+    .closePath();
+}
+
+// The padlock glyph centred on (cx, cy): closed and filled when the dates
+// are fixed, open (shackle lifted off its left post) and outlined when free.
+function drawPadlock(g: Graphics, cx: number, cy: number, fixed: boolean, color: number, alpha: number): void {
+  const top = cy - 0.5;
   if (fixed) {
     g.moveTo(cx - 3, top)
       .lineTo(cx - 3, top - 2.5)
@@ -723,6 +838,52 @@ function drawLockLocal(g: Graphics, look: number, card: number, palette: PixiPal
       .stroke({ color, alpha, width: 1.4 });
     g.roundRect(cx - 4, top + 0.5, 8, 6, 1.5).stroke({ color, alpha, width: 1.2 });
   }
+}
+
+// The lock in the card's corner: a TAB_W x `tabH` tab, one solid fill (the
+// card's colour shaded toward the ink), flush with the card's edges on the
+// corner side (`outer`: the card's radius, 0 when it hugs the visible
+// edge). The padlock sits on the dates' line, a hair toward the corner.
+function drawLockCornerLocal(
+  g: Graphics,
+  look: number,
+  card: number,
+  tabH: number,
+  outer: number,
+  palette: PixiPaletteColors,
+): void {
+  g.clear();
+  const fixed = (look & LOCK_FIXED) !== 0;
+  const hovered = (look & LOCK_HOVER) !== 0;
+  const muted = (look & LOCK_MUTED) !== 0;
+  const shade = hovered ? LOCK_SHADE_HOVER : fixed ? LOCK_SHADE_FIXED : LOCK_SHADE_FREE;
+  const fill = mixColor(card, palette.text, shade * (muted ? 0.6 : 1));
+  cornerTabPath(g, 0, 0, TAB_W, tabH, outer, TAB_INNER_RADIUS);
+  g.fill({ color: fill });
+  const alpha = hovered ? 1 : muted ? 0.45 : fixed ? 0.95 : 0.75;
+  // On the dates' line (the row sits TAB_PAD_TOP under the tab's top).
+  drawPadlock(g, TAB_W / 2 - 1, TAB_PAD_TOP + CHIP_H / 2 + 1, fixed, palette.text, alpha);
+}
+
+// The lock beside a short card's text: a LOCK_W x LOCK_H badge — the
+// card's colour shaded toward the ink, a hairline border of the ink — with
+// the padlock centred; stronger when the dates are fixed and under the
+// pointer. Muted cards: all of it quieter.
+function drawLockBadgeLocal(g: Graphics, look: number, card: number, palette: PixiPaletteColors): void {
+  g.clear();
+  const fixed = (look & LOCK_FIXED) !== 0;
+  const hovered = (look & LOCK_HOVER) !== 0;
+  const muted = (look & LOCK_MUTED) !== 0;
+  const shade = hovered ? LOCK_SHADE_HOVER : fixed ? LOCK_SHADE_FIXED : LOCK_SHADE_FREE;
+  g.roundRect(0, 0, LOCK_W, LOCK_H, CHIP_RADIUS).fill({ color: mixColor(card, palette.text, shade) });
+  const border = (hovered ? 0.5 : fixed ? 0.32 : 0.22) * (muted ? 0.6 : 1);
+  g.roundRect(0.5, 0.5, LOCK_W - 1, LOCK_H - 1, CHIP_RADIUS - 0.5).stroke({
+    color: palette.text,
+    alpha: border,
+    width: 1,
+  });
+  const alpha = hovered ? 1 : muted ? 0.45 : fixed ? 0.95 : 0.75;
+  drawPadlock(g, LOCK_W / 2, LOCK_H / 2, fixed, palette.text, alpha);
 }
 
 // The dates tag: a soft rectangle in the card's colour shaded toward the
@@ -988,6 +1149,41 @@ export function createClipNodeRegistry(
   const lockFits = (view: PlaylistClipPresentation): boolean =>
     timeLock && view.rect.width >= LOCK_MIN_WIDTH && view.rect.height >= Math.max(24, CHIP_H + 2);
 
+  // A card with its third row under the text but short of room (under
+  // ROW_ROOMY_MIN_HEIGHT): its text rides higher (TIGHT_*_LIFT).
+  const tightRow = (view: PlaylistClipPresentation): boolean =>
+    timeLock &&
+    view.rect.height < ROW_ROOMY_MIN_HEIGHT &&
+    lockFits(view) &&
+    rowMode(view.rect.height, view.titleRect.height) === ROW_THIRD;
+
+  // A short card whose amount moves up beside the name (ROW_SECOND).
+  const detailBesideTitle = (view: PlaylistClipPresentation): boolean =>
+    timeLock && lockFits(view) && rowMode(view.rect.height, view.titleRect.height) === ROW_SECOND;
+
+  // The card's own fill (the same mix the body paints), re-mixed only when
+  // the clip's colour / muted state changed (no string parsing per frame).
+  function cardFillOf(node: ClipNode, view: PlaylistClipPresentation): number {
+    const muted = view.effectivelyMuted;
+    if (node.cardColorSource !== view.clip.color || node.cardMuted !== muted) {
+      node.cardColorSource = view.clip.color;
+      node.cardMuted = muted;
+      node.cardFill = mixColor(
+        palette.background ?? COLORS.background,
+        parseHexColor(view.clip.color, 0x777777),
+        (palette.clipTint ?? COLORS.clipTint) * (muted ? CLIP_MUTED_TINT_SCALE : 1),
+      );
+    }
+    return node.cardFill;
+  }
+
+  // Gives `text` an outline of `color` when it changed since `last` (a new
+  // style object only then: re-rasterised once, never per frame).
+  function setHalo(text: Text, color: number, last: number): number {
+    if (color !== last) text.style.stroke = { color, width: TEXT_HALO_WIDTH, join: "round" };
+    return color;
+  }
+
   // Secondary line under the title bar. Created lazily ONCE per node (same
   // factory pattern as the title label), never per frame.
   function applyDetail(
@@ -1002,10 +1198,29 @@ export function createClipNodeRegistry(
       return;
     }
     const width = view.rect.width;
-    if (node.detailSource !== detail || node.detailWidth !== width) {
+    // On a short card the amount moves up beside the name: it gets the room
+    // the name leaves (the name's real width, measured once per string).
+    const besideTitle = detailBesideTitle(view);
+    let start = DETAIL_PAD_X;
+    if (besideTitle) {
+      const label = node.label;
+      if (label !== null && label.visible && node.labelDisplay.length > 0) {
+        if (node.labelMeasured !== node.labelDisplay) {
+          node.labelMeasured = node.labelDisplay;
+          node.labelTextWidth = measured(label, node.labelDisplay.length * TITLE_CHAR_PX);
+        }
+        start = TITLE_PAD_X + node.labelTextWidth + TITLE_DETAIL_GAP;
+      } else {
+        start = TITLE_PAD_X;
+      }
+    }
+    if (node.detailSource !== detail || node.detailWidth !== width || node.detailStart !== start) {
       node.detailSource = detail;
       node.detailWidth = width;
-      node.detailDisplay = truncateClipDetail(detail, width);
+      node.detailStart = start;
+      node.detailDisplay = besideTitle
+        ? truncateToChars(detail, Math.floor((width - start - CLIP_TEXT_RIGHT_PAD) / DETAIL_CHAR_PX))
+        : truncateClipDetail(detail, width);
     }
     if (node.detailDisplay.length === 0) {
       hideText(node.detail);
@@ -1029,8 +1244,16 @@ export function createClipNodeRegistry(
       DETAIL_FONT_SIZE,
       "600",
     );
-    text.x = DETAIL_PAD_X + shift;
-    text.y = view.titleRect.height + 2;
+    node.detailHalo = setHalo(text, cardFillOf(node, view), node.detailHalo);
+    if (besideTitle) {
+      // On the name's line, after it (its baseline: 1 px lower, the font
+      // being 1 px smaller).
+      text.x = start + shift - HALO_SHIFT;
+      text.y = TITLE_Y + 1 - HALO_SHIFT;
+      return;
+    }
+    text.x = DETAIL_PAD_X + shift - HALO_SHIFT;
+    text.y = view.titleRect.height + 2 - HALO_SHIFT - (tightRow(view) ? TIGHT_DETAIL_LIFT : 0);
   }
 
   // Sticky text: when the clip starts left of the visible timeline, its
@@ -1040,12 +1263,16 @@ export function createClipNodeRegistry(
   function stickyShift(node: ClipNode, view: PlaylistClipPresentation, left: number): number {
     const hidden = left - view.rect.x;
     if (!(hidden > 0)) return 0;
-    const block = textBlockEnd(node.labelDisplay.length, node.detailDisplay.length);
+    const besideTitle = detailBesideTitle(view);
+    const block = besideTitle
+      ? titleLineEnd(node.labelDisplay.length, node.detailDisplay.length)
+      : textBlockEnd(node.labelDisplay.length, node.detailDisplay.length);
     // The lock row slides with the text: it must fit too.
-    const row =
-      timeLock && lockFits(view)
-        ? lockRowEnd(lockBeside(view.rect.height, view.titleRect.height), block, node.periodDisplay.length)
-        : 0;
+    const row = !(timeLock && lockFits(view))
+      ? 0
+      : besideTitle
+        ? chipPx(node.periodDisplay.length, false)
+        : lockRowEnd(lockBeside(view.rect.height, view.titleRect.height), block, node.periodDisplay.length);
     const textWidth = Math.max(block, row);
     const room = view.rect.width - textWidth - CLIP_TEXT_RIGHT_PAD;
     return Math.round(Math.max(0, Math.min(hidden, room)));
@@ -1089,8 +1316,9 @@ export function createClipNodeRegistry(
         TITLE_FONT_SIZE,
         "600",
       );
-      label.x = TITLE_PAD_X + shift;
-      label.y = TITLE_Y;
+      node.labelHalo = setHalo(label, cardFillOf(node, view), node.labelHalo);
+      label.x = TITLE_PAD_X + shift - HALO_SHIFT;
+      label.y = TITLE_Y - HALO_SHIFT - (tightRow(view) ? TIGHT_TITLE_LIFT : 0);
     }
 
     const ratio = view.clip.stretchRatio ?? 1;
@@ -1102,12 +1330,12 @@ export function createClipNodeRegistry(
           style: {
             fill: palette.text,
             fontFamily: CANVAS_FONT_FAMILY,
-            fontSize: 10,
+            fontSize: 11,
             fontWeight: "700" as any,
           },
         }),
       );
-      applyText(badge, tagText, palette.text, 10, "700");
+      applyText(badge, tagText, palette.text, 11, "700");
       badge.x = width - 8 - tagText.length * 6;
       badge.y = 4;
     } else {
@@ -1123,12 +1351,12 @@ export function createClipNodeRegistry(
           style: {
             fill: palette.textMuted,
             fontFamily: CANVAS_FONT_FAMILY,
-            fontSize: 10,
+            fontSize: 11,
             fontWeight: "600" as any,
           },
         }),
       );
-      applyText(badge, offsetText, palette.textMuted, 10, "600");
+      applyText(badge, offsetText, palette.textMuted, 11, "600");
       badge.x = 12;
       // With a detail line present the badge drops below it (or hides when
       // there is no room) so the two never overlap.
@@ -1177,10 +1405,11 @@ export function createClipNodeRegistry(
       node.labelDisplay.length,
       detailVisible ? node.detailDisplay.length : 0,
     );
+    const beside = lockBeside(height, view.titleRect.height);
     const start =
-      lockRowStart(lockBeside(height, view.titleRect.height), block) +
-      LOCK_BOX +
-      LOCK_DATE_GAP +
+      lockRowStart(beside, block) +
+      lockButtonW(beside) +
+      lockDateGap(beside) +
       DATE_PAD +
       CAL_ICON +
       CAL_GAP;
@@ -1206,48 +1435,60 @@ export function createClipNodeRegistry(
   // redrawn only when its look / width / card colour change.
   function placeLockRow(node: ClipNode, view: PlaylistClipPresentation, shift: number): void {
     const muted = view.effectivelyMuted;
-    // The card's own fill under the row (the same mix the body paints).
-    const card = mixColor(
-      palette.background ?? COLORS.background,
-      parseHexColor(view.clip.color, 0x777777),
-      (palette.clipTint ?? COLORS.clipTint) * (muted ? CLIP_MUTED_TINT_SCALE : 1),
-    );
+    // The card's own fill under the row.
+    const card = cardFillOf(node, view);
 
     let lock = node.lock;
     if (!lock) {
       lock = new Graphics();
       node.lock = lock;
-      node.container.addChild(lock);
+      // Over the card's fill, UNDER its outline (the overlay): the corner's
+      // edge stays the card's, crisp over the tab.
+      node.container.addChildAt(lock, node.container.getChildIndex(node.overlay));
     }
+    const height = view.rect.height;
+    const beside = lockBeside(height, view.titleRect.height);
+    const tabH = beside ? LOCK_H : cornerTabHeight(height);
+    // Sticky: the tab hugs the visible left edge — square, like that edge.
+    const outer = shift > 0 ? 0 : clipRadius(view.rect.width, height);
     const look =
       (view.clip.timeLocked === true ? LOCK_FIXED : LOCK_FREE) |
       (view.lockHovered ? LOCK_HOVER : 0) |
-      (muted ? LOCK_MUTED : 0);
+      (muted ? LOCK_MUTED : 0) |
+      (beside ? 0 : LOCK_CORNER) |
+      (outer === 0 ? LOCK_SQUARE : 0);
     // Numbers, not a string: no allocation per frame.
-    const lockKey = card * 16 + look;
+    const lockKey = (card * 64 + look) * 32 + tabH;
     if (lockKey !== node.lockKey) {
-      drawLockLocal(lock, look, card, palette);
+      if (beside) drawLockBadgeLocal(lock, look, card, palette);
+      else drawLockCornerLocal(lock, look, card, tabH, outer, palette);
       node.lockKey = lockKey;
     }
+    node.lockW = lockButtonW(beside);
+    node.lockH = tabH;
 
-    const height = view.rect.height;
-    const beside = lockBeside(height, view.titleRect.height);
-    // The row's vertical band: the third row, or the whole card (beside).
-    const rowTop = beside ? 0 : thirdRowTop(view.titleRect.height);
-    const rowY = Math.min(Math.round(rowTop + (height - rowTop - CHIP_H) / 2), height - CHIP_H - 1);
+    // Where the row sits: at the card's bottom (the room left is air under
+    // the amount), or centred on the whole card (beside).
+    const rowY = beside
+      ? Math.min(Math.round((height - CHIP_H) / 2), height - CHIP_H - 1)
+      : cornerRowY(height);
     let x: number;
+    // The badge beside the text is a touch taller than the dates tag.
+    let y = rowY - (LOCK_H - CHIP_H) / 2;
     if (!beside) {
+      // The corner: flush with the left and bottom edges.
       x = lockRowStart(false, 0) + shift;
+      y = height - tabH;
     } else {
       // The same conservative advances as the sticky text (no canvas
       // measuring: deterministic and headless-safe).
       const label = node.label !== null && node.label.visible;
       const detail = node.detail !== null && node.detail.visible;
       const block = textBlockEnd(label ? node.labelDisplay.length : 0, detail ? node.detailDisplay.length : 0);
-      x = Math.min(lockRowStart(true, block) + shift, view.rect.width - LOCK_BOX - 2);
+      x = Math.min(lockRowStart(true, block) + shift, view.rect.width - LOCK_W - 2);
     }
     lock.x = Math.round(x);
-    lock.y = rowY;
+    lock.y = y;
     lock.visible = true;
 
     // The dates tag, a few px after the lock: a different thing.
@@ -1287,7 +1528,7 @@ export function createClipNodeRegistry(
       drawDateTagLocal(tag, tagWidth, card, ink, muted, palette);
       node.periodBgKey = tagKey;
     }
-    tag.x = lock.x + LOCK_BOX + LOCK_DATE_GAP;
+    tag.x = lock.x + lockButtonW(beside) + lockDateGap(beside);
     tag.y = rowY;
     tag.visible = true;
     text.x = tag.x + DATE_PAD + CAL_ICON + CAL_GAP;
@@ -1308,11 +1549,19 @@ export function createClipNodeRegistry(
       labelSource: "",
       labelWidth: -1,
       labelDisplay: "",
+      labelHalo: -1,
+      detailHalo: -1,
+      cardColorSource: "",
+      cardMuted: false,
+      cardFill: 0,
       ratioBadge: null,
       offsetBadge: null,
       detail: null,
       detailSource: "",
       detailWidth: -1,
+      detailStart: -1,
+      labelMeasured: "",
+      labelTextWidth: 0,
       detailDisplay: "",
       bars: null,
       content: null,
@@ -1321,6 +1570,8 @@ export function createClipNodeRegistry(
       highlighted: false,
       lock: null,
       lockKey: -1,
+      lockW: 0,
+      lockH: 0,
       period: null,
       periodSource: null,
       periodWidth: -1,
@@ -1479,6 +1730,8 @@ export function createClipNodeRegistry(
       node.hash = "";
       node.lockKey = -1;
       node.periodBgKey = -1;
+      // The palette changed: the card's fill is mixed again.
+      node.cardColorSource = "";
     }
   }
 
@@ -1493,6 +1746,7 @@ export function createClipNodeRegistry(
       node.period?.style.update();
       // Re-measured with the fonts available now.
       node.periodMeasured = "";
+      node.labelMeasured = "";
     }
   }
 
@@ -1502,8 +1756,8 @@ export function createClipNodeRegistry(
     // The lock button alone (the dates tag is information, not a control).
     out.x = node.container.x + node.lock.x;
     out.y = node.container.y + node.lock.y;
-    out.width = LOCK_BOX;
-    out.height = LOCK_BOX;
+    out.width = node.lockW;
+    out.height = node.lockH;
     return out;
   }
 

@@ -111,7 +111,6 @@ function mountBar(
 }
 
 const header = () => document.querySelector<HTMLElement>("header.fin-summary")!;
-const verdictButton = () => document.querySelector<HTMLButtonElement>(".fin-verdict__main")!;
 const metric = (key: string) => document.querySelector<HTMLElement>(`[data-metric="${key}"]`)!;
 const toast = () => document.querySelector(".fin-toast")?.textContent ?? null;
 const shortDate = (iso: string) => formatDateShort(iso);
@@ -190,7 +189,7 @@ describe("UX-03: 'Deuda hoy' is the real debt; what is excluded is said", () => 
 // --- the header ----------------------------------------------------------------
 
 describe("UX-14/56/58: the header answers first and reads in order", () => {
-  it("is the 'Resumen de tu plan' region; the plan menu, then the verdict, come first", () => {
+  it("is the 'Resumen de tu plan' region; the plan menu, then the alerts, come first (no verdict words)", () => {
     mountBar(realBridge());
     expect(header().getAttribute("role")).toBe("region");
     expect(header().getAttribute("aria-label")).toBe("Resumen de tu plan");
@@ -198,8 +197,10 @@ describe("UX-14/56/58: the header answers first and reads in order", () => {
       ...header().querySelectorAll<HTMLElement>("button, input, select, [tabindex]"),
     ].filter((el) => el.tabIndex >= 0 && !el.closest("[inert]"));
     expect(focusables[0]!.textContent).toContain("Mi plan");
-    expect(focusables[1]).toBe(verdictButton());
-    expect(verdictButton().textContent).toMatch(/^Te alcanza hasta el/);
+    expect(focusables[1]).toBe(document.querySelector("button.fin-summary__chip"));
+    // The verdict's words are gone from the header.
+    expect(document.querySelector(".fin-verdict__main")).toBeNull();
+    expect(header().textContent).not.toMatch(/Te alcanza/);
   });
 
   it("'Tu punto más bajo' (not 'Mínimo proyectado'); informative numbers are disclosure buttons", () => {
@@ -289,7 +290,6 @@ describe("UX-03: excluded items — chip, real debt, (simulación), one-step rea
       `sin Nu: ${formatMoneyWhole(bridge.getProjection().initialDebt)}`,
     );
     expect(metric("lowest").textContent).toContain("(simulación)");
-    expect(verdictButton().textContent).toContain("(simulación)");
   });
 
   it("a soloed row excludes the rest; 'Reactivar todo' is one undo step", () => {
@@ -419,7 +419,7 @@ describe("UX-48: 'Mi plan ▾' holds the plan's global actions", () => {
 });
 
 describe("UX-19: outside the main plan it shows, and going back is one click", () => {
-  it("strip + 'en esta rama' in the verdict; 'Volver al plan principal'", () => {
+  it("the strip says it; 'Volver al plan principal'", () => {
     const bridge = realBridge();
     const futures = new Futures(bridge);
     mount(
@@ -431,13 +431,11 @@ describe("UX-19: outside the main plan it shows, and going back is one click", (
       ),
     );
     expect(document.querySelector(".fin-branch-strip")).toBeNull();
-    expect(verdictButton().textContent).not.toContain("en esta rama");
     act(() => {
       futures.fork(START, "Comprar la laptop");
     });
     const strip = document.querySelector<HTMLElement>(".fin-branch-strip")!;
     expect(strip.textContent).toContain("Estás en Comprar la laptop (hipótesis)");
-    expect(verdictButton().textContent).toContain("en esta rama");
     click([...strip.querySelectorAll("button")].find((b) => b.textContent === "Volver al plan principal")!);
     expect(futures.activeBranch().id).toBe("main");
     expect(document.querySelector(".fin-branch-strip")).toBeNull();

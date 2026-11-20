@@ -1,7 +1,8 @@
-// Compact reading of the projection on the marked day (the red line): date,
-// cash and total debt. It lives in the money lane's header cell (never over
-// the canvas), and its two figures double as the lane's legend: the thick
-// line is the cash ("Caja"), the thin grey one the debt ("Deuda").
+// Reading of the projection on the marked day (the red line) — or the day
+// under the pointer: date, cash and total debt. It lives in the header,
+// right after the verdict, big (.fin-readout--header); its two figures
+// double as the money lane's legend: the thick line is the cash ("Caja"),
+// the thin grey one the debt ("Deuda").
 // Re-renders only when the integer day or the bridge revision changes
 // (never per frame).
 //
@@ -77,6 +78,10 @@ export function PlayheadReadout({ bridge, className, keyboardIntentRef, followHo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [day]);
 
+  // "jue 19 nov 2026" in parts, so a layout can stack them (the header's
+  // small calendar: weekday and year over the day); the text is unchanged.
+  const [weekday = "", dayNumber = "", month = "", year = ""] = formatDateWeekday(view.date).split(" ");
+
   return (
     <div
       className={className ? `fin-readout ${className}` : "fin-readout"}
@@ -85,7 +90,13 @@ export function PlayheadReadout({ bridge, className, keyboardIntentRef, followHo
       role="group"
       aria-label="Lectura del día"
     >
-      <span className="fin-readout__date">{formatDateWeekday(view.date)}</span>
+      <span className="fin-readout__date">
+        <span className="fin-readout__weekday">{weekday}</span>{" "}
+        <span className="fin-readout__day">
+          {dayNumber} {month}
+        </span>{" "}
+        <span className="fin-readout__year">{year}</span>
+      </span>
       <span className="fin-readout__cell">
         <span className="fin-readout__swatch fin-readout__swatch--cash" aria-hidden="true" />
         <span className="fin-readout__label">Caja</span>

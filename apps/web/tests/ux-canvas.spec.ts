@@ -419,9 +419,9 @@ describe("UX-04 — keyboard only: open Sueldo, change it, save; delete Gasto", 
     expect(document.querySelector(".fin-readout")!.getAttribute("aria-label")).toBe("Lectura del día");
   });
 
-  it("hovering the timeline: the lane's reading shows that day, silently; leaving brings the playhead's back", async () => {
+  it("hovering the timeline: the header's reading shows that day, silently; leaving brings the playhead's back", async () => {
     const { core } = await mountShell();
-    const readout = document.querySelector<HTMLElement>(".fin-readout--lane")!;
+    const readout = document.querySelector<HTMLElement>(".fin-readout--header")!;
     const playheadDate = readout.querySelector(".fin-readout__date")!.textContent;
     act(() => core.setHoverTime(9));
     expect(readout.dataset.source).toBe("hover");

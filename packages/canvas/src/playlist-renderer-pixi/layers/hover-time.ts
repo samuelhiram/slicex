@@ -21,7 +21,7 @@ export const HOVER_BAND_ALPHA = 0.045;
 export const HOVER_BAND_MIN_PX = 10;
 const PILL_HEIGHT = 18;
 const PILL_PAD_X = 7;
-const LABEL_SIZE = 11;
+const LABEL_SIZE = 12;
 
 export function drawHoverTime(
   graphics: Graphics,

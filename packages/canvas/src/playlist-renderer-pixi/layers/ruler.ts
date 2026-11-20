@@ -23,12 +23,12 @@ import {
 import { COLORS } from "../palette";
 import { addText } from "../text-pool";
 
-const GROUP_LABEL_SIZE = 12;
-const GROUP_CHAR_PX = 7.2;
-const TICK_LABEL_SIZE = 11;
+const GROUP_LABEL_SIZE = 13;
+const GROUP_CHAR_PX = 7.8;
+const TICK_LABEL_SIZE = 12;
 // Conservative advance of the 11px / 500-600 tick labels (Inter digits are
 // ~6.6px): estimates only, no canvas measuring (deterministic, headless).
-export const RULER_TICK_CHAR_PX = 6.6;
+export const RULER_TICK_CHAR_PX = 7.2;
 const PILL_HEIGHT = 18;
 const PILL_PAD_X = 7;
 const LABEL_GAP = 4;

@@ -358,6 +358,9 @@ export class FinancialBridge implements FinancialBridgeApi {
   // Least drawn width of one-time events (their text) per card height,
   // and every card's dates; both per revision.
   private readonly minWidthCache = new Map<string, { height: number; titleHeight: number; width: number }>();
+  // The item addItem / replaceItem is laying out (clipMinWidth reads it
+  // while its clip settles its lane, before the document has it).
+  private pendingItem: FinancialItem | null = null;
   private minWidthRevision = -1;
   private readonly periodCache = new Map<string, string | null>();
   private periodRevision = -1;
@@ -453,6 +456,8 @@ export class FinancialBridge implements FinancialBridgeApi {
       reality: this.reality,
     };
     this.rebuildIndex();
+    // (The host calls core.relayoutLanes() once this bridge is wired as its
+    // clipMinWidthPx: the first lanes were laid out without drawn widths.)
     const state = core.getState();
     this.observe(state);
     this.snapshots.set(state, this.snap);
@@ -525,16 +530,20 @@ export class FinancialBridge implements FinancialBridgeApi {
       this.minWidthCache.clear();
       this.minWidthRevision = this.revision;
     }
-    const cached = this.minWidthCache.get(clipId);
+    // The item being added / edited right now (its clip is laid out before
+    // the document has it): its own width, never a cached one.
+    const pending = this.pendingItem !== null && this.pendingItem.id === clipId ? this.pendingItem : null;
+    const cached = pending ? undefined : this.minWidthCache.get(clipId);
     if (cached !== undefined && cached.height === height && cached.titleHeight === titleHeight) {
       return cached.width;
     }
-    const item = this.itemIndex.get(clipId);
+    const item = pending ?? this.itemIndex.get(clipId);
+    const period = pending ? describePeriod(pending, this.payoffs().get(pending.id)) : this.getClipPeriod(clipId);
     const width =
       item && isPointItem(item)
-        ? clipCardWidthPx(item.name, describeItem(item, this.doc), this.getClipPeriod(clipId), height, titleHeight)
+        ? clipCardWidthPx(item.name, describeItem(item, this.doc), period, height, titleHeight)
         : 0;
-    this.minWidthCache.set(clipId, { height, titleHeight, width });
+    if (!pending) this.minWidthCache.set(clipId, { height, titleHeight, width });
     return width;
   }
 
@@ -1200,6 +1209,8 @@ export class FinancialBridge implements FinancialBridgeApi {
       !target ||
       (isAutoRowLabel(target.label) && !state.clips.some((clip) => clip.trackId === target.id));
 
+    this.pendingItem = item;
+    try {
     this.apply(() => {
       // A new lane goes right under the last track (createClip on a row
       // past the end would materialise every empty row in between).
@@ -1222,6 +1233,9 @@ export class FinancialBridge implements FinancialBridgeApi {
       if (colourRow) this.core.recolorTrack(trackIndex, KIND_COLORS[item.kind]);
       this.core.setClipSelection([id]);
     });
+    } finally {
+      this.pendingItem = null;
+    }
 
     const after = this.core.getState();
     const clip = after.clips.find((candidate) => candidate.id === id);
@@ -1256,6 +1270,8 @@ export class FinancialBridge implements FinancialBridgeApi {
     };
 
     const before = this.core.getState();
+    this.pendingItem = next;
+    try {
     this.apply(() => {
       const state = this.core.getState();
       if (Math.abs(clip.start - geometry.start) > 1e-9) {
@@ -1280,7 +1296,13 @@ export class FinancialBridge implements FinancialBridgeApi {
       // Amount-only edits don't change the playlist; give them their own
       // undo step anyway so undo/redo stays aligned with the document.
       if (this.core.getState() === before) this.core.touch();
+      // A new name / amount / date can draw a one-time card wider: its row
+      // keeps the cards apart (in this same undo step).
+      this.core.relayoutLanes();
     });
+    } finally {
+      this.pendingItem = null;
+    }
 
     this.commit(this.core.getState());
     return true;

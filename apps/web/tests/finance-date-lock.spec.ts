@@ -193,11 +193,11 @@ describe("one-time events are as wide as their name and amount", () => {
     expect(width).toBeGreaterThan(8 + 22 + "9 dic 2026".length * 6.7);
     expect(bridge.clipMinWidth("sal", 58, 20)).toBe(0);
     expect(bridge.clipMinWidth("loan", 58, 20)).toBe(0);
-    // A short card puts lock + date beside the text: wider.
-    expect(bridge.clipMinWidth("bono", 40, 20)).toBeGreaterThan(width);
+    // A card too short for two lines puts lock + date beside the text: wider.
+    expect(bridge.clipMinWidth("bono", 36, 20)).toBeGreaterThan(width);
     const bono = bridge.getItem("bono")!;
     expect(bridge.replaceItem({ ...bono, name: "Bono de fin de año y algo más" })).toBe(true);
-    expect(bridge.clipMinWidth("bono", 40, 20)).toBeGreaterThan(bridge.clipMinWidth("bono", 58, 20) - 1);
+    expect(bridge.clipMinWidth("bono", 36, 20)).toBeGreaterThan(bridge.clipMinWidth("bono", 58, 20) - 1);
   });
 });
 

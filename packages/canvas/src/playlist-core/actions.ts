@@ -69,6 +69,8 @@ export type PlaylistAction =
   | { type: "TOGGLE_TRACK_SOLO"; trackIndex: number }
   | { type: "TOGGLE_TRACK_LOCK"; trackIndex: number }
   | { type: "SET_TRACK_HEIGHT"; trackIndex: number; height: number }
+  // Every materialised row to one height (one dispatch, one undo step).
+  | { type: "SET_ALL_TRACK_HEIGHTS"; height: number }
   | { type: "REORDER_TRACK"; fromIndex: number; toIndex: number }
   | { type: "MAKE_CLIPS_UNIQUE"; clipIds: string[] }
   | { type: "SET_CLIP_LABEL"; clipId: string; label: string }
@@ -176,6 +178,7 @@ const UNDOABLE_ACTION_TYPES: ReadonlySet<PlaylistActionType> = new Set([
   "TOGGLE_TRACK_SOLO",
   "TOGGLE_TRACK_LOCK",
   "SET_TRACK_HEIGHT",
+  "SET_ALL_TRACK_HEIGHTS",
   "REORDER_TRACK",
   "MAKE_CLIPS_UNIQUE",
   "SET_CLIP_LABEL",

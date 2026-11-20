@@ -44,6 +44,9 @@ export const FINANCE_PLAYLIST_METRICS: PlaylistMetrics = {
   // enough for the item name + its yearly impact.
   rulerHeight: 52,
   trackHeaderWidth: 216,
+  // A card of 70 px (84 − 2 × 7): name and amount on top, the lock + dates
+  // row at the bottom (on the corner tab), ~11 px of air between them.
+  trackHeight: 84,
   // The horizontal scrollbar is the timeline navigator (miniature of the
   // year + zoomable window): thicker than the vertical bar, so it is easy
   // to grab and to wheel over (the wheel there moves time).
@@ -397,6 +400,8 @@ export interface FinancialTrackLayout {
   tracks: PlaylistTrack[];
   /** item id -> track id */
   placement: Record<string, string>;
+  /** The lines' height the corner pad set (rows without their own too). */
+  rowHeight?: number;
 }
 
 /**
@@ -487,6 +492,9 @@ export function createFinancialPlaylistState(
     snap: { mode: "beat", lastActiveMode: "beat" },
     selection: { clipIds: [], automationPointIds: [] },
     playPosition: { time: 0, isRunning: false },
+    // The lines' height the corner pad left (the core takes it as its rows'
+    // default).
+    ...(layout?.rowHeight !== undefined ? { rowHeight: layout.rowHeight } : {}),
   };
 }
 
@@ -524,13 +532,14 @@ export function trackLayoutOf(
       .slice(0, end)
       .map(({ soloed: _soloed, lanes: _lanes, ...track }) => track),
     placement,
+    ...(state.rowHeight !== undefined ? { rowHeight: state.rowHeight } : {}),
   };
 }
 
 /** A FinancialTrackLayout read back from storage, or null when malformed. */
 export function parseTrackLayout(value: unknown): FinancialTrackLayout | null {
   if (!value || typeof value !== "object") return null;
-  const raw = value as { tracks?: unknown; placement?: unknown };
+  const raw = value as { tracks?: unknown; placement?: unknown; rowHeight?: unknown };
   if (!Array.isArray(raw.tracks) || !raw.placement || typeof raw.placement !== "object") return null;
   const tracks: PlaylistTrack[] = [];
   const seen = new Set<string>();
@@ -553,5 +562,9 @@ export function parseTrackLayout(value: unknown): FinancialTrackLayout | null {
   for (const [itemId, trackId] of Object.entries(raw.placement as Record<string, unknown>)) {
     if (typeof trackId === "string" && seen.has(trackId)) placement[itemId] = trackId;
   }
-  return { tracks, placement };
+  const rowHeight =
+    typeof raw.rowHeight === "number" && Number.isFinite(raw.rowHeight) && raw.rowHeight > 0
+      ? raw.rowHeight
+      : undefined;
+  return rowHeight !== undefined ? { tracks, placement, rowHeight } : { tracks, placement };
 }

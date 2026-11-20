@@ -101,6 +101,11 @@ body,
   --field-border-hover: #b5bac6;
   --field-shadow: 0 1px 1px rgba(16, 24, 40, 0.05);
   --sheet-aside: #f6f7f9;
+  /* The canvas, outside it (the editor's shape preview): its background and
+     how much of a clip's colour tints its card — palette.ts background /
+     clipTint, changed together. */
+  --canvas-bg: #ffffff;
+  --clip-tint: 13%;
 
   --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 0 0 1px rgba(16, 24, 40, 0.03);
   /* Cards: soft and diffuse, never a hard outline. */
@@ -166,6 +171,8 @@ body,
   --field-border-hover: #50505b;
   --field-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
   --sheet-aside: #161619;
+  --canvas-bg: #0e0e10;
+  --clip-tint: 20%;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.35),
@@ -6798,22 +6805,66 @@ h3.fin-editor__section-title {
    the next dates and what it does to your cash, live — header and actions
    fixed, each column scrolling on its own. One column under 900 px.
    ========================================================================== */
+/* The blur + dim live on the spotlight's scrim (EditorSpotlight), not on the
+   overlay: the scrim can leave a clear window on the edited object. No
+   opacity on the overlay either — it would make it the scrim's backdrop
+   root, and the blur would see nothing behind. */
 .playlist-shell__modal-overlay.fin-sheet-overlay {
   grid-template-rows: minmax(0, 1fr);
   place-items: stretch end;
   padding: var(--gap-card);
+  background: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Behind the sheet (z-index -1 in the overlay's stacking context: above
+   the canvas, under the dialog), never taking a click (the overlay's). */
+.fin-spotlight__scrim {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--overlay);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
   animation: fin-fade-in 160ms ease-out;
 }
 
+/* The edited object's window: a hairline in the accent colour and a soft
+   halo over the blur around it. */
+.fin-spotlight__ring {
+  position: absolute;
+  z-index: -1;
+  border-radius: 9px;
+  box-shadow:
+    inset 0 0 0 1.5px var(--accent),
+    0 0 0 4px var(--accent-soft),
+    0 0 28px 2px var(--accent-soft);
+  pointer-events: none;
+  animation: fin-spotlight-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes fin-spotlight-in {
+  from {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+}
+
+/* As wide as the form (its 660 px + padding): the canvas keeps the rest.
+   No drop shadow: it would darken the canvas beside it (the edited
+   object's window included); its border sets it apart. */
 .playlist-shell__modal.fin-sheet {
   display: flex;
   flex-direction: column;
-  width: min(1080px, calc(100vw - 2 * var(--gap-card)));
+  width: min(740px, calc(100vw - 2 * var(--gap-card)));
   min-width: 0;
   max-width: none;
   height: 100%;
   max-height: none;
   overflow: hidden;
+  box-shadow: none;
   animation: fin-sheet-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -6827,20 +6878,186 @@ h3.fin-editor__section-title {
   font-size: 19px;
 }
 
+/* Shape (a piece of timeline, fixed on top) / form (as tall as it is; it
+   scrolls when the sheet is short) / Vista previa (right under the form,
+   always in sight; its band runs down to the actions, so a short form
+   leaves no gap in the middle) / actions. */
 .playlist-shell__modal-body.fin-sheet__body {
-  display: grid;
+  display: flex;
   flex: 1 1 auto;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
-  grid-template-rows: minmax(0, 1fr) auto;
+  flex-direction: column;
   min-height: 0;
   padding: 0;
 }
 
+.fin-sheet__shape {
+  flex: none;
+}
+
+/* Edge to edge: the whole band is the piece of timeline. */
+.fin-sheet__shape {
+  padding: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* The editor's shape preview (ShapePreview): the item's card as the canvas
+   draws it, on a window of the canvas — month lines, "Hoy", a mark per
+   payment. Visual only. */
+.fin-shape {
+  position: relative;
+  height: 96px;
+  overflow: hidden;
+  background: var(--canvas-bg);
+  user-select: none;
+}
+
+.fin-shape__ruler {
+  position: relative;
+  height: 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.fin-shape__month {
+  position: absolute;
+  top: 5px;
+  padding-left: 8px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 12px;
+  white-space: nowrap;
+}
+
+.fin-shape__lane {
+  position: absolute;
+  inset: 22px 0 0;
+}
+
+.fin-shape__line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--line);
+}
+
+/* The lane's whole height (a hair of room above and below), three rows as
+   on the canvas: name, amount, dates. Over "Hoy" (never a line through
+   its name). */
+.fin-shape__card {
+  position: absolute;
+  z-index: 1;
+  top: 6px;
+  bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 1px;
+  min-width: 0;
+  padding: 6px 10px 0 11px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--clip-color) var(--clip-tint), var(--canvas-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--clip-color) 40%, transparent);
+  white-space: nowrap;
+  transition:
+    left 160ms ease-out,
+    width 160ms ease-out;
+}
+
+/* The kind's stripe, as on the canvas. */
+.fin-shape__card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--clip-color);
+}
+
+/* Open-ended: it runs out of the window, fading. */
+.fin-shape__card[data-open] {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent);
+}
+
+/* One date: as wide as its text. */
+.fin-shape__card[data-point] {
+  width: max-content;
+  max-width: 70%;
+  padding-right: 12px;
+}
+
+.fin-shape__card[data-muted] {
+  opacity: 0.5;
+}
+
+.fin-shape__title,
+.fin-shape__detail,
+.fin-shape__period {
+  position: relative;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fin-shape__title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.fin-shape__detail {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 14px;
+}
+
+.fin-shape__period {
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 13px;
+}
+
+/* A payment: a short bar on the card's lower edge. */
+.fin-shape__mark {
+  position: absolute;
+  bottom: 4px;
+  width: 2px;
+  height: 9px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--clip-color);
+  opacity: 0.85;
+}
+
+.fin-shape__today {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  margin-left: -0.75px;
+  background: var(--now);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fin-shape__card {
+    transition: none;
+  }
+}
+
 .fin-sheet__main {
+  flex: 0 1 auto;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 24px 28px 32px;
+  padding: 22px 28px 24px;
   overscroll-behavior: contain;
 }
 
@@ -6849,28 +7066,137 @@ h3.fin-editor__section-title {
   max-width: 660px;
 }
 
+/* --- The sheet's form, every row used ------------------------------------ */
+/* A tighter rhythm between sections. */
+.fin-sheet .fin-editor__section {
+  gap: 14px 16px;
+  padding-top: 16px;
+}
+
+.fin-sheet .fin-editor__section--head,
+.fin-sheet .fin-editor__section--outcome {
+  padding-top: 0;
+}
+
+.fin-sheet .fin-editor__section-title {
+  margin-bottom: -2px;
+  font-size: 14px;
+}
+
+/* "Se repite": the six tiles on one row of the form. */
+.fin-sheet .fin-repeat__presets {
+  gap: 6px;
+}
+
+.fin-sheet .fin-repeat__preset {
+  padding: 0 12px;
+}
+
+@media (min-width: 600px) {
+  /* A half field alone on its row (after the title or a wide field, before
+     a wide field or the end — Monto, Fecha, Próximo cobro): it takes the
+     row, its help or date read beside the control instead of under it. */
+  .fin-sheet
+    .fin-editor__section
+    > :is(.fin-editor__section-title, .fin-editor__field--wide)
+    + .fin-editor__field:not(.fin-editor__field--wide):is(:last-child, :has(+ .fin-editor__field--wide)) {
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 16px;
+  }
+
+  .fin-sheet
+    .fin-editor__section
+    > :is(.fin-editor__section-title, .fin-editor__field--wide)
+    + .fin-editor__field:not(.fin-editor__field--wide):is(:last-child, :has(+ .fin-editor__field--wide))
+    > * {
+    grid-column: 1;
+  }
+
+  /* Centred on the 36 px control (whose bottom ends the row). */
+  .fin-sheet
+    .fin-editor__section
+    > :is(.fin-editor__section-title, .fin-editor__field--wide)
+    + .fin-editor__field:not(.fin-editor__field--wide):is(:last-child, :has(+ .fin-editor__field--wide))
+    > :is(.fin-editor__hint, .fin-date__preview) {
+    grid-column: 2;
+    align-self: end;
+    padding-bottom: 10px;
+  }
+
+  /* A date with its "Día" (a monthly payday): the date as wide as a half
+     field, "Día" after it, the date read at the end of the same row. */
+  .fin-sheet .fin-date.fin-editor__field--wide:has(.fin-editor__payday) {
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 14px;
+  }
+
+  .fin-sheet .fin-date.fin-editor__field--wide:has(.fin-editor__payday) > .fin-editor__label {
+    grid-column: 1 / -1;
+  }
+
+  .fin-sheet .fin-date.fin-editor__field--wide:has(.fin-editor__payday) > .fin-date__preview {
+    grid-column: 2;
+    align-self: center;
+  }
+
+  .fin-sheet .fin-date.fin-editor__field--wide:has(.fin-editor__payday) .fin-date__picker {
+    flex: none;
+    width: 300px;
+  }
+
+  /* "Sin día fijo (presupuesto)": what it means, beside the box. */
+  .fin-sheet .fin-editor__reading:has(> .fin-editor__check) {
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 20px;
+  }
+
+  .fin-sheet .fin-editor__reading:has(> .fin-editor__check) > .fin-editor__label {
+    grid-column: 1 / -1;
+  }
+
+  .fin-sheet .fin-editor__reading:has(> .fin-editor__check) > .fin-editor__hint {
+    grid-column: 2;
+    align-self: center;
+  }
+}
+
 .fin-sheet__preview {
   display: flex;
+  flex: 1 0 auto;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 24px;
-  border-left: 1px solid var(--line);
+  padding: 14px 28px 16px;
+  border-top: 1px solid var(--line);
   background: var(--sheet-aside);
+}
+
+/* What it comes to scrolls on its own past a third of the window (a card's
+   long preview never squeezes the form out). */
+.fin-sheet__preview > .fin-editor__section--outcome {
+  max-height: 34vh;
+  overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+/* Title and hint on one line: the preview stays short. */
+.fin-sheet__preview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
 }
 
 .fin-sheet__preview-title {
   margin: 0;
   color: var(--text);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
 }
 
 .fin-sheet__preview-hint {
-  margin: -6px 0 4px;
+  margin: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
@@ -6899,7 +7225,7 @@ h3.fin-editor__section-title {
 
 .fin-sheet .fin-editor__actions {
   position: static;
-  grid-column: 1 / -1;
+  flex: none;
   margin: 0;
   padding: 14px 24px;
   border-top: 1px solid var(--line);
@@ -6920,14 +7246,16 @@ h3.fin-editor__section-title {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .playlist-shell__modal-overlay.fin-sheet-overlay,
+  .fin-spotlight__scrim,
+  .fin-spotlight__ring,
   .playlist-shell__modal.fin-sheet {
     animation: none;
   }
 }
 
-/* One column: the preview follows the form in the same scroll. */
-@media (max-width: 900px) {
+/* Small or short windows: the preview follows the form in the same scroll
+   (fixed, it would leave the form no room). */
+@media (max-width: 900px), (max-height: 620px) {
   .playlist-shell__modal-body.fin-sheet__body {
     display: flex;
     flex-direction: column;
@@ -6940,14 +7268,23 @@ h3.fin-editor__section-title {
     overflow: visible;
   }
 
+  .fin-sheet__shape {
+    flex: none;
+  }
+
   .fin-sheet__main {
     padding: 20px 20px 24px;
   }
 
+  /* Its band still runs down to the actions when the form is short. */
   .fin-sheet__preview {
+    flex: 1 0 auto;
     padding: 20px;
-    border-top: 1px solid var(--line);
-    border-left: 0;
+  }
+
+  .fin-sheet__preview > .fin-editor__section--outcome {
+    max-height: none;
+    overflow: visible;
   }
 
   .fin-sheet .fin-editor__actions {
@@ -6960,6 +7297,17 @@ h3.fin-editor__section-title {
 
   .fin-sheet > .playlist-shell__modal-header {
     padding: 14px 14px 12px 20px;
+  }
+}
+
+/* A phone (tall enough): the shape stays on top while the form scrolls —
+   there the "Vista previa" is at the end of the scroll. */
+@media (max-width: 900px) and (min-height: 621px) {
+  .fin-sheet__shape {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--raised);
   }
 }
 
@@ -7416,4 +7764,474 @@ input[type="number"]::-webkit-outer-spin-button {
     margin-right: auto;
     margin-left: auto;
   }
+}
+
+/* ==========================================================================
+   The day's reading in the header (PlayheadReadout, .fin-readout--header),
+   right after the verdict: the date the red line (or the pointer) marks,
+   then its cash and its debt as two big figures with the money lane's
+   legend (the thick line = Caja, the thin grey one = Deuda). It used to sit
+   in the money lane's header cell; the canvas keeps only the lane's title.
+   ========================================================================== */
+.fin-readout.fin-readout--header {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  gap: 0;
+  height: 50px;
+  margin-left: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The date as a small calendar: weekday and year over the day. */
+.fin-readout--header .fin-readout__date {
+  display: grid;
+  grid-template-areas:
+    "weekday year"
+    "day day";
+  align-content: center;
+  justify-content: start;
+  column-gap: 4px;
+  padding: 0 12px 0 14px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.fin-readout--header .fin-readout__weekday {
+  grid-area: weekday;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.fin-readout--header .fin-readout__year {
+  grid-area: year;
+}
+
+.fin-readout--header .fin-readout__day {
+  grid-area: day;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* The pointer's day (hovering the timeline), not the red line's. */
+.fin-readout--header[data-source="hover"] .fin-readout__day {
+  color: var(--accent);
+}
+
+.fin-readout--header .fin-readout__cell {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-areas:
+    "swatch label"
+    "value value";
+  align-content: center;
+  justify-content: start;
+  column-gap: 6px;
+  row-gap: 1px;
+  padding: 0 14px;
+  border-left: 1px solid var(--line);
+}
+
+.fin-readout--header .fin-readout__swatch {
+  grid-area: swatch;
+}
+
+.fin-readout--header .fin-readout__cell:nth-child(n) .fin-readout__label {
+  display: inline;
+  grid-area: label;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.fin-readout--header .fin-readout__cash,
+.fin-readout--header .fin-readout__debt {
+  grid-area: value;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+
+.fin-readout--header[data-state="low"] .fin-readout__cash {
+  color: var(--fin-warning-text);
+}
+
+.fin-readout--header[data-state="negative"] .fin-readout__cash {
+  color: var(--fin-negative-text);
+}
+
+/* "Pagar deudas" (the debts rail's toggle) as a header button, beside
+   "Registrar gasto"; open, it says so in the accent. */
+.playlist-shell--finance .fin-summary .fin-side__tab.fin-side__tab--header {
+  height: 36px;
+  min-height: 36px;
+  padding: 0 14px 0 12px;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.playlist-shell--finance .fin-summary .fin-side__tab.fin-side__tab--header:hover {
+  background: var(--hover);
+}
+
+.playlist-shell--finance .fin-summary .fin-side__tab.fin-side__tab--header[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.fin-side__tab--header svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.playlist-shell--finance .fin-summary .fin-side__tab--header .fin-side__tab-label {
+  max-width: none;
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* The header is one row: as it narrows, these give way in steps so the
+   tools keep their room (the verdict is never clipped). The reading drops
+   its date first (the ruler names the marked / hovered day), "Registrar
+   gasto" its month figure; then "Pagar deudas" keeps its icon, then
+   "Registrar gasto" too and the figures tighten; on a phone the reading
+   gives way (the verdict stays). Icon-only buttons keep their names as
+   their accessible names and tooltips. */
+@media (max-width: 2099px) {
+  .playlist-shell--finance .fin-summary {
+    column-gap: 10px;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-record__month {
+    display: none;
+  }
+
+  .fin-readout--header .fin-readout__cell {
+    padding: 0 12px;
+  }
+
+  .fin-readout--header .fin-readout__cash,
+  .fin-readout--header .fin-readout__debt {
+    font-size: 17px;
+  }
+}
+
+@media (max-width: 1669px) {
+  .fin-readout--header .fin-readout__date {
+    display: none;
+  }
+
+  .fin-readout--header .fin-readout__date + .fin-readout__cell {
+    border-left: 0;
+  }
+}
+
+@media (max-width: 1529px) {
+  .playlist-shell--finance .fin-summary .fin-side__tab.fin-side__tab--header {
+    width: var(--header-control-h, 40px);
+    padding: 0;
+    justify-content: center;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-side__tab--header .fin-side__tab-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 1429px) {
+  .playlist-shell--finance .fin-summary .fin-record {
+    width: var(--header-control-h, 40px);
+    padding: 0;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-record__words {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 1309px) {
+  .fin-readout--header .fin-readout__cell {
+    padding: 0 9px;
+  }
+
+  .fin-readout--header .fin-readout__cash,
+  .fin-readout--header .fin-readout__debt {
+    font-size: 15px;
+  }
+}
+
+/* Narrow windows: the cash alone (the debt is in "Más cifras"). */
+@media (max-width: 1109px) {
+  .fin-readout--header .fin-readout__cell:has(.fin-readout__debt) {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .fin-readout.fin-readout--header {
+    display: none;
+  }
+}
+
+/* The reading never changes size as the day (or the pointer) moves: each
+   figure keeps room for its largest usual value (tabular digits: every
+   digit the same width) and the date its longest form, so the header
+   around it never shifts. A figure past that room (millions) grows. */
+.fin-readout .fin-readout__cash,
+.fin-readout .fin-readout__debt {
+  display: inline-block;
+  min-width: 8ch;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "mié 30 sep 2026": the longest date, inline. */
+.fin-readout:not(.fin-readout--header) .fin-readout__date {
+  display: inline-block;
+  min-width: 15ch;
+}
+
+/* The header's small calendar (≥ 2000 px): "30 sep" its widest day. */
+.fin-readout--header .fin-readout__date {
+  width: 78px;
+  box-sizing: border-box;
+}
+
+@media (max-width: 1309px) {
+  .fin-readout .fin-readout__cash,
+  .fin-readout .fin-readout__debt {
+    min-width: 7ch;
+  }
+}
+
+/* ==========================================================================
+   The table's corner pad (ZoomPad): a soft rectangle above the line names.
+   Press and drag — the pointer hides — ↔ zoom, ↕ the lines' height. A shade
+   lighter than the corner on the dark theme (darker on the light one).
+   ========================================================================== */
+.fin-zoompad-cell {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 7;
+  display: grid;
+  align-items: center;
+  width: var(--pl-header-w, 216px);
+  height: var(--pl-ruler-h, 52px);
+  padding: 0 8px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.fin-zoompad {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: min(36px, calc(var(--pl-ruler-h, 52px) - 12px));
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--muted);
+  font: inherit;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  transition:
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.fin-zoompad:hover {
+  background: color-mix(in srgb, var(--text) 11%, transparent);
+}
+
+.fin-zoompad:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Held: the pointer is hidden (pointer lock); it says it is working. */
+.fin-zoompad[data-dragging] {
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  cursor: grabbing;
+}
+
+.fin-zoompad__icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fin-zoompad__read {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fin-zoompad__span {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.fin-zoompad__height {
+  flex: none;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.fin-zoompad[data-dragging] .fin-zoompad__icon {
+  color: var(--accent);
+}
+
+/* ==========================================================================
+   Header — one size: every control is 40 px tall with the same 12 px
+   corner (cards and buttons alike; the icon buttons are 40 px squares).
+   The two "figures" (the day's reading, Liquidez hoy) share one type: a
+   small label over a 17 px bold value. Later than the rules it evens out.
+   ========================================================================== */
+.playlist-shell--finance .fin-summary {
+  --header-control-h: 40px;
+  --header-control-r: 12px;
+}
+
+.playlist-shell--finance .fin-summary .fin-plan__trigger,
+.playlist-shell--finance .fin-summary .fin-summary__chip,
+.playlist-shell--finance .fin-summary .fin-summary__more,
+.playlist-shell--finance .fin-summary .fin-summary__actions .fin-button,
+.playlist-shell--finance .fin-summary .fin-summary__actions .fin-side__tab.fin-side__tab--header,
+.playlist-shell--finance .fin-summary .fin-summary__actions .fin-icon-button,
+.playlist-shell--finance .fin-summary .fin-futures__trigger,
+.playlist-shell--finance .fin-summary .playlist-shell__segmented {
+  height: var(--header-control-h);
+  min-height: var(--header-control-h);
+  border-radius: var(--header-control-r);
+}
+
+.playlist-shell--finance .fin-summary .fin-summary__actions .fin-icon-button,
+.playlist-shell--finance .fin-summary .fin-futures__trigger {
+  width: var(--header-control-h);
+  min-width: var(--header-control-h);
+  justify-content: center;
+}
+
+/* The tools: the group 40 px, its buttons centred in it. */
+.playlist-shell--finance .fin-summary .playlist-shell__segmented {
+  align-items: center;
+  padding-block: 0;
+}
+
+.playlist-shell--finance .fin-summary .playlist-shell__tool {
+  height: 32px;
+  border-radius: 8px;
+}
+
+.playlist-shell--finance .fin-summary .playlist-shell__snap-field {
+  height: var(--header-control-h);
+}
+
+/* The figures: the reading and Liquidez hoy, the same box and type. */
+.playlist-shell--finance .fin-summary .fin-readout.fin-readout--header,
+.playlist-shell--finance .fin-summary .fin-summary__start,
+.playlist-shell--finance .fin-summary .fin-summary__start .fin-summary__metric {
+  height: var(--header-control-h);
+  min-height: var(--header-control-h);
+  border-radius: var(--header-control-r);
+  box-sizing: border-box;
+}
+
+.playlist-shell--finance .fin-summary .fin-summary__start .fin-summary__metric {
+  justify-content: center;
+  gap: 0;
+  padding: 0 14px;
+}
+
+.playlist-shell--finance .fin-summary .fin-summary__start .fin-summary__label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 13px;
+  text-transform: uppercase;
+}
+
+.playlist-shell--finance .fin-summary .fin-summary__start .fin-summary__input {
+  height: 21px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.playlist-shell--finance .fin-summary .fin-readout--header .fin-readout__cash,
+.playlist-shell--finance .fin-summary .fin-readout--header .fin-readout__debt {
+  font-size: 17px;
+  line-height: 21px;
+}
+
+.playlist-shell--finance .fin-summary .fin-readout--header .fin-readout__cell:nth-child(n) .fin-readout__label {
+  line-height: 13px;
+}
+
+.playlist-shell--finance .fin-summary .fin-readout--header .fin-readout__cell {
+  row-gap: 0;
+}
+
+.playlist-shell--finance .fin-summary .fin-readout--header .fin-readout__date {
+  line-height: 13px;
+}
+
+.playlist-shell--finance .fin-summary .fin-readout--header .fin-readout__day {
+  font-size: 14px;
+  line-height: 18px;
 }

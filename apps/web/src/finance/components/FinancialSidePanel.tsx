@@ -1,8 +1,9 @@
 // "Comparar y pagar deudas" (UX audit 2026-11-11, UX-47 — was "Análisis"):
 // a rail with "Probar cambios" (trial future + comparison between futures)
 // and the avalanche. ONE toggle button with `aria-expanded`, always mounted
-// in the money lane's header cell (UX-27: opening / closing never drops the
-// focus). Open, the rail renders in `slot` — a column BESIDE the stage — so
+// (UX-27: opening / closing never drops the focus): a button of the header
+// bar ("Pagar deudas", placement "header") or, standalone, a tab in the
+// money lane's header cell. Open, the rail renders in `slot` — a column BESIDE the stage — so
 // it pushes the canvas (the renderer's ResizeObserver follows) instead of
 // covering the row headers; without a slot it overlays the stage as before.
 // Escape from inside the rail (or its toggle) closes it (useOverlay
@@ -25,6 +26,8 @@ export interface FinancialSidePanelProps {
   defaultOpen?: boolean;
   /** Column beside the stage where the open rail renders (null: overlay). */
   slot?: HTMLElement | null;
+  /** Where the toggle sits: a header-bar button, or the lane's tab (default). */
+  placement?: "header" | "lane";
 }
 
 export const SIDE_PANEL_TITLE = "Comparar y pagar deudas";
@@ -42,6 +45,7 @@ export function FinancialSidePanel({
   today,
   defaultOpen = false,
   slot = null,
+  placement = "lane",
 }: FinancialSidePanelProps) {
   const [open, setOpen] = React.useState(defaultOpen);
   const toggleRef = React.useRef<HTMLButtonElement | null>(null);
@@ -92,6 +96,32 @@ export function FinancialSidePanel({
     </aside>
   ) : null;
 
+  const title = open
+    ? `Cerrar ${SIDE_PANEL_TITLE.toLowerCase()}`
+    : `${SIDE_PANEL_TITLE}: probar cambios sin tocar tu plan y decidir qué deuda pagar`;
+  if (placement === "header") {
+    return (
+      <>
+        <button
+          ref={toggleRef}
+          type="button"
+          className="fin-button fin-side__tab fin-side__tab--header"
+          aria-expanded={open}
+          aria-controls={open ? panelId : undefined}
+          onClick={() => setOpen((value) => !value)}
+          title={title}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="2" y="3.5" width="12" height="9" rx="2" />
+            <path d="M2 6.5h12M4.5 10h3" />
+          </svg>
+          <span className="fin-side__tab-label">{SIDE_PANEL_TAB_LABEL}</span>
+        </button>
+        {panel && slot ? createPortal(panel, slot) : panel}
+      </>
+    );
+  }
+
   return (
     <>
       <div className="fin-side fin-side--collapsed">
@@ -102,11 +132,7 @@ export function FinancialSidePanel({
           aria-expanded={open}
           aria-controls={open ? panelId : undefined}
           onClick={() => setOpen((value) => !value)}
-          title={
-            open
-              ? `Cerrar ${SIDE_PANEL_TITLE.toLowerCase()}`
-              : `${SIDE_PANEL_TITLE}: probar cambios sin tocar tu plan y decidir qué deuda pagar`
-          }
+          title={title}
         >
           <span className="fin-side__tab-arrow" aria-hidden="true">
             {open ? "◀" : "▶"}

@@ -24,10 +24,12 @@ export const COMPACT_MIN_HEIGHT = 720;
 /** At or below this height the shell is "short" (UX-29). */
 export const SHORT_MAX_HEIGHT = 500;
 
+// The money lane: a compact chart (its cell holds only the "Caja" title —
+// the day's reading and "Pagar deudas" live in the header).
 const LANE_HEIGHT: Record<ShellDensity, number> = {
-  comfortable: 112,
-  compact: 96,
-  tight: 88,
+  comfortable: 80,
+  compact: 72,
+  tight: 64,
   short: 48,
 };
 

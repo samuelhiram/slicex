@@ -89,7 +89,7 @@ export function createDragAnnotationLayer(
       annotation.text,
       TOOLTIP_PADDING_X + DOT_SPACE,
       5,
-      { color, size: 11, weight: "600" },
+      { color, size: 12, weight: "600" },
     );
   }
 

@@ -284,7 +284,8 @@ function drawn(start: number, duration: number, scrollBeats: number, timeLocked 
   const core = createPlaylistCore(state, { metrics: M });
   core.setViewportSize(WIDTH, HEIGHT);
   core.updateViewport({ pxPerBeat: PX, scrollX: scrollBeats * PX, scrollY: 0 });
-  if (rowHeight !== undefined) core.setTrackHeight(0, rowHeight);
+  // The finance shell's roomy rows (84 px: a 70 px card) unless told.
+  core.setTrackHeight(0, rowHeight ?? 84);
   const registry = createClipNodeRegistry(COLORS, {
     timeLock: true,
     getClipDetail: () => "-$7,500 /mes",
@@ -303,7 +304,14 @@ function drawn(start: number, duration: number, scrollBeats: number, timeLocked 
   // The badge behind the dates: the Graphics right before their Text.
   const periodIndex = period ? node.children.indexOf(period) : -1;
   const badge = periodIndex > 0 ? node.children[periodIndex - 1] : undefined;
+  // The amount line ("-$7,500 /mes").
+  const amount = node.children.find((child) => child instanceof Text && child.text.includes("7,500")) as
+    | Text
+    | undefined;
   return {
+    amountX: amount && amount.visible ? node.x + amount.x : Number.NaN,
+    amountY: amount && amount.visible ? node.y + amount.y : Number.NaN,
+    amountText: amount && amount.visible ? amount.text : null,
     badgeX: badge && badge.visible ? node.x + badge.x : Number.NaN,
     badgeY: badge && badge.visible ? node.y + badge.y : Number.NaN,
     badgeRight: badge && badge.visible ? node.x + badge.x + badge.width : Number.NaN,
@@ -314,20 +322,21 @@ function drawn(start: number, duration: number, scrollBeats: number, timeLocked 
     rect: views[0]!.rect,
     lock,
     titleX: title ? node.x + title.x : Number.NaN,
-    // A short card shows the title only: 11 px pad + "Préstamo" at 7.2 px.
-    textEnd: views[0]!.rect.x + 11 + "Préstamo".length * 7.2,
+    // A short card shows the title only: 11 px pad + "Préstamo" at 7.8 px.
+    textEnd: views[0]!.rect.x + 11 + "Préstamo".length * 7.8,
   };
 }
 
 describe("the lock sits in the bottom-left corner", () => {
-  it("under the text, at the card's left; the title keeps its place", () => {
+  it("a tab flush with the card's left and bottom edges, under the text; the title keeps its place", () => {
     const { rect, lock, titleX } = drawn(5, 50, 0);
     expect(lock).not.toBeNull();
-    expect(lock!.x).toBeGreaterThanOrEqual(rect.x + 4);
-    expect(lock!.x).toBeLessThan(rect.x + 12);
-    expect(lock!.y + lock!.height).toBeLessThanOrEqual(rect.y + rect.height);
+    expect(lock!.x).toBe(rect.x);
+    expect(lock!.y + lock!.height).toBe(rect.y + rect.height);
     expect(lock!.y).toBeGreaterThan(rect.y + 30);
-    expect(titleX).toBe(rect.x + 11);
+    // 11 px in; the Text 1 px left of it: its outline (half of 2 px) draws
+    // the letters that far right.
+    expect(titleX).toBe(rect.x + 11 - 1);
   });
 
   it("slides with the title to the timeline's left edge (sticky)", () => {
@@ -347,6 +356,46 @@ describe("the lock sits in the bottom-left corner", () => {
     expect(Math.abs(lock!.y + lock!.height / 2 - (rect.y + rect.height / 2))).toBeLessThanOrEqual(1);
   });
 
+  it("the row stays under the amount unless the card is really short; the room left is air above it", () => {
+    // 72 px row: a 58 px card — the row at the bottom, clear of the amount
+    // (20 + 2 + 15 = 37), 2 px off the bottom edge.
+    const tight = drawn(5, 50, 0, true, 72);
+    expect(tight.rect.height).toBe(58);
+    expect(tight.lock!.x).toBe(tight.rect.x);
+    expect(tight.badgeY - (tight.rect.y + 37)).toBeGreaterThanOrEqual(3);
+    expect(tight.badgeY + 16).toBe(tight.rect.y + tight.rect.height - 2);
+    // The 84 px row (a 70 px card): more air above it.
+    const roomy = drawn(5, 50, 0);
+    expect(roomy.badgeY - (roomy.rect.y + 37)).toBeGreaterThanOrEqual(12);
+    // On the tight card the name (and the amount) ride higher, so the air
+    // shows between the amount and the row.
+    expect(tight.titleY - tight.rect.y).toBe(roomy.titleY - roomy.rect.y - 2);
+    // A slim row (60 px: a 46 px card): two lines — see "a short card".
+    const slim = drawn(5, 50, 0, true, 60);
+    expect(slim.lock!.x).toBe(slim.rect.x);
+  });
+
+  it("a short card: the amount moves up beside the name; the lock + dates take its line", () => {
+    // 60 px row: a 46 px card — no room for three lines.
+    const short = drawn(5, 50, 0, true, 60);
+    expect(short.rect.height).toBe(46);
+    // The amount: on the name's line, after it ("Préstamo" ≈ 8 × 7.2 px).
+    expect(short.amountText).toBe("-$7,500 /mes");
+    expect(Math.abs(short.amountY - short.titleY)).toBeLessThanOrEqual(1);
+    expect(short.amountX).toBeGreaterThan(short.titleX + "Préstamo".length * 6);
+    // The lock in the corner, the dates after it, on the bottom line.
+    expect(short.lock!.x).toBe(short.rect.x);
+    expect(short.lock!.y + short.lock!.height).toBe(short.rect.y + short.rect.height);
+    expect(short.badgeX).toBeGreaterThan(short.lock!.x + short.lock!.width);
+    expect(short.badgeY).toBeGreaterThanOrEqual(short.rect.y + 20);
+  });
+
+  it("a card too short for two lines (38 px) keeps everything beside the name", () => {
+    const tiny = drawn(5, 50, 0, true, 52);
+    expect(tiny.rect.height).toBe(38);
+    expect(tiny.lock!.x).toBeGreaterThanOrEqual(tiny.textEnd);
+  });
+
   it("a free clip shows it too (open); a card too narrow shows none", () => {
     expect(drawn(5, 50, 0, false).lock).not.toBeNull();
     // 2 beats = 40 px.
@@ -355,16 +404,19 @@ describe("the lock sits in the bottom-left corner", () => {
 });
 
 describe("the third row: the lock button, then the dates tag (two things)", () => {
-  it("under the name and the amount: an 18 px lock button, the dates tag 6 px after it", () => {
+  it("under the name and the amount: the corner tab (30 px, the row's height), the dates tag 8 px after it", () => {
     const { rect, titleY, lock, badgeX, badgeY, periodX, periodText } = drawn(5, 50, 0);
     expect(periodText).toBe("10 nov 2026 – 10 abr 2027");
-    // The lock's hit area is the button alone.
-    expect(lock!.width).toBe(18);
-    expect(lock!.height).toBe(18);
+    // The lock's hit area is the tab alone: the third row's band, bounded.
+    expect(lock!.width).toBe(30);
+    expect(lock!.height).toBeGreaterThanOrEqual(18);
+    expect(lock!.height).toBeLessThanOrEqual(26);
     // A gap, then the tag: padding, calendar glyph, its gap, the text.
-    expect(badgeX - (lock!.x + lock!.width)).toBe(6);
+    expect(badgeX - (lock!.x + lock!.width)).toBe(8);
     expect(periodX - badgeX).toBe(6 + 10 + 5);
-    expect(badgeY).toBe(lock!.y);
+    // The tag sits within the tab's band.
+    expect(badgeY).toBeGreaterThanOrEqual(lock!.y);
+    expect(badgeY + 16).toBeLessThanOrEqual(lock!.y + lock!.height);
     // The third row: under the title (20) + the amount line (2 + 15), inside the card.
     expect(lock!.y).toBeGreaterThanOrEqual(titleY - 5 + 37 - 1);
     expect(lock!.y + lock!.height).toBeLessThanOrEqual(rect.y + rect.height);
@@ -382,9 +434,15 @@ describe("the third row: the lock button, then the dates tag (two things)", () =
   });
 
   it("clipCardWidthPx fits what the card draws", () => {
-    const tall = clipCardWidthPx("Bono", "+$4,000", "9 dic 2026", 58, 20);
-    // The row: inset start + lock + gap + tag (padding, glyph, gap, text).
-    expect(tall).toBeGreaterThanOrEqual(8 + 18 + 6 + 6 * 2 + 10 + 5 + "9 dic 2026".length * 6.7);
-    expect(clipCardWidthPx("Bono", "+$4,000", "9 dic 2026", 40, 20)).toBeGreaterThan(tall);
+    const tall = clipCardWidthPx("Bono", "+$4,000", "9 dic 2026", 70, 20);
+    // The row: the corner tab + gap + tag (padding, glyph, gap, text).
+    expect(tall).toBeGreaterThanOrEqual(30 + 8 + 6 * 2 + 10 + 5 + "9 dic 2026".length * 6.7);
+    // Too short for two lines (36 px): all beside the name — wider.
+    expect(clipCardWidthPx("Bono", "+$4,000", "9 dic 2026", 36, 20)).toBeGreaterThan(tall);
+    // Two lines (46 px): the wider of "name + amount" and "lock + dates".
+    const name = "Un nombre bastante largo";
+    expect(clipCardWidthPx(name, "+$4,000", "9 dic 2026", 46, 20)).toBeGreaterThanOrEqual(
+      11 + name.length * 7.2 + 10 + "+$4,000".length * 6.7,
+    );
   });
 });

@@ -67,7 +67,9 @@ describe("assignLanes (one track)", () => {
       { start: 0, end: 4, lane: 3, mode: "remembered" },
       { start: 10, end: 14, lane: 7, mode: "remembered" },
     ];
-    expect(assignLanes(remembered)).toEqual({ lanes: [0, 1], laneCount: 2 });
+    const kept = assignLanes(remembered);
+    expect(kept.lanes).toEqual([0, 1]);
+    expect(kept.laneCount).toBe(2);
     expect(assignLanes([]).laneCount).toBe(1);
   });
 
@@ -516,5 +518,109 @@ describe("click-to-create (clickToCreate)", () => {
     core.closeContextMenu();
     expect(core.getPresentation().dragPreviewView).toBeNull();
     controller.destroy();
+  });
+});
+
+// --- Drawn widths: cards wider than their time cascade --------------------------
+
+describe("drawn widths (a one-day tag as wide as its name): cards cascade instead of touching", () => {
+  const remembered = (start: number, end: number, lane: number, visualEnd?: number): LaneRequest => ({
+    start,
+    end,
+    lane,
+    mode: "remembered",
+    ...(visualEnd !== undefined ? { visualEnd } : {}),
+  });
+
+  it("the one that starts first keeps the lane, the next goes one down and remembers its home", () => {
+    // A one-day tag at 5 drawn until 14; a window from 10 on the same lane.
+    const { lanes, laneCount, homes } = assignLanes([remembered(5, 6, 0, 14), remembered(10, 30, 0)]);
+    expect(lanes).toEqual([0, 1]);
+    expect(laneCount).toBe(2);
+    expect(homes).toEqual([undefined, 0]);
+  });
+
+  it("in cascade: each card that touches the ones above goes one lane further down", () => {
+    const { lanes } = assignLanes([
+      remembered(5, 6, 0, 14),
+      remembered(8, 9, 0, 16),
+      remembered(12, 20, 0),
+    ]);
+    expect(lanes).toEqual([0, 1, 2]);
+  });
+
+  it("a new card that starts first takes the lane; the one it would touch cascades", () => {
+    const { lanes, homes } = assignLanes([
+      remembered(10, 30, 0),
+      { start: 5, end: 6, visualEnd: 14, lane: 0, mode: "fresh" },
+    ]);
+    expect(lanes).toEqual([1, 0]);
+    expect(homes).toEqual([0, undefined]);
+  });
+
+  it("a real overlap in time moves it for good (no home)", () => {
+    const { lanes, homes } = assignLanes([remembered(5, 12, 0), remembered(10, 30, 0)]);
+    expect(lanes[1]).not.toBe(0);
+    expect(homes[1]).toBeUndefined();
+  });
+
+  it("cards that only touch in time but are drawn apart share the lane", () => {
+    const { lanes, homes } = assignLanes([remembered(5, 6, 0, 9), remembered(10, 30, 0)]);
+    expect(lanes).toEqual([0, 0]);
+    expect(homes).toEqual([undefined, undefined]);
+  });
+});
+
+describe("the core keeps drawn cards apart at every zoom level", () => {
+  // Clip "tag" (one day at 5) is drawn 140 px wide; "win" (10 → 30) shares its lane.
+  function setup(px: number) {
+    const state = stateWith([
+      { id: "tag", trackId: "t0", start: 5, duration: 1 },
+      { id: "win", trackId: "t0", start: 10, duration: 20 },
+    ]);
+    const core = createPlaylistCore(
+      { ...state, viewport: { ...state.viewport, pxPerBeat: px } },
+      { metrics: M, clipMinWidthPx: (clip) => (clip.id === "tag" ? 140 : 0) },
+    );
+    return core;
+  }
+
+  it("zoomed out, the window cascades under the tag; zooming in brings it back", () => {
+    const core = setup(10); // the tag spans ~14 beats: it reaches the window
+    expect(laneOf(core.getState(), "tag")).toBe(0);
+    expect(laneOf(core.getState(), "win")).toBe(1);
+    expect(clipOf(core.getState(), "win").homeLane).toBe(0);
+    expect(lanesOf(core.getState(), "t0")).toBe(2);
+    core.updateViewport({ pxPerBeat: 60 }); // ~2.4 beats now: room again
+    expect(laneOf(core.getState(), "win")).toBe(0);
+    expect(clipOf(core.getState(), "win").homeLane).toBeUndefined();
+    expect(lanesOf(core.getState(), "t0")).toBe(1);
+  });
+
+  it("within one zoom level nothing is re-laid out (no work per zoom frame)", () => {
+    const core = setup(10);
+    const clips = core.getState().clips;
+    core.updateViewport({ pxPerBeat: 10.5 }); // same ×1.25 level
+    expect(core.getState().clips).toBe(clips);
+  });
+
+  it("moving it clear of the tag brings it home; an undo restores the cascade", () => {
+    const core = setup(10);
+    expect(laneOf(core.getState(), "win")).toBe(1);
+    core.moveClips([{ id: "win", start: 22, trackIndex: 0 }]); // past the tag's drawn end
+    expect(laneOf(core.getState(), "win")).toBe(0);
+    expect(lanesOf(core.getState(), "t0")).toBe(1);
+    core.undo();
+    expect(clipOf(core.getState(), "win").start).toBe(10);
+    expect(laneOf(core.getState(), "win")).toBe(1);
+  });
+
+  it("a host without drawn widths keeps the time-only lanes", () => {
+    const state = stateWith([
+      { id: "tag", trackId: "t0", start: 5, duration: 1 },
+      { id: "win", trackId: "t0", start: 10, duration: 20 },
+    ]);
+    const core = createPlaylistCore(state, { metrics: M });
+    expect(laneOf(core.getState(), "win")).toBe(0);
   });
 });

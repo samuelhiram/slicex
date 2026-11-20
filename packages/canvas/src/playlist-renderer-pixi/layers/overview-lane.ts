@@ -42,11 +42,11 @@ const SCALE_PAD_RATIO = 0.08;
 const LINE_WIDTH = 2;
 const DASH_PX = 5;
 const GAP_PX = 4;
-const LABEL_SIZE = 10;
-const LABEL_CHAR_PX = 6;
+const LABEL_SIZE = 11;
+const LABEL_CHAR_PX = 6.6;
 const PILL_HEIGHT = 16;
-const TITLE_SIZE = 13;
-const TITLE_CHAR_PX = 7.8;
+const TITLE_SIZE = 14;
+const TITLE_CHAR_PX = 8.4;
 const PIN_RADIUS = 3.5;
 // Annotation pills live in the lane's top band (never over the curve where
 // it matters), joined to their pin by a dotted leader.

@@ -22,10 +22,19 @@
 // The row under a dragged clip opens one extra, empty lane (the "free
 // lane", drawn dashed) to drop on and stack. The gesture's end settles.
 //
+// Drawn width (`footprint`, optional): a clip may be drawn wider than its
+// time (a one-day tag as wide as its name). Lanes then keep the DRAWN cards
+// apart: two that would touch cascade — the one that starts first keeps the
+// lane, the next goes one lane down, and so on. A clip pushed down only by a
+// drawn width remembers the lane it left (`homeLane`) and goes back to it
+// when there is room again (zooming in); a real overlap in time moves it
+// for good, as before.
+//
 // Costs: settle is O(n log n) and runs only when clips change outside a
-// gesture or once when a gesture ends; provisional is O(n) per drag move
-// (the move itself already re-normalises every clip). Arrays and objects
-// keep their identity when no lane changes (canon §3.13).
+// gesture, once when a gesture ends, or when the zoom crosses a footprint
+// level (the core's buckets); provisional is O(n) per drag move (the move
+// itself already re-normalises every clip). Arrays and objects keep their
+// identity when no lane changes (canon §3.13).
 import type { PlaylistClip, PlaylistState, PlaylistTrack } from "./types";
 
 export type LaneMode = "pinned" | "remembered" | "fresh";
@@ -33,6 +42,8 @@ export type LaneMode = "pinned" | "remembered" | "fresh";
 export interface LaneRequest {
   start: number;
   end: number;
+  /** Where the drawn card ends (≥ end; default end): what may not touch. */
+  visualEnd?: number;
   /** Preferred lane (pinned / remembered). Ignored for fresh. */
   lane: number;
   mode: LaneMode;
@@ -40,14 +51,16 @@ export interface LaneRequest {
 
 interface Occupant {
   start: number;
+  /** Its time's end. */
   end: number;
+  /** Its drawn card's end (≥ end). */
+  visualEnd: number;
 }
 
-// Occupants of one lane never overlap and are kept sorted by start (hence
-// by end too): the only candidate to overlap [start, end) is the last one
-// that starts before `end`.
-function fits(lane: Occupant[] | undefined, start: number, end: number): boolean {
-  if (!lane || lane.length === 0) return true;
+// Occupants of one lane never overlap (as drawn, hence in time too) and are
+// kept sorted by start (hence by either end too): the only candidate to
+// overlap [start, end) is the last one that starts before `end`.
+function lastStartingBefore(lane: Occupant[], end: number): number {
   let lo = 0;
   let hi = lane.length;
   while (lo < hi) {
@@ -55,7 +68,21 @@ function fits(lane: Occupant[] | undefined, start: number, end: number): boolean
     if (lane[mid]!.start < end) lo = mid + 1;
     else hi = mid;
   }
-  return lo === 0 || lane[lo - 1]!.end <= start;
+  return lo - 1;
+}
+
+/** The drawn card [start, visualEnd) touches no drawn card of the lane. */
+function fits(lane: Occupant[] | undefined, start: number, visualEnd: number): boolean {
+  if (!lane || lane.length === 0) return true;
+  const index = lastStartingBefore(lane, visualEnd);
+  return index < 0 || lane[index]!.visualEnd <= start;
+}
+
+/** [start, end) overlaps no occupant of the lane in TIME (drawn widths aside). */
+function fitsInTime(lane: Occupant[] | undefined, start: number, end: number): boolean {
+  if (!lane || lane.length === 0) return true;
+  const index = lastStartingBefore(lane, end);
+  return index < 0 || lane[index]!.end <= start;
 }
 
 function insert(lane: Occupant[], item: Occupant): void {
@@ -69,43 +96,97 @@ function insert(lane: Occupant[], item: Occupant): void {
   lane.splice(lo, 0, item);
 }
 
+export interface LaneLayout {
+  lanes: number[];
+  laneCount: number;
+  /**
+   * For a clip cascaded down only by a drawn width, the lane its time alone
+   * gives it (its home); undefined otherwise.
+   */
+  homes: Array<number | undefined>;
+}
+
 /**
  * Lanes for the clips of ONE track (same order as `requests`) and how many
  * lanes the track needs (≥ 1). `vacatedLane`: the lane a pinned clip left in
  * this track — a clip it lands on moves there first (they swap).
+ *
+ * Two passes when some card is drawn wider than its time: first the lanes
+ * by time alone (remembered lanes kept, new clips first-fit by start, the
+ * drop rules) — each clip's home; then, lane by lane in order of start, the
+ * drawn cards: the one that starts first keeps the lane, the ones it would
+ * touch cascade down. Without drawn widths the second pass changes nothing,
+ * so it is skipped.
  */
-export function assignLanes(
-  requests: readonly LaneRequest[],
-  vacatedLane?: number,
-): { lanes: number[]; laneCount: number } {
+export function assignLanes(requests: readonly LaneRequest[], vacatedLane?: number): LaneLayout {
+  let drawnWider = false;
+  for (const request of requests) {
+    if ((request.visualEnd ?? request.end) > request.end) {
+      drawnWider = true;
+      break;
+    }
+  }
+  const byTime = layLanes(
+    drawnWider ? requests.map((request) => ({ ...request, visualEnd: request.end })) : requests,
+    vacatedLane,
+  );
+  if (!drawnWider) return byTime;
+  // Every clip asks for its time lane (pinned ones keep theirs, from there down).
+  return layLanes(
+    requests.map((request, index) => ({
+      ...request,
+      lane: byTime.lanes[index]!,
+      mode: request.mode === "pinned" ? ("pinned" as const) : ("remembered" as const),
+    })),
+  );
+}
+
+function layLanes(requests: readonly LaneRequest[], vacatedLane?: number): LaneLayout {
   const count = requests.length;
   const out = new Array<number>(count);
-  if (count === 0) return { lanes: out, laneCount: 1 };
+  const homes = new Array<number | undefined>(count);
+  if (count === 0) return { lanes: out, laneCount: 1, homes };
 
   const lanes: Occupant[][] = [];
+  const visualEndOf = (request: LaneRequest) => Math.max(request.end, request.visualEnd ?? request.end);
   const put = (index: number, lane: number) => {
     const request = requests[index]!;
-    insert((lanes[lane] ??= []), { start: request.start, end: request.end });
+    insert((lanes[lane] ??= []), {
+      start: request.start,
+      end: request.end,
+      visualEnd: visualEndOf(request),
+    });
     out[index] = lane;
   };
   const placeFrom = (index: number, firstLane: number) => {
-    const { start, end } = requests[index]!;
+    const request = requests[index]!;
+    const visualEnd = visualEndOf(request);
     let lane = Math.max(0, firstLane);
-    while (!fits(lanes[lane], start, end)) lane += 1;
+    while (!fits(lanes[lane], request.start, visualEnd)) lane += 1;
     put(index, lane);
   };
   // Its lane; else the one the dropped clip left; else the nearest free
-  // (at equal distance, the one above); else a new one at the bottom.
+  // (at equal distance, the one above); else a new one at the bottom. When
+  // only a drawn width is in the way (the times fit), it cascades DOWN
+  // (the one that starts first keeps the lane) and remembers its home.
   const placeNear = (index: number, wanted: number) => {
-    const { start, end } = requests[index]!;
+    const request = requests[index]!;
+    const { start, end } = request;
+    const visualEnd = visualEndOf(request);
     const lane = Math.max(0, wanted);
-    if (fits(lanes[lane], start, end)) return put(index, lane);
-    if (vacatedLane !== undefined && fits(lanes[vacatedLane], start, end)) {
+    if (fits(lanes[lane], start, visualEnd)) return put(index, lane);
+    if (fitsInTime(lanes[lane], start, end)) {
+      homes[index] = lane;
+      let below = lane + 1;
+      while (!fits(lanes[below], start, visualEnd)) below += 1;
+      return put(index, below);
+    }
+    if (vacatedLane !== undefined && fits(lanes[vacatedLane], start, visualEnd)) {
       return put(index, vacatedLane);
     }
     for (let d = 1; d <= lanes.length + 1; d += 1) {
-      if (lane - d >= 0 && fits(lanes[lane - d], start, end)) return put(index, lane - d);
-      if (fits(lanes[lane + d], start, end)) return put(index, lane + d);
+      if (lane - d >= 0 && fits(lanes[lane - d], start, visualEnd)) return put(index, lane - d);
+      if (fits(lanes[lane + d], start, visualEnd)) return put(index, lane + d);
     }
     return put(index, lanes.length);
   };
@@ -136,8 +217,19 @@ export function assignLanes(
       used += 1;
     }
   }
-  for (let i = 0; i < count; i += 1) out[i] = rank[out[i]!]!;
-  return { lanes: out, laneCount: Math.max(1, used) };
+  for (let i = 0; i < count; i += 1) {
+    out[i] = rank[out[i]!]!;
+    // A home lane past the compaction: the nearest lane that is left.
+    const home = homes[i];
+    if (home !== undefined) {
+      let ranked = -1;
+      for (let lane = Math.min(home, lanes.length - 1); lane >= 0 && ranked < 0; lane -= 1) {
+        if (rank[lane] !== undefined) ranked = rank[lane]!;
+      }
+      homes[i] = ranked >= 0 && ranked !== out[i] ? ranked : undefined;
+    }
+  }
+  return { lanes: out, laneCount: Math.max(1, used), homes };
 }
 
 const NO_PINNED: ReadonlySet<string> = new Set();
@@ -152,6 +244,12 @@ export interface SettleLanesOptions {
    * it vacated. null: every clip keeps the lane it carries.
    */
   previous?: PlaylistState | null;
+  /**
+   * Where each clip's DRAWN card ends, in beats (≥ its time's end): cards
+   * drawn wider than their time keep apart too (they cascade). Absent: the
+   * time alone.
+   */
+  footprint?: (clip: PlaylistClip) => number;
 }
 
 export function laneOf(clip: PlaylistClip): number {
@@ -162,10 +260,12 @@ export function laneCountOf(track: PlaylistTrack): number {
   return Math.max(1, Math.floor(track.lanes ?? 1));
 }
 
-function withLane(clip: PlaylistClip, lane: number): PlaylistClip {
+function withLane(clip: PlaylistClip, lane: number, home: number | undefined): PlaylistClip {
   const next = { ...clip };
   if (lane > 0) next.lane = lane;
   else delete next.lane;
+  if (home !== undefined) next.homeLane = home;
+  else delete next.homeLane;
   return next;
 }
 
@@ -205,6 +305,7 @@ export function settleLanes(
 ): PlaylistState {
   const pinned = options.pinned ?? NO_PINNED;
   const previous = options.previous ?? null;
+  const footprint = options.footprint;
   const clips = state.clips;
 
   const byTrack = new Map<string, number[]>();
@@ -237,16 +338,24 @@ export function settleLanes(
         const origin = before.get(clip.id);
         if (!origin || origin.trackId !== trackId) mode = "fresh";
       }
-      return { start: clip.start, end: clip.start + clip.duration, lane: laneOf(clip), mode };
+      const end = clip.start + clip.duration;
+      return {
+        start: clip.start,
+        end,
+        visualEnd: footprint ? footprint(clip) : end,
+        // A clip cascaded by a drawn width asks for its home lane back.
+        lane: mode === "remembered" ? (clip.homeLane ?? laneOf(clip)) : laneOf(clip),
+        mode,
+      };
     });
-    const { lanes, laneCount } = assignLanes(requests, vacated.get(trackId));
+    const { lanes, laneCount, homes } = assignLanes(requests, vacated.get(trackId));
     counts.set(trackId, laneCount);
     for (let k = 0; k < indices.length; k += 1) {
       const i = indices[k]!;
       const clip = clips[i]!;
-      if (laneOf(clip) === lanes[k]) continue;
+      if (laneOf(clip) === lanes[k] && clip.homeLane === homes[k]) continue;
       nextClips ??= clips.slice();
-      nextClips[i] = withLane(clip, lanes[k]!);
+      nextClips[i] = withLane(clip, lanes[k]!, homes[k]);
     }
   }
 

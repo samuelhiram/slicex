@@ -10,6 +10,7 @@ import {
   getRealTracksScrollLimit,
   getTrackIdByIndex,
   getTrackIndexById,
+  getTrackLaneHeight,
   isAutomationClip,
   snapTime,
   type PlaylistLayoutOptions,
@@ -24,7 +25,7 @@ import {
   undoHistory,
   type History,
 } from "./history";
-import { provisionalLanes, settleLanes } from "./lanes";
+import { provisionalLanes, settleLanes, type SettleLanesOptions } from "./lanes";
 import { playlistReducer } from "./reducer";
 import {
   DEFAULT_PLAYLIST_METRICS,
@@ -125,6 +126,22 @@ export interface PlaylistSubscription {
   unsubscribe: () => void;
 }
 
+// Lanes keep the DRAWN cards apart (PlaylistLayoutOptions.clipMinWidthPx:
+// a one-day tag drawn as wide as its name), and a drawn width in beats
+// depends on the zoom. Not re-laid out per zoom frame (canon §3.15: the
+// viewport costs nothing): the zoom is read in levels of ×ZOOM_LEVEL_STEP,
+// each one taken at its most zoomed-out end (its widest footprints), so the
+// cards never touch within a level and the lanes settle only when the zoom
+// crosses into another one.
+const ZOOM_LEVEL_STEP = 1.25;
+const ZOOM_LEVEL_LOG = Math.log(ZOOM_LEVEL_STEP);
+// Room kept between a drawn card and the next one (px).
+const FOOTPRINT_GAP_PX = 6;
+
+function zoomLevel(pxPerBeat: number): number {
+  return Math.floor(Math.log(Math.max(pxPerBeat, 1e-6)) / ZOOM_LEVEL_LOG);
+}
+
 export class PlaylistCore {
   private history: History<PlaylistState>;
 
@@ -157,6 +174,9 @@ export class PlaylistCore {
 
   readonly metrics: PlaylistMetrics;
 
+  // The rows' default height when the document sets none (state.rowHeight).
+  private baseTrackHeight: number;
+
   readonly timeAxis: PlaylistTimeAxis | null;
 
   // See PlaylistCoreOptions.stretchEnabled.
@@ -168,7 +188,11 @@ export class PlaylistCore {
   private readonly layoutOptions: PlaylistLayoutOptions;
 
   constructor(initialState: PlaylistState, options: PlaylistCoreOptions = {}) {
-    this.metrics = options.metrics ?? DEFAULT_PLAYLIST_METRICS;
+    // Its own copy: the default row height can change in place
+    // (setDefaultTrackHeight) and every holder of `core.metrics` — the
+    // controller, the navigator — sees it.
+    this.metrics = { ...(options.metrics ?? DEFAULT_PLAYLIST_METRICS) };
+    this.baseTrackHeight = this.metrics.trackHeight;
     this.timeAxis = options.timeAxis ?? null;
     this.stretchEnabled = options.stretchEnabled !== false;
     this.virtualTracks = options.virtualTracks !== false;
@@ -180,7 +204,16 @@ export class PlaylistCore {
       !this.stretchEnabled && initialState.stretchMode
         ? { ...initialState, stretchMode: false }
         : initialState;
-    this.history = createHistory(settleLanes(normalizeState(initial, this.metrics)));
+    // The rows' default height first (state.rowHeight): the lanes below
+    // are laid out with it.
+    if (initial.rowHeight !== undefined) {
+      const metrics = this.metrics;
+      (metrics as { trackHeight: number }).trackHeight = Math.round(
+        clamp(initial.rowHeight, metrics.trackMinHeight, metrics.trackMaxHeight),
+      );
+    }
+    const normalized = normalizeState(initial, this.metrics);
+    this.history = createHistory(settleLanes(normalized, this.laneOptions(normalized)));
   }
 
   // Lifecycle and derived presentation.
@@ -314,7 +347,12 @@ export class PlaylistCore {
     previous: PlaylistState,
     action: PlaylistAction,
   ): PlaylistState {
-    const contentChanged = next.clips !== previous.clips || next.tracks !== previous.tracks;
+    const contentChanged =
+      next.clips !== previous.clips ||
+      next.tracks !== previous.tracks ||
+      // Drawn widths in beats change with the zoom: only across a level.
+      (this.layoutOptions.clipMinWidthPx !== undefined &&
+        zoomLevel(next.viewport.pxPerBeat) !== zoomLevel(previous.viewport.pxPerBeat));
     if (this.gestureDepth > 0) {
       if (action.type === "MOVE_CLIPS") {
         for (const update of action.updates) {
@@ -331,7 +369,31 @@ export class PlaylistCore {
         if (update.lane !== undefined) (pinned ??= new Set()).add(update.id);
       }
     }
-    return settleLanes(next, { pinned, previous });
+    return settleLanes(next, this.laneOptions(next, { pinned, previous }));
+  }
+
+  // settleLanes options plus, for a host whose cards may be drawn wider than
+  // their time (clipMinWidthPx), each clip's drawn end at `state`'s zoom
+  // level (+ FOOTPRINT_GAP_PX): such cards cascade instead of touching.
+  private laneOptions(state: PlaylistState, options: SettleLanesOptions = {}): SettleLanesOptions {
+    const minWidth = this.layoutOptions.clipMinWidthPx;
+    if (!minWidth) return options;
+    const pxPerBeat = Math.pow(ZOOM_LEVEL_STEP, zoomLevel(state.viewport.pxPerBeat));
+    const metrics = this.metrics;
+    // Lane height per track id, once per settle (rows without one: default).
+    const laneHeights = new Map<string, number>();
+    for (const track of state.tracks) laneHeights.set(track.id, getTrackLaneHeight(track, metrics));
+    return {
+      ...options,
+      footprint: (clip) => {
+        const end = clip.start + clip.duration;
+        const laneHeight = laneHeights.get(clip.trackId) ?? metrics.trackHeight;
+        const height = Math.max(1, laneHeight - metrics.clipPaddingY * 2);
+        const widthPx = minWidth(clip, height, Math.min(metrics.clipTitleHeight, height));
+        if (!(widthPx > 0)) return end;
+        return Math.max(end, clip.start + (widthPx + FOOTPRINT_GAP_PX) / pxPerBeat);
+      },
+    };
   }
 
   // Run `mutate` so that every dispatch it makes REPLACES the current undo
@@ -387,7 +449,7 @@ export class PlaylistCore {
     this.gesturePinned.clear();
     this.laneBase = null;
     const present = this.history.present;
-    const settled = settleLanes(present, { pinned, previous: base ?? present });
+    const settled = settleLanes(present, this.laneOptions(present, { pinned, previous: base ?? present }));
     // Opened inside amend(): its dispatches already replaced the present
     // entry (and notified), so there is no new undo step to record.
     if (base === null || base === present || openedInAmend) {
@@ -399,7 +461,7 @@ export class PlaylistCore {
     }
     // The undo target too: a free lane opened before the first undoable
     // dispatch is in it — settling closes it (same object when none was).
-    this.history = pushHistory({ ...this.history, present: settleLanes(base) }, settled);
+    this.history = pushHistory({ ...this.history, present: settleLanes(base, this.laneOptions(base)) }, settled);
     this.notify();
   }
 
@@ -436,8 +498,10 @@ export class PlaylistCore {
         !this.stretchEnabled && source.stretchMode
           ? { ...source, stretchMode: false }
           : source;
-      this.history = createHistory(settleLanes(normalizeState(initial, this.metrics)));
+      const normalized = normalizeState(initial, this.metrics);
+      this.history = createHistory(settleLanes(normalized, this.laneOptions(normalized)));
     }
+    this.syncRowHeight();
     this.notify();
   }
 
@@ -448,6 +512,8 @@ export class PlaylistCore {
     }
     this.history = undoHistory(this.history);
     this.resetGesture();
+    this.syncRowHeight();
+    this.resettleDrawnWidths();
     this.notify();
     return true;
   }
@@ -458,8 +524,30 @@ export class PlaylistCore {
     }
     this.history = redoHistory(this.history);
     this.resetGesture();
+    this.syncRowHeight();
+    this.resettleDrawnWidths();
     this.notify();
     return true;
+  }
+
+  // A restored entry was laid out at another zoom: keep its drawn cards
+  // apart at this one (no undo step; nothing for a host without drawn
+  // widths).
+  private resettleDrawnWidths(): boolean {
+    if (!this.layoutOptions.clipMinWidthPx || this.gestureDepth > 0) return false;
+    const present = this.history.present;
+    const settled = settleLanes(present, this.laneOptions(present));
+    if (settled === present) return false;
+    this.history = replacePresent(this.history, settled);
+    return true;
+  }
+
+  // For a host whose drawn widths (clipMinWidthPx) changed with no clip
+  // change — e.g. it has just learnt the items behind the clips: lays the
+  // lanes out again so the cards keep apart. No undo step; notifies only
+  // when a lane moved. Ignored while a gesture is open.
+  relayoutLanes(): void {
+    if (this.resettleDrawnWidths()) this.notify();
   }
 
   private resetGesture(): void {
@@ -740,6 +828,46 @@ export class PlaylistCore {
 
   setTrackHeight(trackIndex: number, height: number): void {
     this.dispatch({ type: "SET_TRACK_HEIGHT", trackIndex, height });
+  }
+
+  // The height of rows without their own (the endless rows below the
+  // materialised ones) when the document sets none: a host preference (e.g.
+  // the one remembered from last time), no undo step. Clamped to the
+  // metrics' bounds; changes `metrics.trackHeight` in place.
+  setDefaultTrackHeight(height: number): void {
+    const metrics = this.metrics;
+    this.baseTrackHeight = Math.round(clamp(height, metrics.trackMinHeight, metrics.trackMaxHeight));
+    if (this.history.present.rowHeight === undefined && this.applyDefaultTrackHeight(this.baseTrackHeight)) {
+      this.resettleDrawnWidths();
+      this.notify();
+    }
+  }
+
+  // Every row to one height: the materialised ones and the default for the
+  // rest (state.rowHeight) — one undoable dispatch, its own step or the open
+  // gesture's — so the whole table grows or shrinks together, and an undo
+  // gives it its height back.
+  setAllTrackHeights(height: number): void {
+    // The metrics first: whoever reads them on this dispatch's notify sees
+    // the new height.
+    this.applyDefaultTrackHeight(height);
+    this.dispatch({ type: "SET_ALL_TRACK_HEIGHTS", height: this.metrics.trackHeight });
+  }
+
+  // `metrics.trackHeight` follows the present's rowHeight (the base height
+  // when it sets none) — after an undo / redo / load.
+  private syncRowHeight(): void {
+    this.applyDefaultTrackHeight(this.history.present.rowHeight ?? this.baseTrackHeight);
+  }
+
+  private applyDefaultTrackHeight(height: number): boolean {
+    const metrics = this.metrics;
+    const clamped = Math.round(clamp(height, metrics.trackMinHeight, metrics.trackMaxHeight));
+    if (!Number.isFinite(clamped) || clamped === metrics.trackHeight) return false;
+    (metrics as { trackHeight: number }).trackHeight = clamped;
+    // The presentation is keyed by state: the geometry changed under it.
+    this.presentationCache = null;
+    return true;
   }
 
   reorderTrack(fromIndex: number, toIndex: number): void {

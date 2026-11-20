@@ -206,6 +206,8 @@ export function playlistReducer(
       return toggleTrackFlag(state, action.trackIndex, "locked");
     case "SET_TRACK_HEIGHT":
       return setTrackHeight(state, action.trackIndex, action.height, metrics);
+    case "SET_ALL_TRACK_HEIGHTS":
+      return setAllTrackHeights(state, action.height, metrics);
     case "REORDER_TRACK":
       return reorderTrack(state, action.fromIndex, action.toIndex);
     case "MAKE_CLIPS_UNIQUE":
@@ -1045,6 +1047,27 @@ function setTrackHeight(
     index === trackIndex ? { ...track, height: clamped } : track,
   );
   return { ...materialized, tracks };
+}
+
+// Every materialised row to `height` (clamped); the same state when they
+// all have it already (idempotent: a drag repeats it per move).
+function setAllTrackHeights(
+  state: PlaylistState,
+  height: number,
+  metrics: PlaylistMetrics,
+): PlaylistState {
+  const clamped = Math.round(
+    Math.min(metrics.trackMaxHeight, Math.max(metrics.trackMinHeight, height)),
+  );
+  let tracks: PlaylistState["tracks"] | null = null;
+  for (let index = 0; index < state.tracks.length; index += 1) {
+    const track = state.tracks[index]!;
+    if (track.height === clamped) continue;
+    tracks ??= state.tracks.slice();
+    tracks[index] = { ...track, height: clamped };
+  }
+  if (!tracks && state.rowHeight === clamped) return state;
+  return { ...state, tracks: tracks ?? state.tracks, rowHeight: clamped };
 }
 
 function reorderTrack(

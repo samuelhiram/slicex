@@ -31,16 +31,16 @@ describe("shellDensityFor", () => {
 describe("financeShellMetrics", () => {
   it("only the money lane and the row height change with the density", () => {
     const comfortable = financeShellMetrics("comfortable");
-    expect(comfortable).toEqual({ ...FINANCE_PLAYLIST_METRICS, overviewLaneHeight: 112 });
+    expect(comfortable).toEqual({ ...FINANCE_PLAYLIST_METRICS, overviewLaneHeight: 80 });
     expect(financeShellMetrics("compact")).toEqual({
       ...FINANCE_PLAYLIST_METRICS,
       trackHeight: 60,
-      overviewLaneHeight: 96,
+      overviewLaneHeight: 72,
     });
     expect(financeShellMetrics("tight")).toEqual({
       ...FINANCE_PLAYLIST_METRICS,
       trackHeight: 60,
-      overviewLaneHeight: 88,
+      overviewLaneHeight: 64,
     });
   });
 
@@ -50,9 +50,9 @@ describe("financeShellMetrics", () => {
       const metrics = financeShellMetrics(density);
       expect(metrics.trackHeight).toBeGreaterThanOrEqual(58);
       expect(metrics.trackHeight).toBeGreaterThanOrEqual(metrics.trackMinHeight);
-      // The lane cell holds the "Caja" title row (+ "Análisis") and the
-      // two-line playhead readout under it.
-      expect(metrics.overviewLaneHeight).toBeGreaterThanOrEqual(88);
+      // The lane cell holds the "Caja" title; the chart keeps room for its
+      // annotation pills over the curve.
+      expect(metrics.overviewLaneHeight).toBeGreaterThanOrEqual(64);
     }
   });
 });
@@ -61,7 +61,7 @@ describe("shellLayoutStyle", () => {
   it("exposes ruler, lane and header width as CSS variables for the overlays", () => {
     const style = shellLayoutStyle(financeShellMetrics("compact")) as Record<string, string>;
     expect(style["--pl-ruler-h"]).toBe(`${FINANCE_PLAYLIST_METRICS.rulerHeight}px`);
-    expect(style["--pl-lane-h"]).toBe("96px");
+    expect(style["--pl-lane-h"]).toBe("72px");
     expect(style["--pl-header-w"]).toBe(`${FINANCE_PLAYLIST_METRICS.trackHeaderWidth}px`);
   });
 });

@@ -61,7 +61,7 @@ describe("clipMinWidthPx", () => {
   });
 
   it("clipTextWidthPx: room for the longer of the two lines, whole", () => {
-    expect(clipTextWidthPx("Ingreso", "+$4,000")).toBe(Math.ceil(11 + 7 * 7.2 + 6 + 1));
+    expect(clipTextWidthPx("Ingreso", "+$4,000")).toBe(Math.ceil(11 + 7 * 7.8 + 6 + 1));
     expect(clipTextWidthPx("Ingreso", "+$4,000 · único pago")).toBeGreaterThan(clipTextWidthPx("Ingreso", null));
   });
 });

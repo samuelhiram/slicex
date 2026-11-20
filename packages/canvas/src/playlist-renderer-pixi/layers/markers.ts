@@ -33,7 +33,7 @@ export function drawMarkers(
     if (label) {
       addText(textLayer, label, view.x + 8, baseY + 1, {
         color: COLORS.text,
-        size: 11,
+        size: 12,
         weight: "600",
       });
     }

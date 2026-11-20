@@ -2,13 +2,14 @@
 // in DOM order = visual order = priority:
 //   1. "Mi plan ▾" — the plan menu in the brand (UX-48): Armar mi año,
 //      Revisar lo que pasó, Tema, Reiniciar con el ejemplo…
-//   2. The VERDICT (UX-14): "¿me alcanza?" in words, the largest text of the
-//      bar, clickable (goes to that day and focuses the valley card), with
-//      the alerts button attached (it absorbs their count). It says "en esta
-//      rama" outside the main plan (UX-19) and "simulación" while something
-//      is left out of the calculation (UX-03). Never clipped.
+//   2. The alerts button (UX-26), only with alerts — what is left of the
+//      verdict block (its words "Te alcanza … · Lo más bajo …" are no longer
+//      shown: a quieter header; the valleys are on the money lane, a branch
+//      in the strip below, a simulation in the exclusions chip).
 //   3. The exclusions chip (UX-03) when items are muted / outside a solo:
 //      "Sin Nu · Ver · Reactivar todo".
+//   3b. The day's reading (from the shell: PlayheadReadout) — the date the
+//      red line or the pointer marks, its cash and its debt, big.
 //   4. The numbers: the starting point (Liquidez hoy · Reserva mínima,
 //      editable), "Tu punto más bajo", then context with less weight (Al
 //      horizonte, Deuda hoy, Próximo pago). When they don't fit they give
@@ -83,7 +84,9 @@ export interface FinancialSummaryBarProps {
   tools?: React.ReactNode;
   /** Controls placed with "Nuevo" (e.g. the futures button): never scrolled away. */
   actions?: React.ReactNode;
-  /** Alternative futures: the verdict says "en esta rama" outside the main plan. */
+  /** The day's reading (date · cash · debt), right after the verdict. */
+  reading?: React.ReactNode;
+  /** Alternative futures (the plan menu and the alerts follow the active one). */
   futures?: Futures | null;
   /** The plan menu's actions. */
   plan?: PlanMenuActions;
@@ -233,6 +236,7 @@ export function FinancialSummaryBar({
   onOpenCommand,
   tools,
   actions,
+  reading,
   futures = null,
   plan,
 }: FinancialSummaryBarProps) {
@@ -267,8 +271,6 @@ export function FinancialSummaryBar({
   const { doc, projection, warnings, fmtDate, nextPayment, verdict, excluded, realDebt } = data;
   const reserve = doc.minimumCashReserve;
   const simulated = excluded.length > 0;
-  const branch = futures?.activeBranch() ?? null;
-  const inBranch = branch !== null && branch.id !== MAIN_BRANCH_ID;
   const minimum = projection.minimumCash;
   const minimumState = minimum.cash < 0 ? "negative" : minimum.cash < reserve ? "low" : "ok";
   const finalState =
@@ -448,8 +450,6 @@ export function FinancialSummaryBar({
         formatDate={fmtDate}
         reserve={reserve}
         inert={inert}
-        inBranch={inBranch}
-        simulated={simulated}
       />
       {simulated ? (
         <ExclusionChip
@@ -478,6 +478,7 @@ export function FinancialSummaryBar({
           }}
         />
       ) : null}
+      {reading}
       {/* Every label has a dotted underline: hover or focus explains it
           (useMetricHelp); the descriptions are hidden, out of the flow. */}
       <div className="fin-summary__metrics" ref={metricsRef}>
@@ -750,8 +751,6 @@ function VerdictBlock({
   formatDate,
   reserve,
   inert,
-  inBranch,
-  simulated,
 }: {
   bridge: FinancialBridgeApi;
   verdict: Verdict;
@@ -759,31 +758,14 @@ function VerdictBlock({
   formatDate: (iso: string) => string;
   reserve: number;
   inert: boolean;
-  inBranch: boolean;
-  simulated: boolean;
 }) {
+  // The verdict's words ("Te alcanza todo el año · Lo más bajo …") are not
+  // shown any more (a quieter header): the block keeps the alerts chip —
+  // the same button, visible only with alerts (UX-26) — and its tone for
+  // the styles. A branch says so in the strip under the header (UX-19); a
+  // simulation, in the exclusions chip (UX-03).
   return (
     <div className="fin-verdict" data-tone={verdict.tone}>
-      <button
-        type="button"
-        className="fin-verdict__main"
-        onClick={() => {
-          jumpPlayheadToDate(bridge, verdict.date);
-          if (verdict.tone !== "ok") focusValleyTitleSoon();
-        }}
-      >
-        <span className="fin-verdict__title">
-          <span className="fin-verdict__dot" aria-hidden="true" />
-          {verdict.title}
-          {inBranch ? <span className="fin-verdict__tag">, en esta rama</span> : null}
-          {simulated ? <span className="fin-verdict__tag fin-verdict__tag--sim"> (simulación)</span> : null}
-        </span>
-        <span className="fin-verdict__detail">
-          <span className="fin-sr-only">. </span>
-          {verdict.detail}
-          <span className="fin-sr-only">. Ir a ese día</span>
-        </span>
-      </button>
       <WarningsChip
         bridge={bridge}
         warnings={warnings}

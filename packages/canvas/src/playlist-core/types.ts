@@ -102,6 +102,12 @@ interface PlaylistClipBase {
   // the core's lane layout (lanes.ts): a drag drops a clip on the lane under
   // the pointer, everything else keeps its lane when it still fits.
   lane?: number;
+  // The lane the clip sits on when nothing drawn pushes it: set (by the lane
+  // layout) only while a neighbour's drawn width — wider than its time, e.g.
+  // a one-day tag as wide as its name (PlaylistLayoutOptions.clipMinWidthPx)
+  // — has cascaded it to a lower lane; it goes back when there is room
+  // again (zooming in). Absent otherwise.
+  homeLane?: number;
 }
 
 export interface PlaylistRegularClip extends PlaylistClipBase {
@@ -362,6 +368,10 @@ export type PlaylistHover =
 export interface PlaylistState {
   tracks: PlaylistTrack[];
   clips: PlaylistClip[];
+  // The height rows without their own take (the endless rows too), set by
+  // SET_ALL_TRACK_HEIGHTS; absent: the metrics' trackHeight. Part of the
+  // undo history: an undo gives the whole table its height back.
+  rowHeight?: number;
   viewport: PlaylistViewport;
   snap: PlaylistSnap;
   selection: PlaylistSelection;

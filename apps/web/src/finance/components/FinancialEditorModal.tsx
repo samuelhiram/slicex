@@ -46,6 +46,8 @@ import type { FinancialBridgeApi, FinancialPlacement, FinancialPreview } from ".
 import { formatDateWeekday, formatMoney, parseNumberInput } from "../format";
 import { KIND_COLORS, KIND_LABELS, KIND_ORDER } from "../labels";
 import { useEscapeLayer, useOverlay } from "../../ui/use-overlay";
+import { EditorSpotlight, useClipSpotlight } from "./EditorSpotlight";
+import { ShapePreview } from "./ShapePreview";
 import { useAnnounce } from "../../ui/announcer";
 import { useFinancialRevision } from "./FinancialUi";
 import { DateField } from "./DateField";
@@ -126,6 +128,12 @@ interface FinancialEditorModalBaseProps {
    * shortcuts keep working).
    */
   returnFocusFallback?: () => HTMLElement | null;
+  /**
+   * The canvas host. Editing an object on screen, the backdrop's blur
+   * spares it: a clear window ringed in the accent colour (EditorSpotlight).
+   * Without it (or creating) the whole backdrop blurs.
+   */
+  spotlightHost?: () => HTMLElement | null;
   /**
    * Credit cards: open the "paste a statement" flow for this card. The
    * editor calls it only once nothing is left unsaved (UX-51).
@@ -1088,6 +1096,13 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
   // selection dragged out of an input must not close the editor).
   const pressedOnOverlayRef = React.useRef(false);
 
+  // The edited object stays clear behind the blur (EditorSpotlight).
+  const spotlight = useClipSpotlight(
+    props.spotlightHost && !creating ? bridge.core : null,
+    props.spotlightHost,
+    creating ? null : itemId,
+  );
+
   // Errors: validated always, SHOWN once the field was left or "Guardar"
   // pressed (UX-32).
   const [touched, setTouched] = React.useState<ReadonlySet<string>>(() => new Set());
@@ -1860,6 +1875,7 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
         pressedOnOverlayRef.current = false;
       }}
     >
+      <EditorSpotlight target={spotlight} coverRef={dialogRef} />
       <div
         ref={dialogRef}
         className="playlist-shell__modal fin-editor fin-sheet"
@@ -1903,8 +1919,12 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
             if (path && !touched.has(path)) setTouched((prev) => new Set(prev).add(path));
           }}
         >
-          {/* The side sheet: the form on the left, what it comes to on the
-              right ("Vista previa"), the actions under both. */}
+          {/* The side sheet: the item's shape on a piece of timeline (on
+              top, visual only), the form (scrolling), what it comes to
+              ("Vista previa", always in sight), then the actions. */}
+          <div className="fin-sheet__shape">
+            <ShapePreview item={formItem} doc={doc} today={today} />
+          </div>
           <div className="fin-sheet__main">
           {locked ? (
             <p className="fin-editor__locked" role="status">
@@ -1978,14 +1998,16 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
           </p>
           </div>
 
-          {/* What it comes to, in plain words, beside the form: the
+          {/* What it comes to, in plain words, under the form: the
               schedule (and a purchase's payment), then what it does to your
               cash. Follows every keystroke. */}
           <aside className="fin-sheet__preview" aria-labelledby={`${titleId}-preview`}>
-            <h3 id={`${titleId}-preview`} className="fin-sheet__preview-title">
-              Vista previa
-            </h3>
-            <p className="fin-sheet__preview-hint">Así queda en tu plan con lo que llevas escrito.</p>
+            <div className="fin-sheet__preview-head">
+              <h3 id={`${titleId}-preview`} className="fin-sheet__preview-title">
+                Vista previa
+              </h3>
+              <p className="fin-sheet__preview-hint">Así queda en tu plan con lo que llevas escrito.</p>
+            </div>
             <div className="fin-editor__section fin-editor__section--outcome">
               <Readback
                 sentence={readback}
