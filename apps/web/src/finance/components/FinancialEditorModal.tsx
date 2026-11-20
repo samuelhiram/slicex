@@ -48,6 +48,8 @@ import { KIND_COLORS, KIND_LABELS, KIND_ORDER } from "../labels";
 import { useEscapeLayer, useOverlay } from "../../ui/use-overlay";
 import { EditorSpotlight, useClipSpotlight } from "./EditorSpotlight";
 import { ShapePreview } from "./ShapePreview";
+import { IconPicker } from "./IconPicker";
+import { itemColor } from "../mapping";
 import { useAnnounce } from "../../ui/announcer";
 import { useFinancialRevision } from "./FinancialUi";
 import { DateField } from "./DateField";
@@ -265,6 +267,8 @@ export function switchKind(
     recurrence,
   };
   if (prev.enabled !== undefined) next.enabled = prev.enabled;
+  // The icon is the person's choice: it survives a kind change.
+  if (prev.icon !== undefined) next.icon = prev.icon;
   // Keep a custom colour override, but drop one that was just the old
   // kind's colour (the new kind brings its own).
   if (
@@ -1477,19 +1481,39 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
           </div>
         );
       case "text":
+        // The icon goes with the name: picked from the button before it.
         return (
-          <label className="fin-editor__field" data-field-path="name">
-            <span className="fin-editor__label">{label}</span>
-            <input
-              ref={nameRef}
-              type="text"
-              value={draft.name}
-              aria-invalid={shownErrors.name ? true : undefined}
-              aria-describedby={shownErrors.name ? "fin-editor-name-error" : undefined}
-              onChange={(event) => patch({ name: event.target.value })}
-            />
+          <div className="fin-editor__field" data-field-path="name">
+            <label className="fin-editor__label" htmlFor={`${titleId}-name`}>
+              {label}
+            </label>
+            <div className="fin-editor__name-row">
+              <IconPicker
+                value={draft.icon}
+                kind={draft.kind}
+                color={itemColor(draft)}
+                onChange={(icon) =>
+                  setDraft((prev) => {
+                    if (!prev) return prev;
+                    const next = { ...prev } as FinancialItem;
+                    if (icon === undefined) delete next.icon;
+                    else next.icon = icon;
+                    return next;
+                  })
+                }
+              />
+              <input
+                id={`${titleId}-name`}
+                ref={nameRef}
+                type="text"
+                value={draft.name}
+                aria-invalid={shownErrors.name ? true : undefined}
+                aria-describedby={shownErrors.name ? "fin-editor-name-error" : undefined}
+                onChange={(event) => patch({ name: event.target.value })}
+              />
+            </div>
             <FieldError id="fin-editor-name-error" message={shownErrors.name} />
-          </label>
+          </div>
         );
       case "money":
       case "count":

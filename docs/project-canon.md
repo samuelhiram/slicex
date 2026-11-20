@@ -289,7 +289,11 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     `PlaylistCore.setAllTrackHeights` (acción por lote `SET_ALL_TRACK_HEIGHTS`) pone las filas
     materializadas y `state.rowHeight` — el alto de las demás, que el core aplica a
     `metrics.trackHeight` (su copia propia) y re-aplica al deshacer / cargar; viaja en el layout
-    guardado (`FinancialTrackLayout.rowHeight`).
+    guardado (`FinancialTrackLayout.rowHeight`). A su derecha, **↺ Restaurar**: todas las líneas
+    a su alto normal (el de la densidad) y el zoom de inicio; apagado si ya están así. Debajo,
+    la celda del carril de caja (`TimelineCell`) dice **"Plano de eventos"** (el canvas ya no
+    dibuja "Caja") y lleva botones de solo ícono del timeline: el de filas (tres filas iguales y
+    una flecha de alto) pone todas las líneas a su alto normal en un clic.
   - **Nada se encima, en cascada** (`lanes.ts`): un objeto de una sola fecha se dibuja tan ancho
     como su nombre, más que su día; en una fila compartida los carriles separan las tarjetas
     *dibujadas*: el que empieza primero se queda arriba y los que tocaría bajan un carril, en

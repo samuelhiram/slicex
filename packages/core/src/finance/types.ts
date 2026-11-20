@@ -79,6 +79,13 @@ export interface FinancialItemBase {
   /** Optional UI colour override (hex). The engine ignores it. */
   color?: string;
   /**
+   * UI: the item's icon — a NAME from the app's icon catalog (kebab-case,
+   * e.g. "house", "shopping-cart"; apps/web/src/finance/icons.ts). Absent:
+   * no icon. The engine ignores it; a name the app does not know draws
+   * nothing (a newer plan in an older app).
+   */
+  icon?: string;
+  /**
    * UI: whether dragging it on the timeline may change its dates. Absent:
    * the default (fixed when it has a start AND an end; free otherwise —
    * apps/web mapping.ts). Stored only when the person chose otherwise. The

@@ -82,11 +82,23 @@ export const FinancialItemKindSchema = z.enum([
   "installment-plan",
 ]);
 
+/**
+ * An item's icon: the NAME of an icon in the app's catalog (kebab-case:
+ * "house", "shopping-cart", "gamepad-2"). Only the shape is checked, not
+ * the catalog: a plan made with a newer catalog still loads (an unknown
+ * name draws nothing).
+ */
+export const ItemIconSchema = z
+  .string()
+  .max(40)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Nombre de ícono no válido");
+
 const base = {
   id: z.string().min(1),
   name: z.string(),
   enabled: z.boolean().optional(),
   color: z.string().optional(),
+  icon: ItemIconSchema.optional(),
   lockDates: z.boolean().optional(),
   recurrence: FinancialRecurrenceSchema,
 };

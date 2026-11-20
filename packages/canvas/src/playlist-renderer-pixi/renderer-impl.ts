@@ -31,7 +31,7 @@ import {
   getClipLevelGripX,
   type PlaylistPresentation,
 } from "../playlist-core";
-import { createClipNodeRegistry } from "./clip-node-registry";
+import { createClipNodeRegistry, type PlaylistClipIcon } from "./clip-node-registry";
 import {
   COLORS,
   applyPlaylistTheme,
@@ -84,6 +84,11 @@ export interface PlaylistRendererCallbacks {
   // "1 dic 2026 – 1 sep 2027". Called once per VISIBLE clip per frame: O(1)
   // cached, the SAME string while unchanged; null = none.
   getClipPeriod?: (clipId: string) => string | null;
+  // The clip's icon, first in its name's pill (with clipTimeLock): SVG path
+  // data on a 24-unit grid, stroked in the clip's colour. Called once per
+  // VISIBLE clip per frame: O(1), the SAME array while unchanged; null =
+  // none. A change with no core notify needs invalidate(), like the detail.
+  getClipIcon?: (clipId: string) => PlaylistClipIcon | null;
   // Host emphasis per clip: true = warm ring, "danger" = a red ring and a
   // dimmed card (e.g. what a delete sweep will remove). Called once per
   // VISIBLE clip per frame: O(1), a primitive; call invalidate() when it
@@ -192,6 +197,7 @@ export function createPlaylistRenderer(
       getClipContent: callbacks.getClipContent,
       timeLock: callbacks.clipTimeLock === true,
       getClipPeriod: callbacks.getClipPeriod,
+      getClipIcon: callbacks.getClipIcon,
     },
   );
   // Overview lane (canon §3.10 cached layer): frame + curves rebuilt only

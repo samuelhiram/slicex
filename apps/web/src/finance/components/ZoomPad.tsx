@@ -28,6 +28,50 @@ export function zoomKeepingLeft(core: PlaylistCore, pxPerBeat: number): void {
   core.updateViewport({ pxPerBeat: px, scrollX: leftBeat * px });
 }
 
+/** Every event line back to `normal` (one undo step). */
+export function normalRowHeights(core: PlaylistCore, normal: number): void {
+  core.setAllTrackHeights(normal);
+}
+
+/** Every line at `normal` (rows of their own included). */
+export function rowsAtNormal(core: PlaylistCore, normal: number): boolean {
+  if (core.metrics.trackHeight !== normal) return false;
+  for (const track of core.getState().tracks) {
+    if (track.height !== undefined && track.height !== normal) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether the rows are at `normal` and the zoom at `pxPerBeat` (primitives:
+ * React bails out of the re-render when nothing it reads changed).
+ */
+export function useAtDefaults(core: PlaylistCore, normal: number, pxPerBeat: number): {
+  rows: boolean;
+  zoom: boolean;
+} {
+  const read = React.useCallback(
+    () => ({
+      rows: rowsAtNormal(core, normal),
+      zoom: Math.abs(core.getState().viewport.pxPerBeat - pxPerBeat) < 1e-6,
+    }),
+    [core, normal, pxPerBeat],
+  );
+  const [rows, setRows] = React.useState(() => read().rows);
+  const [zoom, setZoom] = React.useState(() => read().zoom);
+  React.useEffect(() => {
+    const sync = () => {
+      const next = read();
+      setRows(next.rows);
+      setZoom(next.zoom);
+    };
+    sync();
+    const sub = core.subscribe(sync);
+    return () => sub.unsubscribe();
+  }, [core, read]);
+  return { rows, zoom };
+}
+
 /** The lines' height (the default; the pad keeps every row on it). */
 function useRowHeight(core: PlaylistCore): number {
   const [height, setHeight] = React.useState(core.metrics.trackHeight);
@@ -51,7 +95,16 @@ interface Drag {
   frame: number;
 }
 
-export function ZoomPad({ core }: { core: PlaylistCore }) {
+export interface ZoomPadProps {
+  core: PlaylistCore;
+  /** The lines' normal height (what "Restaurar" goes back to). */
+  normalHeight: number;
+  /** The zoom "Restaurar" goes back to (px per day). */
+  defaultPxPerBeat: number;
+}
+
+export function ZoomPad({ core, normalHeight, defaultPxPerBeat }: ZoomPadProps) {
+  const atDefaults = useAtDefaults(core, normalHeight, defaultPxPerBeat);
   const { from, to } = useVisibleDays(core);
   const height = useRowHeight(core);
   const [dragging, setDragging] = React.useState(false);
@@ -173,6 +226,7 @@ export function ZoomPad({ core }: { core: PlaylistCore }) {
   const span = describeSpanDays(to - from);
   return (
     <div className="fin-zoompad-cell">
+      {/* (the pad, then "Restaurar" on its right) */}
       <button
         ref={padRef}
         type="button"
@@ -203,6 +257,22 @@ export function ZoomPad({ core }: { core: PlaylistCore }) {
           Visible: {span}. Alto de las líneas: {Math.round(height)} píxeles. Flechas izquierda y derecha para el
           zoom; arriba y abajo para el alto.
         </span>
+      </button>
+      <button
+        type="button"
+        className="fin-zoompad__reset"
+        aria-label="Restaurar tamaños y zoom"
+        title="Restaurar: todas las líneas a su alto normal y el zoom de inicio"
+        disabled={atDefaults.rows && atDefaults.zoom}
+        onClick={() => {
+          if (!atDefaults.rows) normalRowHeights(core, normalHeight);
+          zoomKeepingLeft(core, defaultPxPerBeat);
+        }}
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M4.5 8.5a6 6 0 1 1 1.4 5.8" />
+          <path d="M4 4.5v4h4" />
+        </svg>
       </button>
     </div>
   );

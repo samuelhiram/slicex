@@ -23,6 +23,7 @@ import type {
 } from "@slicex/core";
 import type {
   PlaylistClipContent,
+  PlaylistClipIcon,
   PlaylistCore,
   PlaylistDragAnnotation,
   PlaylistOverviewData,
@@ -135,6 +136,8 @@ export interface FinancialBridgeApi {
 
   /** Secondary text drawn inside a clip (follows the playhead day), or null. */
   getClipDetail(clipId: string): string | null;
+  /** The item's icon glyph (icons.ts: the SAME array per icon), or null. */
+  getClipIcon(clipId: string): PlaylistClipIcon | null;
   /** Sparkline bars (0..1) for a clip, or null to fall back to default. */
   getClipSparkline(clipId: string): number[] | null;
   /** Payments at their real dates (events) or remaining debt (level). */

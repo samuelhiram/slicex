@@ -4,7 +4,7 @@
 // person's year across reloads today.
 //
 // Never throws: a blocked / full / corrupted storage just means "no save".
-import { FinancialDocumentSchema, FinancialItemSchemaStrict, MovementSchema } from "@slicex/contracts";
+import { FinancialDocumentSchema, FinancialItemSchemaStrict, ItemIconSchema, MovementSchema } from "@slicex/contracts";
 import type { FinancialDocument, FinancialItem, ISODate, LedgerEntry, Movement } from "@slicex/core";
 import { parseTrackLayout, type FinancialTrackLayout } from "./mapping";
 
@@ -58,10 +58,18 @@ function parseDocument(value: unknown): FinancialDocument | null {
   if (!doc.success) return null;
   const items: FinancialItem[] = [];
   for (const raw of doc.data.items) {
-    const item = FinancialItemSchemaStrict.safeParse(raw);
+    const item = FinancialItemSchemaStrict.safeParse(withoutBadIcon(raw));
     if (item.success) items.push(item.data as FinancialItem);
   }
   return { ...doc.data, items };
+}
+
+/** A malformed icon name is dropped, never the item that carries it. */
+function withoutBadIcon(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || !("icon" in raw)) return raw;
+  if (ItemIconSchema.safeParse((raw as { icon: unknown }).icon).success) return raw;
+  const { icon: _icon, ...rest } = raw as Record<string, unknown>;
+  return rest;
 }
 
 /**

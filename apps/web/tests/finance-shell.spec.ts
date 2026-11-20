@@ -167,6 +167,9 @@ vi.mock("../src/finance/financial-bridge", async () => {
     getClipDetail() {
       return null;
     }
+    getClipIcon() {
+      return null;
+    }
     getClipSparkline() {
       return null;
     }

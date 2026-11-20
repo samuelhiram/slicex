@@ -245,7 +245,9 @@ export function buildOverview(
   );
   const constant = Math.max(1000, reserve);
   return {
-    title: "Caja",
+    // The lane's header cell is the shell's ("Plano de eventos" + its
+    // buttons, TimelineCell): no title drawn on the canvas.
+    title: "",
     primary,
     secondary: debtSeries(doc, projection),
     baseline,

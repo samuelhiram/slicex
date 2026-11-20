@@ -23,6 +23,7 @@ import {
 import { describeItem, describePeriod } from "../financial-bridge";
 import { isPointItem, itemColor } from "../mapping";
 import { KIND_LABELS } from "../labels";
+import { ItemIcon } from "./ItemIcon";
 
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
@@ -246,7 +247,10 @@ export function ShapePreview({
             data-muted={item.enabled === false ? "true" : undefined}
             style={card.point ? { left: pct(card.left) } : { left: pct(card.left), width: pct(card.width) }}
           >
-            <span className="fin-shape__title">{item.name.trim() || KIND_LABELS[item.kind]}</span>
+            <span className="fin-shape__title">
+              <ItemIcon id={item.icon} size={12} className="fin-shape__icon" />
+              {item.name.trim() || KIND_LABELS[item.kind]}
+            </span>
             {detail ? <span className="fin-shape__detail">{detail}</span> : null}
             {period ? <span className="fin-shape__period">{period}</span> : null}
             {/* Inside the card (an open card's fade takes them too); a

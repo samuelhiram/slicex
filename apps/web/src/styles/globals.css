@@ -655,7 +655,6 @@ button {
   flex-direction: column;
   border-left: 1px solid var(--line);
   background: var(--raised);
-  box-shadow: var(--shadow-pop);
   font-size: 13px;
 }
 
@@ -693,9 +692,9 @@ button {
   align-items: center;
   justify-content: space-between;
   height: 52px;
-  padding: 0 16px;
+  padding: 0 10px 0 18px;
   border-bottom: 1px solid var(--line);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -825,13 +824,30 @@ button {
 }
 
 .playlist-inspector__panel .playlist-inspector__header {
-  padding-right: 56px;
+  padding-right: 52px;
 }
 
 .playlist-inspector__title {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
+}
+
+/* Open, its toggle is the header's close (the rail's .fin-side__close):
+   32 px, no outline, centred on the 52 px bar. Collapsed it stays the
+   small floating button. */
+.playlist-inspector:not(.playlist-inspector--collapsed) .playlist-inspector__toggle {
+  top: 10px;
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.playlist-inspector:not(.playlist-inspector--collapsed) .playlist-inspector__toggle:hover {
+  background: var(--hover);
 }
 
 .playlist-inspector__toggle {
@@ -4797,7 +4813,15 @@ kbd {
   box-shadow: var(--shadow-card);
 }
 
-.playlist-shell--finance .playlist-shell__stage {
+/* The stage and the panels docked beside it are ONE card (the "Comparar y
+   pagar deudas" look, for every side panel): the workspace takes the
+   radius and the shadow, the panels sit flush against the stage with a
+   hairline between them, so the outer corners match the header card and
+   no seam shows a rounded notch. (Headless Chromium, without a GPU, may
+   screenshot the canvas with transparent holes under the open inspector
+   here; a real browser draws it whole — checked headed, 2026-11-19.) */
+.playlist-shell--finance .playlist-shell__workspace {
+  overflow: hidden;
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
 }
@@ -5816,7 +5840,6 @@ kbd {
 .fin-records__record {
   flex: none;
   height: 32px;
-  margin-top: -2px;
   padding: 0 12px 0 10px;
 }
 
@@ -5967,33 +5990,42 @@ kbd {
   flex-direction: column;
   width: clamp(320px, 25vw, 560px);
   min-height: 0;
-  margin-left: var(--gap-card, 8px);
   overflow: hidden;
-  border-radius: var(--radius-card);
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
+  border-left: 1px solid var(--line);
+  background: var(--raised);
   color: var(--text);
   font-size: 13px;
 }
 
+/* The panels' header bar (the same as .fin-side__header): 52 px, the
+   title on the left, the panel's actions and its close on the right, a
+   hairline under it. */
 .fin-records__header {
   display: flex;
   flex: none;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 16px 10px 2px 18px;
-}
-
-.fin-records__heading {
-  flex: 1 1 auto;
-  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  height: 52px;
+  padding: 0 10px 0 18px;
+  border-bottom: 1px solid var(--line);
 }
 
 .fin-records__title {
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
-  color: var(--muted);
-  font-size: 13px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 15px;
   font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* What the list adds up to, at the top of the controls. */
+.fin-records__summary {
+  display: flex;
+  flex-direction: column;
 }
 
 .fin-records__figure {
@@ -6011,14 +6043,21 @@ kbd {
 }
 
 .fin-records__caption {
-  margin: 3px 0 0;
+  margin: 2px 0 0;
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
+/* Its close: the rail's (.fin-side__close) size and glyph. */
 .fin-records__fold {
-  margin-top: -6px;
+  width: 32px;
+  height: 32px;
+}
+
+.fin-records__fold svg {
+  width: 16px;
+  height: 16px;
 }
 
 .fin-records__controls {
@@ -6026,7 +6065,7 @@ kbd {
   flex: none;
   flex-direction: column;
   gap: 10px;
-  padding: 12px 18px;
+  padding: 14px 18px 12px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -6503,7 +6542,6 @@ button.fin-records__row-main:focus-visible {
     bottom: 0;
     z-index: 9;
     width: min(100%, 380px);
-    margin-left: 0;
     box-shadow: var(--shadow-pop);
   }
 }
@@ -8234,4 +8272,317 @@ input[type="number"]::-webkit-outer-spin-button {
 .playlist-shell--finance .fin-summary .fin-readout--header .fin-readout__day {
   font-size: 14px;
   line-height: 18px;
+}
+
+/* The corner cell: the pad, then "Restaurar" (↺) on its right. */
+.fin-zoompad-cell {
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 6px;
+}
+
+.fin-zoompad__reset {
+  display: grid;
+  place-items: center;
+  width: min(36px, calc(var(--pl-ruler-h, 52px) - 12px));
+  height: min(36px, calc(var(--pl-ruler-h, 52px) - 12px));
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 120ms ease;
+}
+
+.fin-zoompad__reset:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.fin-zoompad__reset:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.fin-zoompad__reset:disabled {
+  color: var(--subtle);
+  cursor: default;
+}
+
+.fin-zoompad__reset svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The money lane's header cell (TimelineCell): "Plano de eventos" and the
+   timeline's own buttons, under the corner pad. */
+.fin-lanecell {
+  position: absolute;
+  top: var(--pl-ruler-h, 52px);
+  left: 0;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  width: var(--pl-header-w, 216px);
+  height: var(--pl-lane-h, 80px);
+  padding: 0 12px 0 16px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.fin-lanecell__title {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.fin-lanecell[data-compact] .fin-lanecell__title {
+  display: none;
+}
+
+.fin-lanecell__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fin-lanecell__button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 120ms ease;
+}
+
+.fin-lanecell__button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.fin-lanecell__button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.fin-lanecell__button:disabled {
+  color: var(--subtle);
+  cursor: default;
+}
+
+.fin-lanecell__button svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* --- Item icons (icons.ts) ---------------------------------------------------
+   The catalog's glyphs as inline SVG (ItemIcon): stroked with currentColor,
+   so each place sets the colour (the item's, as on its canvas card). */
+.fin-glyph {
+  flex: none;
+  display: block;
+}
+
+/* Nombre: the icon button, then the name. */
+.fin-editor__name-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fin-editor__name-row > input[type="text"] {
+  flex: 1 1 auto;
+}
+
+.fin-iconpick__trigger {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.fin-iconpick__trigger[data-empty] {
+  border-style: dashed;
+  color: var(--subtle);
+}
+
+.fin-iconpick__trigger:hover {
+  border-color: var(--subtle);
+  background: var(--surface-2);
+}
+
+.fin-iconpick__trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.fin-iconpick__trigger:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.fin-iconpick__trigger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The popover: fixed against its trigger (IconPicker places it). */
+.fin-iconpick {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: min(320px, calc(100vw - 16px));
+  max-height: min(380px, calc(100vh - 16px));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.fin-iconpick__head {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.fin-iconpick__search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.fin-iconpick__search:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.fin-iconpick__clear {
+  flex: none;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fin-iconpick__clear:hover {
+  background: var(--hover);
+}
+
+.fin-iconpick__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 10px 10px;
+}
+
+.fin-iconpick__title {
+  margin: 8px 2px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.fin-iconpick__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
+  gap: 2px;
+}
+
+.fin-iconpick__option {
+  display: grid;
+  place-items: center;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.fin-iconpick__option:hover {
+  background: var(--hover);
+}
+
+.fin-iconpick__option:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.fin-iconpick__option[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.fin-iconpick__empty {
+  margin: 16px 4px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* The editor's mini timeline: the icon before the name, in the card's colour. */
+.fin-shape__icon {
+  display: inline-block;
+  margin-right: 4px;
+  vertical-align: -2px;
+  color: var(--clip-color);
+}
+
+/* "En tu plan": the item's icon in place of the kind's dot. */
+.fin-records__icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
 }

@@ -144,6 +144,7 @@ function createFakeBridge(initial: FinancialDocument, options: FakeOptions = {})
     nextPaymentAfter: (date: string) => nextPayment(projection, date),
     getWarnings: () => findLiquidityWarnings(projection, doc.minimumCashReserve),
     getClipDetail: () => null,
+    getClipIcon: () => null,
     getClipSparkline: () => null,
     getClipContent: () => null,
     getOverviewData: () => null,

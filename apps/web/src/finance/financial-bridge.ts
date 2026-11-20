@@ -59,6 +59,7 @@ import {
   stepSeriesValueAt,
   type PlaylistClip,
   type PlaylistClipContent,
+  type PlaylistClipIcon,
   type PlaylistCore,
   type PlaylistDragAnnotation,
   type PlaylistOverviewData,
@@ -81,6 +82,7 @@ import {
   formatMoneyWhole,
   formatSignedMoneyWhole,
 } from "./format";
+import { iconGlyph } from "./icons";
 import { frequencyShort, isAutoRowLabel, KIND_COLORS, KIND_LABELS } from "./labels";
 import { cadenceText } from "./schedule-ui";
 import {
@@ -541,7 +543,14 @@ export class FinancialBridge implements FinancialBridgeApi {
     const period = pending ? describePeriod(pending, this.payoffs().get(pending.id)) : this.getClipPeriod(clipId);
     const width =
       item && isPointItem(item)
-        ? clipCardWidthPx(item.name, describeItem(item, this.doc), period, height, titleHeight)
+        ? clipCardWidthPx(
+            item.name,
+            describeItem(item, this.doc),
+            period,
+            height,
+            titleHeight,
+            iconGlyph(item.icon) !== null,
+          )
         : 0;
     if (!pending) this.minWidthCache.set(clipId, { height, titleHeight, width });
     return width;
@@ -559,6 +568,16 @@ export class FinancialBridge implements FinancialBridgeApi {
     const text = item ? describePeriod(item, this.payoffs().get(item.id)) : null;
     this.periodCache.set(clipId, text);
     return text;
+  }
+
+  /**
+   * The icon the card shows first in its pill: the catalog's glyph (the
+   * SAME array for an icon: the renderer compares references), or null.
+   * The item being added / edited shows its own. O(1): two map lookups.
+   */
+  getClipIcon(clipId: string): PlaylistClipIcon | null {
+    const pending = this.pendingItem !== null && this.pendingItem.id === clipId ? this.pendingItem : null;
+    return iconGlyph((pending ?? this.itemIndex.get(clipId))?.icon);
   }
 
   getClipDetail(clipId: string): string | null {

@@ -399,12 +399,15 @@ export function createOverviewLaneLayer(
         }
         if (drew) g.stroke({ color: COLORS.overviewZeroLine, width: 1, alpha: 0.75 });
       }
-      const maxTitleChars = Math.floor((head.width - 24) / TITLE_CHAR_PX);
-      addText(text, truncate(frameData.title, maxTitleChars), 16, lane.y + 12, {
-        size: TITLE_SIZE,
-        color: COLORS.text,
-        weight: "600",
-      });
+      // No title: the host puts its own in the header cell.
+      if (frameData.title) {
+        const maxTitleChars = Math.floor((head.width - 24) / TITLE_CHAR_PX);
+        addText(text, truncate(frameData.title, maxTitleChars), 16, lane.y + 12, {
+          size: TITLE_SIZE,
+          color: COLORS.text,
+          weight: "600",
+        });
+      }
     }
 
     g.moveTo(0, laneBottom - 0.5)

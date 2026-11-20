@@ -67,7 +67,8 @@ import { StatementDialog } from "../finance/components/StatementDialog";
 import { ValleyCard } from "../finance/components/ValleyCard";
 import { NavHelp } from "../finance/components/NavControls";
 import { ZoomPad } from "../finance/components/ZoomPad";
-import { createFinancialPlaylistState } from "../finance/mapping";
+import { TimelineCell } from "../finance/components/TimelineCell";
+import { FINANCE_DEFAULT_PX_PER_DAY, createFinancialPlaylistState } from "../finance/mapping";
 import {
   displayRowLabel,
   isAutoRowLabel,
@@ -1663,6 +1664,8 @@ export function PlaylistShell() {
         // Render-loop providers: O(1) cached lookups on the bridge that
         // return the SAME object while unchanged (canon: provider contract).
         getClipDetail: (clipId) => bridgeInstance.getClipDetail(clipId),
+        // The item's icon, first in its card's pill (the SAME glyph array).
+        getClipIcon: (clipId) => bridgeInstance.getClipIcon(clipId),
         getClipSparkline: (clipId) => bridgeInstance.getClipSparkline(clipId),
         getClipContent: (clipId) => bridgeInstance.getClipContent(clipId),
         getOverviewData: () => bridgeInstance.getOverviewData(),
@@ -2185,8 +2188,19 @@ export function PlaylistShell() {
       <div className="playlist-shell__workspace">
       <div className="playlist-shell__side-slot" ref={setSideSlot} inert={editorOpen} />
       <div className="playlist-shell__stage" inert={editorOpen}>
-        {/* The table's corner: drag it — ↔ zoom, ↕ the lines' height. */}
-        {core ? <ZoomPad core={core} /> : null}
+        {/* The table's corner: drag it — ↔ zoom, ↕ the lines' height; ↺
+            back to the normal sizes and zoom. Under it, the money lane's
+            cell: "Plano de eventos" and the timeline's own buttons. */}
+        {core ? (
+          <>
+            <ZoomPad core={core} normalHeight={metrics.trackHeight} defaultPxPerBeat={FINANCE_DEFAULT_PX_PER_DAY} />
+            <TimelineCell
+              core={core}
+              normalHeight={metrics.trackHeight}
+              defaultPxPerBeat={FINANCE_DEFAULT_PX_PER_DAY}
+            />
+          </>
+        ) : null}
         {/* UX-04: the keys come first in its name (the gestures are in
             "Cómo moverte"); a navigation key marks the next day change as
             keyboard driven, so the day's reading is spoken. */}

@@ -9,7 +9,9 @@ import { createRoot, type Root } from "react-dom/client";
 import type { FinancialDocument } from "@slicex/core";
 import { createPlaylistCore, type PlaylistCore } from "@slicex/canvas";
 import { ZoomPad, zoomKeepingLeft } from "../src/finance/components/ZoomPad";
+import { TimelineCell } from "../src/finance/components/TimelineCell";
 import {
+  FINANCE_DEFAULT_PX_PER_DAY,
   FINANCE_PLAYLIST_METRICS,
   createFinancialPlaylistState,
   parseTrackLayout,
@@ -54,13 +56,25 @@ afterEach(() => {
   container = null;
 });
 
+const NORMAL = FINANCE_PLAYLIST_METRICS.trackHeight;
+
 function mount(core: PlaylistCore): HTMLButtonElement {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  act(() => root!.render(React.createElement(ZoomPad, { core })));
+  const props = { core, normalHeight: NORMAL, defaultPxPerBeat: FINANCE_DEFAULT_PX_PER_DAY };
+  act(() =>
+    root!.render(
+      React.createElement(React.Fragment, null, React.createElement(ZoomPad, props), React.createElement(TimelineCell, props)),
+    ),
+  );
   return container.querySelector<HTMLButtonElement>(".fin-zoompad")!;
 }
+
+const click = (el: Element) =>
+  act(() => {
+    (el as HTMLElement).click();
+  });
 
 const press = (pad: HTMLElement, key: string) =>
   act(() => {
@@ -125,6 +139,47 @@ describe("the corner pad", () => {
     expect(core.metrics.trackHeight).toBe(height + 20);
     core.undo();
     expect(core.metrics.trackHeight).toBe(height);
+  });
+});
+
+describe("Restaurar (↺) and 'Plano de eventos'", () => {
+  it("↺ is off at the normal sizes; after a change it brings the lines' height and the zoom back", () => {
+    const core = makeCore();
+    const pad = mount(core);
+    const reset = container!.querySelector<HTMLButtonElement>(".fin-zoompad__reset")!;
+    expect(reset.getAttribute("aria-label")).toBe("Restaurar tamaños y zoom");
+    expect(reset.disabled).toBe(true);
+    press(pad, "ArrowUp");
+    press(pad, "ArrowRight");
+    expect(reset.disabled).toBe(false);
+    click(reset);
+    expect(core.metrics.trackHeight).toBe(NORMAL);
+    expect(core.getState().viewport.pxPerBeat).toBeCloseTo(FINANCE_DEFAULT_PX_PER_DAY, 6);
+    expect(reset.disabled).toBe(true);
+  });
+
+  it("the lane's cell says 'Plano de eventos'; 'Alto normal' puts every line back, in one click", () => {
+    const core = makeCore();
+    mount(core);
+    const cell = container!.querySelector<HTMLElement>(".fin-lanecell")!;
+    expect(cell.getAttribute("aria-label")).toBe("Plano de eventos");
+    expect(cell.textContent).toContain("Plano de eventos");
+    // Icon only: its name is in aria-label (and the tooltip).
+    const normal = cell.querySelector<HTMLButtonElement>('button[aria-label="Todas las líneas a su alto normal"]')!;
+    expect(normal.textContent).toBe("");
+    expect(normal.title).toContain("Alto normal");
+    expect(normal.disabled).toBe(true);
+    act(() => core.setAllTrackHeights(50));
+    expect(normal.disabled).toBe(false);
+    click(normal);
+    expect(core.metrics.trackHeight).toBe(NORMAL);
+    expect(core.getState().tracks.every((track) => (track.height ?? NORMAL) === NORMAL)).toBe(true);
+    expect(normal.disabled).toBe(true);
+    // One undo step back to 50.
+    act(() => {
+      core.undo();
+    });
+    expect(core.metrics.trackHeight).toBe(50);
   });
 });
 

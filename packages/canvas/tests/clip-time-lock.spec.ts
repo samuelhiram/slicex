@@ -347,32 +347,42 @@ describe("the lock sits in the bottom-left corner", () => {
     expect(lock!.x).toBeLessThanOrEqual(titleX);
   });
 
-  it("a card too short for a third row keeps it, after the name and amount, centred", () => {
-    const { rect, lock, textEnd } = drawn(5, 50, 0, true, 44);
-    expect(rect.height).toBeLessThan(50);
+  it("a card too short for two lines keeps it on the pill's line, after the pill, centred", () => {
+    const { rect, lock, textEnd, amountText, amountX } = drawn(5, 50, 0, true, 44);
+    expect(rect.height).toBeLessThan(44);
     expect(lock).not.toBeNull();
-    expect(lock!.x).toBeGreaterThanOrEqual(textEnd);
-    expect(lock!.x - textEnd).toBeLessThan(10);
+    // The amount stays in the pill, after the name (no body room needed).
+    expect(amountText).toBe("-$7,500 /mes");
+    expect(amountX).toBeGreaterThan(textEnd);
+    // After the pill: the amount's end + the pill's 12 px round end.
+    const pillEnd = amountX + 1 + "-$7,500 /mes".length * 7.3 + 12;
+    expect(lock!.x).toBeGreaterThanOrEqual(pillEnd);
+    expect(lock!.x - pillEnd).toBeLessThan(10);
     expect(Math.abs(lock!.y + lock!.height / 2 - (rect.y + rect.height / 2))).toBeLessThanOrEqual(1);
   });
 
-  it("the row stays under the amount unless the card is really short; the room left is air above it", () => {
-    // 72 px row: a 58 px card — the row at the bottom, clear of the amount
-    // (20 + 2 + 15 = 37), 2 px off the bottom edge.
-    const tight = drawn(5, 50, 0, true, 72);
-    expect(tight.rect.height).toBe(58);
-    expect(tight.lock!.x).toBe(tight.rect.x);
-    expect(tight.badgeY - (tight.rect.y + 37)).toBeGreaterThanOrEqual(3);
-    expect(tight.badgeY + 16).toBe(tight.rect.y + tight.rect.height - 2);
-    // The 84 px row (a 70 px card): more air above it.
-    const roomy = drawn(5, 50, 0);
-    expect(roomy.badgeY - (roomy.rect.y + 37)).toBeGreaterThanOrEqual(12);
-    // On the tight card the name (and the amount) ride higher, so the air
-    // shows between the amount and the row.
-    expect(tight.titleY - tight.rect.y).toBe(roomy.titleY - roomy.rect.y - 2);
-    // A slim row (60 px: a 46 px card): two lines — see "a short card".
-    const slim = drawn(5, 50, 0, true, 60);
-    expect(slim.lock!.x).toBe(slim.rect.x);
+  it("two lines: the pill (name + amount) centred above the bottom line, the lock + dates at the bottom", () => {
+    for (const [row, card, bottomPad] of [
+      [84, 70, 4],
+      [72, 58, 2],
+      [60, 46, 2],
+    ] as const) {
+      const d = drawn(5, 50, 0, true, row);
+      expect(d.rect.height).toBe(card);
+      // The bottom line: the corner tab, the dates tag 2–4 px off the bottom.
+      expect(d.lock!.x).toBe(d.rect.x);
+      const rowTop = card - 16 - bottomPad;
+      expect(d.badgeY).toBe(d.rect.y + rowTop);
+      // The pill (22 px) centred in the room above it; the name in it, the
+      // amount on the same line, after the name.
+      const pillTop = Math.round((rowTop - 22) / 2);
+      expect(d.titleY - d.rect.y).toBe(pillTop + Math.round((22 - 17) / 2) - 1);
+      expect(d.amountText).toBe("-$7,500 /mes");
+      expect(Math.abs(d.amountY - d.titleY)).toBeLessThanOrEqual(1);
+      expect(d.amountX).toBeGreaterThan(d.titleX + "Préstamo".length * 6);
+      // The pill ends before the bottom line starts.
+      expect(d.rect.y + pillTop + 22).toBeLessThanOrEqual(d.badgeY);
+    }
   });
 
   it("a short card: the amount moves up beside the name; the lock + dates take its line", () => {
@@ -417,8 +427,8 @@ describe("the third row: the lock button, then the dates tag (two things)", () =
     // The tag sits within the tab's band.
     expect(badgeY).toBeGreaterThanOrEqual(lock!.y);
     expect(badgeY + 16).toBeLessThanOrEqual(lock!.y + lock!.height);
-    // The third row: under the title (20) + the amount line (2 + 15), inside the card.
-    expect(lock!.y).toBeGreaterThanOrEqual(titleY - 5 + 37 - 1);
+    // The bottom line: under the pill (its text at titleY), inside the card.
+    expect(badgeY).toBeGreaterThan(titleY + 17);
     expect(lock!.y + lock!.height).toBeLessThanOrEqual(rect.y + rect.height);
   });
 

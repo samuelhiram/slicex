@@ -38,6 +38,9 @@ import type { FinancialBridgeApi } from "../bridge-api";
 import type { Futures } from "../futures";
 import { formatDateShort, formatMoneyWhole, formatSignedMoneyWhole } from "../format";
 import { frequencyShort, KIND_COLORS, KIND_LABELS } from "../labels";
+import { iconDef } from "../icons";
+import { itemColor } from "../mapping";
+import { ItemIcon } from "./ItemIcon";
 import {
   dayLabel,
   groupByDay,
@@ -350,20 +353,12 @@ export function MovementsPanel(props: MovementsPanelProps) {
 
   return (
     <aside id={RECORDS_PANEL_ID} className="fin-records" aria-labelledby={titleId} inert={inert}>
+      {/* The panels' one header bar (as "Comparar y pagar deudas"): the
+          title, the panel's action and its close; the figure goes below. */}
       <header className="fin-records__header">
-        <div className="fin-records__heading">
-          <h2 id={titleId} className="fin-records__title">
-            {title}
-          </h2>
-          {figure !== null ? (
-            <p className="fin-records__figure" data-tone={view.kind === "all" && totals.net < 0 ? "negative" : undefined}>
-              {figure}
-            </p>
-          ) : null}
-          <p className="fin-records__caption" role="status" aria-live="polite">
-            {caption}
-          </p>
-        </div>
+        <h2 id={titleId} className="fin-records__title">
+          {title}
+        </h2>
         {/* The panel's one primary action: what just happened, in seconds. */}
         <button
           type="button"
@@ -384,14 +379,24 @@ export function MovementsPanel(props: MovementsPanelProps) {
           aria-label="Ocultar movimientos"
           title="Ocultar el panel (F lo vuelve a abrir)"
         >
+          {/* The panels' one close glyph (as the rail's .fin-side__close). */}
           <svg viewBox="0 0 20 20" aria-hidden="true">
-            <rect x="3" y="4" width="14" height="12" rx="2" />
-            <path d="M12 4v12M7 8.5 8.5 10 7 11.5" />
+            <path d="M5 5l10 10M15 5 5 15" />
           </svg>
         </button>
       </header>
 
       <div className="fin-records__controls">
+        <div className="fin-records__summary">
+          {figure !== null ? (
+            <p className="fin-records__figure" data-tone={view.kind === "all" && totals.net < 0 ? "negative" : undefined}>
+              {figure}
+            </p>
+          ) : null}
+          <p className="fin-records__caption" role="status" aria-live="polite">
+            {caption}
+          </p>
+        </div>
         <div className="playlist-shell__segmented fin-records__sections" role="tablist" aria-label="Qué ver" onKeyDown={onSectionKeyDown}>
           {SECTIONS.map((value) => (
             <button
@@ -566,7 +571,14 @@ export function MovementsPanel(props: MovementsPanelProps) {
                 <li key={item.id} className="fin-records__item" data-included={included}>
                   <div className="fin-records__line">
                     <span className="fin-records__name">
-                      <span className="fin-table__swatch" style={{ background: KIND_COLORS[item.kind] }} aria-hidden="true" />
+                      {/* Its icon in its colour, as on the card; else the kind's dot. */}
+                      {iconDef(item.icon) ? (
+                        <span className="fin-records__icon" style={{ color: itemColor(item) }}>
+                          <ItemIcon id={item.icon} size={16} />
+                        </span>
+                      ) : (
+                        <span className="fin-table__swatch" style={{ background: KIND_COLORS[item.kind] }} aria-hidden="true" />
+                      )}
                       <span className="fin-records__concept" title={item.name}>
                         {item.name}
                       </span>

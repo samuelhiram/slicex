@@ -772,7 +772,8 @@ describe("FinancialBridge — Ola 1 renderer providers", () => {
   it("overview: cash curve with reserve/zero thresholds, stable across UI-only notifies", () => {
     const { core, bridge } = setup();
     const data = bridge.getOverviewData();
-    expect(data.title).toBe("Caja");
+    // The header cell is the shell's ("Plano de eventos"): no canvas title.
+    expect(data.title).toBe("");
     expect(data.primary.initial).toBe(5000);
     expect(data.thresholds.map((t) => t.tone)).toEqual(["warning", "danger"]);
     core.setHover({ kind: "clip", clipId: "sal" });
