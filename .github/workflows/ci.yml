@@ -11,21 +11,29 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [20.x]
+        # Same major as local development (Node 20 reached end of life in
+        # April 2026).
+        node-version: [24.x]
     env:
       CI: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      # pnpm must be on PATH BEFORE setup-node: its `cache: 'pnpm'` asks pnpm
+      # for the store path ("Unable to locate executable file: pnpm" otherwise).
+      # package.json has no `packageManager` field, so the version is pinned
+      # here (lockfile v9 = pnpm 9; the same one as local development).
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'pnpm'
-
-      - name: Enable Corepack (pnpm)
-        run: corepack enable
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -53,7 +61,7 @@ jobs:
 
       - name: Upload Playwright HTML report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: playwright-report
