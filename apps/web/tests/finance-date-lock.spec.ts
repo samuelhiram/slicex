@@ -188,16 +188,20 @@ describe("the clip's lock is the item's", () => {
 describe("one-time events are as wide as their name and amount", () => {
   it("a tag width for one-time events, none for windows; it follows a rename and the card's height", () => {
     const { bridge } = setup();
-    const width = bridge.clipMinWidth("bono", 58, 20);
+    const width = bridge.clipMinWidth("bono", 70, 20);
     // Its date ("9 dic 2026") after the lock, at least.
     expect(width).toBeGreaterThan(8 + 22 + "9 dic 2026".length * 6.7);
-    expect(bridge.clipMinWidth("sal", 58, 20)).toBe(0);
-    expect(bridge.clipMinWidth("loan", 58, 20)).toBe(0);
-    // A card too short for two lines puts lock + date beside the text: wider.
-    expect(bridge.clipMinWidth("bono", 36, 20)).toBeGreaterThan(width);
+    expect(bridge.clipMinWidth("sal", 70, 20)).toBe(0);
+    expect(bridge.clipMinWidth("loan", 70, 20)).toBe(0);
+    // A short card's tab carries the lock but no dates (2026-11-20): narrower.
+    const short = bridge.clipMinWidth("bono", 36, 20);
+    expect(short).toBeGreaterThan(0);
+    expect(short).toBeLessThan(width);
+    // A longer name widens both.
     const bono = bridge.getItem("bono")!;
     expect(bridge.replaceItem({ ...bono, name: "Bono de fin de año y algo más" })).toBe(true);
-    expect(bridge.clipMinWidth("bono", 36, 20)).toBeGreaterThan(bridge.clipMinWidth("bono", 58, 20) - 1);
+    expect(bridge.clipMinWidth("bono", 36, 20)).toBeGreaterThan(short);
+    expect(bridge.clipMinWidth("bono", 70, 20)).toBeGreaterThan(width);
   });
 });
 

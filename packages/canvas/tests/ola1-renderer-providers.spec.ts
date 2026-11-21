@@ -446,6 +446,35 @@ describe("renderer — track meta in the header", () => {
     expect(entry.subtitle).toBe(display);
   });
 
+  it("has no colour of its own: the same quiet glyph on every row, the name in medium weight", async () => {
+    const { COLORS } = await import("../src/playlist-renderer-pixi/palette");
+    const state = sizedDemoState();
+    const pres = createPlaylistPresentation(state, M);
+    const graphics = new Graphics();
+    const layer = new Container();
+    drawTrackRows(graphics, layer, pres);
+    // Not one fill or stroke in a row's colour (the old dot): a green row
+    // read as "incomes only".
+    const rowColours = new Set(state.tracks.map((track) => parseInt(track.color.slice(1), 16)));
+    const used = graphics.context.instructions.map(
+      (instruction) => (instruction.data.style as { color: number }).color,
+    );
+    expect(used.filter((colour) => rowColours.has(colour))).toEqual([]);
+    // The glyph: one filled triangle per row, in the inactive-glyph tone.
+    const glyphs = graphics.context.instructions.filter(
+      (instruction) =>
+        instruction.action === "fill" &&
+        (instruction.data.style as { color: number }).color === COLORS.textSubtle,
+    );
+    expect(glyphs.length).toBe(pres.trackRows.length);
+    // The names: medium weight, not bold.
+    const names = layer.children.filter(
+      (child): child is Text => child instanceof Text && child.text === "Drums",
+    );
+    expect(names).toHaveLength(1);
+    expect(names[0]!.style.fontWeight).toBe("500");
+  });
+
   it("is wired through the renderer callback", async () => {
     const core = createPlaylistCore(sizedDemoState());
     const meta: PlaylistTrackMeta = { subtitle: "−$24k / año", meter: -0.4 };

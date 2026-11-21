@@ -36,7 +36,7 @@ export {
   monthlyInstallment,
   remainingInstallmentDebt,
 } from "./items";
-export { createDemoFinancialDocument } from "./demo";
+export { createDemoFinancialDocument, createExampleYearDocument } from "./demo";
 export { rollForward } from "./rollforward";
 export type {
   ActualRecord,

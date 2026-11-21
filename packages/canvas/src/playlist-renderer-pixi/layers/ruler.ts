@@ -2,13 +2,18 @@
 // behind clips. The orchestrator owns the dirty-key cache for the grid;
 // this module just emits draw commands when invoked.
 //
-// Two layouts:
+// Layouts:
 //   - single tier (default axis): tick lines + labels.
 //   - two tiers, when the axis provides "group" bands (e.g. months): the
 //     group labels sit on the upper tier (sticky at the left edge while
 //     their span is on screen), the tick labels on the lower tier. Labels
 //     may be centred in their cell, dimmed (weekends) or emphasised (today:
 //     a pill in the "now" colour).
+//   - one row with groups (metrics.rulerSingleRow): the group labels ("dic
+//     2026") ride in the tick row as soft chips (bold, a faint fill — a tag,
+//     never read as the tail of the day before it: "29 | abr 2027"), sticky
+//     at the left edge and after the "now" pill; a tick label that would
+//     touch one gives way.
 //
 // Label collisions are resolved here, where the screen positions are known
 // (the axis only knows beats): an emphasised pill wins over any label it
@@ -30,6 +35,18 @@ const TICK_LABEL_SIZE = 12;
 // ~6.6px): estimates only, no canvas measuring (deterministic, headless).
 export const RULER_TICK_CHAR_PX = 7.2;
 const PILL_HEIGHT = 18;
+// Group labels drawn in the single row this frame (their extents, for the
+// tick labels to give way): fixed scratch, no allocation per frame.
+const GROUP_CAP = 64;
+const groupLefts = new Float64Array(GROUP_CAP);
+const groupRights = new Float64Array(GROUP_CAP);
+let groupCount = 0;
+// The group chip in the single row: its height, the text's inner pad, and
+// the room kept clear before it (so a day number never reads as its date).
+const GROUP_CHIP_H = 20;
+const GROUP_CHIP_PAD = 6;
+const GROUP_CHIP_LEAD = 4;
+const GROUP_CLEARANCE = 8;
 const PILL_PAD_X = 7;
 const LABEL_GAP = 4;
 const LEFT_LABEL_OFFSET = 5;
@@ -43,6 +60,10 @@ export function rulerTierSplit(rulerHeight: number): number {
 /** Top y of the day / tick labels (the lower tier of a two-tier ruler). */
 export function rulerTickLabelY(presentation: PlaylistPresentation): number {
   const rulerHeight = presentation.metrics.rulerHeight;
+  // One row: centred in the ruler.
+  if (presentation.metrics.rulerSingleRow === true) {
+    return Math.round((rulerHeight - TICK_LABEL_SIZE - 3) / 2);
+  }
   if (!hasGroups(presentation)) return 11;
   const tierTop = rulerTierSplit(rulerHeight);
   return tierTop + Math.round((rulerHeight - tierTop - TICK_LABEL_SIZE) / 2) - 2;
@@ -148,7 +169,8 @@ export function drawRulerChrome(
     .rect(0, 0, layout.trackHeaderRect.width, rulerHeight)
     .fill({ color: COLORS.panel });
 
-  const twoTier = hasGroups(presentation);
+  const singleRow = metrics.rulerSingleRow === true;
+  const twoTier = !singleRow && hasGroups(presentation);
   const tierTop = twoTier ? rulerTierSplit(rulerHeight) : 0;
   const bands = presentation.rulerBands;
 
@@ -209,6 +231,48 @@ export function drawRulerChrome(
     break;
   }
 
+  // One row: the group labels next, sticky at the left edge (pushed out by
+  // the next group), after the pill when they would touch it; a hairline
+  // marks where each group starts.
+  groupCount = 0;
+  if (singleRow) {
+    for (let i = 0; i < bands.length; i += 1) {
+      const band = bands[i]!;
+      if (band.kind !== "group") continue;
+      if (band.x1 <= left || band.x0 >= right) continue;
+      if (band.x0 >= left) {
+        graphics
+          .moveTo(Math.round(band.x0) + 0.5, 6)
+          .lineTo(Math.round(band.x0) + 0.5, rulerHeight - 6)
+          .stroke({ color: COLORS.gridMajor, width: 1 });
+      }
+      const label = band.label;
+      if (!label) continue;
+      // The chip: sticky just inside the group's start, pushed out by the
+      // next group, after the pill when it would touch it.
+      const width = label.length * GROUP_CHAR_PX + GROUP_CHIP_PAD * 2;
+      let x = Math.max(band.x0, left) + GROUP_CHIP_LEAD;
+      if (x < pillRight + LABEL_GAP && x + width > pillLeft - LABEL_GAP) x = pillRight + LABEL_GAP;
+      if (x + width > band.x1 - GROUP_CHIP_LEAD) x = band.x1 - GROUP_CHIP_LEAD - width;
+      if (x < band.x0 + 2 || x < left + 2) continue;
+      if (x < pillRight + LABEL_GAP && x + width > pillLeft - LABEL_GAP) continue;
+      const chipTop = labelY + Math.round((TICK_LABEL_SIZE + 3 - GROUP_CHIP_H) / 2);
+      graphics
+        .roundRect(x, chipTop, width, GROUP_CHIP_H, 6)
+        .fill({ color: COLORS.text, alpha: 0.08 });
+      addText(textLayer, label, x + GROUP_CHIP_PAD, labelY - 1, {
+        color: COLORS.text,
+        size: GROUP_LABEL_SIZE,
+        weight: "700",
+      });
+      if (groupCount < GROUP_CAP) {
+        groupLefts[groupCount] = x;
+        groupRights[groupCount] = x + width;
+        groupCount += 1;
+      }
+    }
+  }
+
   // Pass 2: marks + labels. A label is skipped when it would reach into the
   // header corner or touch the pill.
   for (let i = 0; i < ticks.length; i += 1) {
@@ -230,6 +294,7 @@ export function drawRulerChrome(
       ) {
         continue;
       }
+      if (touchesGroupLabel()) continue;
     }
     drawTickLabel(graphics, textLayer, tick, label, labelY);
   }
@@ -242,6 +307,15 @@ export function drawRulerChrome(
     .moveTo(left - 0.5, 0)
     .lineTo(left - 0.5, layout.sceneRect.height)
     .stroke({ color: COLORS.rowLine, width: 1 });
+}
+
+// Whether the tick label at extentLeft..extentRight touches a group label
+// drawn in the single row this frame.
+function touchesGroupLabel(): boolean {
+  for (let g = 0; g < groupCount; g += 1) {
+    if (extentRight > groupLefts[g]! - GROUP_CLEARANCE && extentLeft < groupRights[g]! + LABEL_GAP) return true;
+  }
+  return false;
 }
 
 export function drawTimelineGrid(

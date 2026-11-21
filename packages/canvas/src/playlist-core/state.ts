@@ -48,6 +48,7 @@ import {
   type PlaylistTimeAxis,
   type PlaylistToolId,
   type PlaylistTooltip,
+  type PlaylistTrack,
 } from "./types";
 import type { PlaylistPresentation } from "./presentation";
 import { createPlaylistPresentation } from "./presentation";
@@ -868,6 +869,15 @@ export class PlaylistCore {
     // The presentation is keyed by state: the geometry changed under it.
     this.presentationCache = null;
     return true;
+  }
+
+  /**
+   * Re-arrange the rows in ONE undo step: `tracks` become the rows (in
+   * order) and each clip named in `placement` goes to its row (clip id →
+   * track id); the lanes settle after.
+   */
+  arrangeTracks(tracks: PlaylistTrack[], placement: Readonly<Record<string, string>>): void {
+    this.dispatch({ type: "ARRANGE_TRACKS", tracks, placement });
   }
 
   reorderTrack(fromIndex: number, toIndex: number): void {

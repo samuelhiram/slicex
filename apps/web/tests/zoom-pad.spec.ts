@@ -7,7 +7,7 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { FinancialDocument } from "@slicex/core";
-import { createPlaylistCore, type PlaylistCore } from "@slicex/canvas";
+import { createPlaylistCore, getTrackLaneHeight, type PlaylistCore } from "@slicex/canvas";
 import { ZoomPad, zoomKeepingLeft } from "../src/finance/components/ZoomPad";
 import { TimelineCell } from "../src/finance/components/TimelineCell";
 import {
@@ -158,12 +158,13 @@ describe("Restaurar (↺) and 'Plano de eventos'", () => {
     expect(reset.disabled).toBe(true);
   });
 
-  it("the lane's cell says 'Plano de eventos'; 'Alto normal' puts every line back, in one click", () => {
+  it("the lane's cell: buttons only (named 'Plano de eventos' for screen readers); 'Alto normal' puts every line back", () => {
     const core = makeCore();
     mount(core);
     const cell = container!.querySelector<HTMLElement>(".fin-lanecell")!;
     expect(cell.getAttribute("aria-label")).toBe("Plano de eventos");
-    expect(cell.textContent).toContain("Plano de eventos");
+    // No visible title (2026-11-20).
+    expect(cell.textContent).not.toContain("Plano de eventos");
     // Icon only: its name is in aria-label (and the tooltip).
     const normal = cell.querySelector<HTMLButtonElement>('button[aria-label="Todas las líneas a su alto normal"]')!;
     expect(normal.textContent).toBe("");
@@ -180,6 +181,52 @@ describe("Restaurar (↺) and 'Plano de eventos'", () => {
       core.undo();
     });
     expect(core.metrics.trackHeight).toBe(50);
+  });
+});
+
+describe("the lines' height never goes under 38 px", () => {
+  it("the arrows, a drag, the core and a saved plan all stop at 38", () => {
+    const core = makeCore();
+    const pad = mount(core);
+    expect(core.metrics.trackMinHeight).toBe(38);
+    for (let i = 0; i < 20; i += 1) press(pad, "ArrowDown");
+    expect(core.metrics.trackHeight).toBe(38);
+    act(() => core.setAllTrackHeights(10));
+    expect(core.metrics.trackHeight).toBe(38);
+    // A row's own resize stops there too.
+    act(() => core.setTrackHeight(0, 12));
+    expect(getTrackLaneHeight(core.getState().tracks[0]!, core.metrics)).toBe(38);
+    // A saved plan with a smaller height opens at 38.
+    const next = createPlaylistCore(createFinancialPlaylistState(DOC, { ...trackLayoutOf(core.getState(), () => true), rowHeight: 20 }), {
+      metrics: FINANCE_PLAYLIST_METRICS,
+      stretchEnabled: false,
+    });
+    expect(next.metrics.trackHeight).toBe(38);
+  });
+});
+
+describe("'Compactar' in 'Plano de eventos'", () => {
+  it("puts every line at half the normal height in one click (one undo step), off once there", () => {
+    const core = makeCore();
+    mount(core);
+    const cell = container!.querySelector<HTMLElement>(".fin-lanecell")!;
+    const compact = cell.querySelector<HTMLButtonElement>('button[aria-label="Compactar todas las líneas"]')!;
+    // Icon only: its name is in aria-label (and the tooltip).
+    expect(compact.textContent).toBe("");
+    expect(compact.title).toContain(`${NORMAL / 2} px`);
+    expect(compact.disabled).toBe(false);
+    click(compact);
+    expect(core.metrics.trackHeight).toBe(NORMAL / 2);
+    expect(core.getState().tracks.every((track) => (track.height ?? NORMAL / 2) === NORMAL / 2)).toBe(true);
+    expect(compact.disabled).toBe(true);
+    // "Alto normal" brings them back; and compact again is one undo away.
+    const normal = cell.querySelector<HTMLButtonElement>('button[aria-label="Todas las líneas a su alto normal"]')!;
+    expect(normal.disabled).toBe(false);
+    act(() => {
+      core.undo();
+    });
+    expect(core.metrics.trackHeight).toBe(NORMAL);
+    expect(compact.disabled).toBe(false);
   });
 });
 

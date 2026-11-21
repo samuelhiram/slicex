@@ -32,6 +32,7 @@ import type {
   PlaylistTrackMeta,
 } from "@slicex/canvas";
 import type { FinancialTrackLayout } from "./mapping";
+import type { OverviewView } from "./visuals";
 
 /** A what-if shown on the money lane without touching the plan. */
 export type FinancialPreview =
@@ -201,6 +202,11 @@ export interface FinancialBridgeApi {
   getPreviewEffect(): PreviewEffect | null;
   /** Another future to draw as a ghost under the current curve; null clears. */
   setComparison(doc: FinancialDocument | null): void;
+  /** "Ordenar por tipo": each item on its own line, by kind, from the top. One undo step; false when already so. */
+  arrangeByKind(): boolean;
+  isArrangedByKind(): boolean;
+  /** What the money lane shows besides the cash curve, and its colours (the chart's settings). */
+  setOverviewView(view: OverviewView): void;
   getComparison(): FinancialDocument | null;
   /** Morph the lane from `series` to the current curve (~320 ms). */
   animateFrom(series: PlaylistStepSeries | null): void;

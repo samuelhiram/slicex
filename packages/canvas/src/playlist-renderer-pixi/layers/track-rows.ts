@@ -1,7 +1,11 @@
-// Track header panel (rows on the left): colour dot, name, host subtitle +
-// meter, mute / solo / lock icon toggles, reorder grip, hairlines. Lives on
+// Track header panel (rows on the left): a neutral "play" glyph, name, host
+// subtitle + meter, mute / solo / lock icon toggles, reorder grip, hairlines. Lives on
 // the global chromeGraphics layer (outside the timeline mask) so headers
 // stay legible while clips slide.
+//
+// No colour of its own (2026-11-20): a coloured dot read as "this row takes
+// one kind" (green = incomes only). A row holds anything, so its mark is the
+// same quiet glyph on every row, and the name is medium weight, not bold.
 //
 // Icons instead of "M S L" letters: mute = eye (crossed out while muted),
 // solo = focus ring, lock = padlock. Inactive toggles are quiet glyphs;
@@ -14,7 +18,7 @@ import {
   type PlaylistTrackRowPresentation,
 } from "../../playlist-core";
 import { truncateMiddle } from "../clip-node-registry";
-import { COLORS, parseHexColor } from "../palette";
+import { COLORS } from "../palette";
 import { addText } from "../text-pool";
 
 // Host-provided header extras (PlaylistRendererCallbacks.getTrackMeta).
@@ -55,8 +59,12 @@ export function createTrackMetaSource(
 const NAME_X = 30;
 const NAME_SIZE = 14;
 const NAME_CHAR_PX = 8.2;
-const DOT_X = 17;
-const DOT_RADIUS = 4;
+// The row's glyph: a small "play" triangle centred on the name's line
+// (where the colour dot used to be), round corners from the stroke join.
+const GLYPH_X = 14.5;
+const GLYPH_W = 7.5;
+const GLYPH_HALF_H = 4.5;
+const GLYPH_CENTER_Y = 8;
 const SUBTITLE_Y = 28;
 const SUBTITLE_SIZE = 12;
 const SUBTITLE_CHAR_PX = 6.8;
@@ -239,6 +247,20 @@ function drawLockIcon(graphics: Graphics, rect: ButtonRect, locked: boolean): vo
     .stroke({ color, width: 1.3 });
 }
 
+// The row's "play" glyph — the same on every row, in the inactive-glyph
+// tone (dimmer on a muted row).
+function drawRowGlyph(graphics: Graphics, top: number, muted: boolean): void {
+  const cy = top + GLYPH_CENTER_Y;
+  const alpha = muted ? 0.5 : 1;
+  graphics
+    .moveTo(GLYPH_X, cy - GLYPH_HALF_H)
+    .lineTo(GLYPH_X + GLYPH_W, cy)
+    .lineTo(GLYPH_X, cy + GLYPH_HALF_H)
+    .closePath()
+    .fill({ color: COLORS.textSubtle, alpha })
+    .stroke({ color: COLORS.textSubtle, alpha, width: 1.5, join: "round" });
+}
+
 // Six-dot drag grip.
 function drawReorderHandle(graphics: Graphics, rect: ButtonRect): void {
   const cx = rect.x + rect.width / 2;
@@ -266,7 +288,6 @@ export function drawTrackRows(
   const hover = presentation.state.hover;
   const hoveredTrackId = hover?.kind === "track" ? hover.trackId : null;
   for (const row of presentation.trackRows) {
-    const color = parseHexColor(row.track.color, COLORS.textMuted);
     const muted = row.track.muted === true;
     const soloed = row.track.soloed === true;
     const locked = row.track.locked === true;
@@ -302,9 +323,7 @@ export function drawTrackRows(
       )
       .stroke({ color: COLORS.rowLine, width: 1 });
 
-    graphics
-      .circle(DOT_X, row.rowRect.y + row.titleY + 8, DOT_RADIUS)
-      .fill({ color, alpha: muted ? 0.35 : 1 });
+    drawRowGlyph(graphics, row.rowRect.y + row.titleY, muted);
     // Controls appear where they act: on the hovered / selected row, or
     // when their state is on (a muted row keeps its eye so you see why).
     // The hit areas stay put, so hovering reveals them before the click.
@@ -333,9 +352,11 @@ export function drawTrackRows(
       NAME_X,
       row.rowRect.y + row.titleY,
       {
-        color: muted ? COLORS.textMuted : COLORS.text,
+        // Medium weight: the rows are the frame, the cards the content.
+        // An empty row past the plan's end reads quieter still.
+        color: muted || row.isVirtual ? COLORS.textMuted : COLORS.text,
         size: NAME_SIZE,
-        weight: row.isVirtual ? "500" : "600",
+        weight: "500",
       },
     );
 

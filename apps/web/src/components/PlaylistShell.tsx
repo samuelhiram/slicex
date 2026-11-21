@@ -45,7 +45,7 @@ import { Futures } from "../finance/futures";
 import { loadPlan, savePlan } from "../finance/persistence";
 import { parseStatement } from "../finance/statement";
 import { CommandBar } from "../finance/components/CommandBar";
-import { FuturesMenu, FuturesPeekChip } from "../finance/components/FuturesMenu";
+import { FuturesMenu } from "../finance/components/FuturesMenu";
 import { OnboardingDialog, WelcomeBanner } from "../finance/components/Onboarding";
 import { RecDialog } from "../finance/components/RecDialog";
 import { MovementCaptureDialog, type CaptureValues } from "../finance/components/MovementCaptureDialog";
@@ -68,6 +68,8 @@ import { ValleyCard } from "../finance/components/ValleyCard";
 import { NavHelp } from "../finance/components/NavControls";
 import { ZoomPad } from "../finance/components/ZoomPad";
 import { TimelineCell } from "../finance/components/TimelineCell";
+import { ChartSettingsButton, ChartSettingsDialog } from "../finance/components/ChartSettings";
+import { getChartSettings, overviewViewOf, subscribeChartSettings } from "../finance/chart-settings";
 import { FINANCE_DEFAULT_PX_PER_DAY, createFinancialPlaylistState } from "../finance/mapping";
 import {
   displayRowLabel,
@@ -86,7 +88,6 @@ import {
 import { createCalendarTimeAxis } from "../finance/time-axis";
 import {
   FinancialSummaryBar,
-  FutureStrip,
   NEW_ITEM_OPTIONS,
   revealClips,
   type PlanMenuActions,
@@ -332,26 +333,6 @@ interface MenuItemDef {
   autoFocus?: boolean;
 }
 
-function pickColorThen(
-  current: string,
-  apply: (color: string) => void,
-): void {
-  if (typeof document === "undefined") return;
-  const input = document.createElement("input");
-  input.type = "color";
-  input.value = current;
-  input.style.position = "fixed";
-  input.style.opacity = "0";
-  input.style.pointerEvents = "none";
-  document.body.appendChild(input);
-  input.addEventListener("change", () => {
-    apply(input.value);
-    input.remove();
-  });
-  input.addEventListener("blur", () => input.remove(), { once: true });
-  input.click();
-}
-
 // What the context menus can ask of the shell (financial actions).
 interface MenuActions {
   /**
@@ -509,13 +490,6 @@ function buildTrackMenuItems(
             name === ROW_NAME_ONE || name === ROW_NAME_MANY ? "" : name,
           );
         }
-        close();
-      },
-    },
-    {
-      label: "Color de la línea de evento…",
-      onSelect: () => {
-        pickColorThen(track.color ?? "#888888", (color) => core.recolorTrack(trackIndex, color));
         close();
       },
     },
@@ -1451,7 +1425,7 @@ export function PlaylistShell() {
   const [peek, setPeek] = React.useState<{
     label: string;
     effect: PreviewEffect | null;
-    /** What holds it: "q" / "a" (keys) or "button" ("Asomarte"). */
+    /** What holds it: "q" / "a" (keys) or "menu" ("Ver mi año sin esto"). */
     holder?: string;
   } | null>(null);
   const [onboarding, setOnboarding] = React.useState<"banner" | "dialog" | null>(null);
@@ -1460,6 +1434,9 @@ export function PlaylistShell() {
   // UX-49: the Rec banner's × is "Después" (hides it; Rec stays pending).
   const [recBanner, setRecBanner] = React.useState(true);
   const recReviewRef = React.useRef<HTMLButtonElement | null>(null);
+  // "Ajustes del gráfico": open = the gear's box (the dialog opens under it).
+  const [chartSettings, setChartSettingsAt] = React.useState<{ left: number; bottom: number } | null>(null);
+  const chartGearRef = React.useRef<HTMLButtonElement | null>(null);
   // UX-47: where the open analysis rail renders (beside the stage).
   const [sideSlot, setSideSlot] = React.useState<HTMLDivElement | null>(null);
   // `returnTo`: the card editor it was opened from, reopened on close (UX-51).
@@ -1530,6 +1507,9 @@ export function PlaylistShell() {
         clipMinWidthPx: (clip, height, titleHeight) => financial?.clipMinWidth(clip.id, height, titleHeight) ?? 0,
       });
       const bridgeInstance = new FinancialBridge(instance, doc);
+      // The chart as the person left it (all extras off by default), from
+      // the first frame.
+      bridgeInstance.setOverviewView(overviewViewOf(getChartSettings()));
       financial = bridgeInstance;
       // The core laid its lanes out before the bridge could say how wide
       // each one-time card is drawn: again now, so none covers another.
@@ -1818,13 +1798,19 @@ export function PlaylistShell() {
       onboarding === "dialog" ||
       recOpen ||
       statement !== null ||
-      capture !== null) &&
+      capture !== null ||
+      chartSettings !== null) &&
     bridge !== null;
 
-  // Peeks — hold Q, hold A, or the "Asomarte" button (UX-20: the same
-  // what-if without a key held): whoever starts it, the lane morphs to the
-  // other future and back. `peekHolderRef` = what holds it ("q" / "a" /
-  // "button"); null = no peek.
+  // The chart's settings follow every change (the dialog applies them live).
+  React.useEffect(() => {
+    if (!bridge) return;
+    return subscribeChartSettings(() => bridge.setOverviewView(overviewViewOf(getChartSettings())));
+  }, [bridge]);
+
+  // Peeks — hold Q, hold A, or the object's "Ver mi año sin esto": whoever
+  // starts it, the lane morphs to the other future and back. `peekHolderRef`
+  // = what holds it ("q" / "a" / "menu"); null = no peek.
   const peekHolderRef = React.useRef<string | null>(null);
   const startPeek = React.useCallback(
     (holder: string, label: string, preview: Parameters<FinancialBridgeApi["setPreview"]>[0]) => {
@@ -1845,16 +1831,6 @@ export function PlaylistShell() {
     bridge.animateFrom(before);
     setPeek(null);
   }, [bridge]);
-  /** "Asomarte" (FuturesPeekChip): like holding Q, without a key. */
-  const peekFuture = React.useCallback(
-    (id: string) => {
-      const branch = futures?.list().find((candidate) => candidate.id === id);
-      const doc = futures?.docOf(id) ?? null;
-      if (!branch || !doc || peekHolderRef.current !== null) return;
-      startPeek("button", `Futuro: ${branch.name}`, { kind: "document", doc });
-    },
-    [futures, startPeek],
-  );
   // UX-28: "Ver mi año sin esto" from the object's menu (or a long-press):
   // the hold-A what-if without a key held. It stays until "Listo" or Esc;
   // the plan is never touched (a preview).
@@ -1954,7 +1930,7 @@ export function PlaylistShell() {
     };
     const onKeyUp = (event: KeyboardEvent) => {
       const holder = peekHolderRef.current;
-      if (holder !== null && holder !== "button" && event.key.toLowerCase() === holder) endPeek();
+      if (holder !== null && event.key.toLowerCase() === holder) endPeek();
     };
     const onPaste = (event: ClipboardEvent) => {
       if (editorOpen || typing(event.target)) return;
@@ -2175,8 +2151,6 @@ export function PlaylistShell() {
           }
         />
       ) : null}
-      {/* UX-19: outside the main plan, say so until the person goes back. */}
-      {futures ? <FutureStrip futures={futures} /> : null}
       {/* UX-56: DOM order = visual order. What sits over the top-left of
           the canvas (navigation, the day's readout, Análisis) comes before
           the canvas host; the inspector (bottom right) and the banners
@@ -2190,16 +2164,28 @@ export function PlaylistShell() {
       <div className="playlist-shell__stage" inert={editorOpen}>
         {/* The table's corner: drag it — ↔ zoom, ↕ the lines' height; ↺
             back to the normal sizes and zoom. Under it, the money lane's
-            cell: "Plano de eventos" and the timeline's own buttons. */}
+            cell: the timeline's own buttons (no visible title). */}
         {core ? (
           <>
             <ZoomPad core={core} normalHeight={metrics.trackHeight} defaultPxPerBeat={FINANCE_DEFAULT_PX_PER_DAY} />
             <TimelineCell
               core={core}
+              bridge={bridge}
               normalHeight={metrics.trackHeight}
               defaultPxPerBeat={FINANCE_DEFAULT_PX_PER_DAY}
             />
           </>
+        ) : null}
+        {/* The balance chart's settings: a gear in its top-left corner. */}
+        {bridge ? (
+          <ChartSettingsButton
+            buttonRef={chartGearRef}
+            open={chartSettings !== null}
+            onOpen={() => {
+              const box = chartGearRef.current?.getBoundingClientRect();
+              setChartSettingsAt(box ? { left: box.left, bottom: box.bottom } : { left: 16, bottom: 16 });
+            }}
+          />
         ) : null}
         {/* UX-04: the keys come first in its name (the gestures are in
             "Cómo moverte"); a navigation key marks the next day change as
@@ -2270,17 +2256,6 @@ export function PlaylistShell() {
               </button>
             ) : null}
           </div>
-        ) : null}
-        {/* UX-20: the other future in figures + "Asomarte" (= hold Q). */}
-        {bridge && futures && !commandOpen ? (
-          <FuturesPeekChip
-            bridge={bridge}
-            futures={futures}
-            peeking={peek?.holder === "button"}
-            busy={peek !== null && peek.holder !== "button"}
-            onPeek={peekFuture}
-            onEndPeek={endPeek}
-          />
         ) : null}
         <PlaylistInspector core={core} fallbackFocus={getHost} />
         <div className="fin-banners">
@@ -2464,6 +2439,13 @@ export function PlaylistShell() {
           currentCash={recCurrentCash}
           resultCash={recResult}
           fallbackFocus={() => recReviewRef.current ?? hostRef.current}
+        />
+      ) : null}
+      {chartSettings && bridge ? (
+        <ChartSettingsDialog
+          anchor={chartSettings}
+          onClose={() => setChartSettingsAt(null)}
+          fallbackFocus={() => chartGearRef.current ?? getHost()}
         />
       ) : null}
       {capture && bridge && futures ? (

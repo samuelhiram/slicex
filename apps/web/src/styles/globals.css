@@ -86,6 +86,15 @@ body,
   --fin-negative-text: #b91c1c;
   --fin-warning-text: #92400e;
 
+  /* "Ajustes del gráfico": each element's theme colour ("Automático"),
+     the canvas palette's (palette.ts: tonePositive, toneWarning,
+     overviewSecondary, overviewBaseline) — change them together. */
+  --chart-cash: #15803d;
+  --chart-minimums: #b45309;
+  --chart-debt: #6b6b76;
+  --chart-reserve: #b45309;
+  --chart-alternate: #7d7d88;
+
   /* UX-audit: H — placeholders read as hints, not values, and still meet
      4.5:1 on every field surface (white 5.5, --surface-2 5.0, --surface-3
      4.6). One focus ring for every control, fields included (UX-63):
@@ -159,6 +168,12 @@ body,
   --fin-warning-soft: rgba(245, 165, 36, 0.13);
   --fin-negative-text: var(--fin-negative);
   --fin-warning-text: var(--fin-warning);
+
+  --chart-cash: #3ccf7f;
+  --chart-minimums: #f5a524;
+  --chart-debt: #8a8a95;
+  --chart-reserve: #f5a524;
+  --chart-alternate: #9a9aa5;
 
   /* UX-audit: H — 6.3:1 on --surface, 5.8 on --surface-2, 5.1 on --surface-3. */
   --placeholder: #9696a1;
@@ -1794,59 +1809,6 @@ button.fin-summary__chip[aria-disabled="true"]:hover {
 
 .fin-inline-error__hint {
   color: var(--muted);
-}
-
-/* Outside the main plan (UX-19): a persistent strip under the header. */
-.fin-branch-strip {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 10px;
-  min-height: 40px;
-  padding: 4px 6px 4px 14px;
-  border-radius: var(--radius-card);
-  background: var(--accent-soft);
-  box-shadow: var(--shadow-card);
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.fin-branch-strip svg {
-  flex: none;
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: var(--text);
-  stroke-width: 1.4;
-  stroke-linecap: round;
-}
-
-.fin-branch-strip__text {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin: 0;
-}
-
-.fin-branch-strip .fin-button {
-  flex: none;
-  height: 30px;
-}
-
-/* Narrow: the name and "Volver" stay; the explanation gives way. */
-@media (max-width: 720px) {
-  .fin-branch-strip__note {
-    display: none;
-  }
-
-  .fin-branch-strip {
-    flex-wrap: wrap;
-    row-gap: 4px;
-  }
-
-  .fin-branch-strip__text {
-    flex-basis: 140px;
-  }
 }
 
 /* "Nuevo" menu */
@@ -3774,7 +3736,7 @@ kbd {
   line-height: 1.5;
 }
 
-/* UX-audit: C — futures in figures (UX-20) and the "Asomarte" chip. */
+/* UX-audit: C — futures in figures (UX-20). */
 .fin-futures__menu {
   max-width: min(420px, calc(100vw - 16px));
 }
@@ -3793,71 +3755,6 @@ kbd {
 .fin-futures__delta {
   color: var(--text);
   font-size: 12px;
-}
-
-.fin-compare {
-  position: absolute;
-  /* Inside the money lane, top left: where the curves it compares are. */
-  top: calc(var(--pl-ruler-h, 38px) + 6px);
-  left: calc(var(--pl-header-w, 216px) + 8px);
-  z-index: 7;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: calc(100% - var(--pl-header-w, 216px) - 24px);
-  padding: 4px 4px 4px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-full);
-  background: var(--raised);
-  box-shadow: var(--shadow-card);
-  color: var(--text);
-  font-size: 12px;
-}
-
-.fin-compare__text {
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.fin-compare__peek {
-  flex: none;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-full);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.fin-compare__peek[aria-pressed="true"] {
-  border-color: var(--ink);
-  background: var(--ink);
-  color: var(--on-ink);
-}
-
-.fin-compare__peek:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-@media (pointer: coarse) {
-  .fin-compare__peek {
-    min-width: 44px;
-    height: 44px;
-  }
-}
-
-@media (max-width: 720px) {
-  .fin-compare {
-    left: 8px;
-    max-width: calc(100% - 16px);
-  }
 }
 
 /* "Escribir…" entry of the Nuevo menu */
@@ -8197,10 +8094,55 @@ input[type="number"]::-webkit-outer-spin-button {
 }
 
 .playlist-shell--finance .fin-summary .fin-summary__actions .fin-icon-button,
-.playlist-shell--finance .fin-summary .fin-futures__trigger {
+.playlist-shell--finance .fin-summary .fin-futures__trigger[data-quiet="true"] {
   width: var(--header-control-h);
   min-width: var(--header-control-h);
   justify-content: center;
+}
+
+/* Futures: a 40 px square only while it is the icon alone (the main plan,
+   no other future). With more futures it says where you are — the icon,
+   the active future's name (cut with "…") and how many there are — at its
+   own width: squeezed into the square, the name vanished and the count
+   was crammed against the icon. */
+.playlist-shell--finance .fin-summary .fin-futures__trigger:not([data-quiet="true"]) {
+  width: auto;
+  max-width: 220px;
+  padding: 0 9px 0 12px;
+  gap: 8px;
+}
+
+.playlist-shell--finance .fin-summary .fin-futures__name {
+  min-width: 0;
+  font-weight: 600;
+}
+
+.playlist-shell--finance .fin-summary .fin-futures__count {
+  flex: none;
+  box-sizing: border-box;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  line-height: 22px;
+}
+
+/* Narrow headers: the name gives way (it stays the accessible name, and
+   the strip under the header says it in full); icon + count keep their
+   own room, never a cramped square. */
+@media (max-width: 1429.98px) {
+  .playlist-shell--finance .fin-summary .fin-futures__trigger:not([data-quiet="true"]) {
+    padding: 0 9px 0 11px;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-futures__trigger:not([data-quiet="true"]) .fin-futures__name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 /* The tools: the group 40 px, its buttons centred in it. */
@@ -8319,8 +8261,8 @@ input[type="number"]::-webkit-outer-spin-button {
   stroke-linejoin: round;
 }
 
-/* The money lane's header cell (TimelineCell): "Plano de eventos" and the
-   timeline's own buttons, under the corner pad. */
+/* The money lane's header cell (TimelineCell): the timeline's own buttons,
+   under the corner pad (no visible title). */
 .fin-lanecell {
   position: absolute;
   top: var(--pl-ruler-h, 52px);
@@ -8335,18 +8277,6 @@ input[type="number"]::-webkit-outer-spin-button {
   padding: 0 12px 0 16px;
   box-sizing: border-box;
   pointer-events: none;
-}
-
-.fin-lanecell__title {
-  margin: 0;
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 18px;
-}
-
-.fin-lanecell[data-compact] .fin-lanecell__title {
-  display: none;
 }
 
 .fin-lanecell__actions {
@@ -8585,4 +8515,246 @@ input[type="number"]::-webkit-outer-spin-button {
   place-items: center;
   width: 16px;
   height: 16px;
+}
+
+/* "Ajustes del gráfico" (ChartSettings.tsx): a gear built into the balance
+   chart's top-left corner — quiet, over the chart, never over its labels
+   (the canvas keeps that corner clear: CHART_GEAR_CORNER). */
+.fin-chart-gear {
+  position: absolute;
+  top: calc(var(--pl-ruler-h, 52px) + 6px);
+  left: calc(var(--pl-header-w, 216px) + 6px);
+  z-index: 7;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.fin-chart-gear svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+
+.fin-chart-gear:hover,
+.fin-chart-gear[aria-expanded="true"] {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.fin-chart-gear:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* The dialog opens under the gear over a faint veil (no blur): the chart
+   behind it shows each change as it happens. */
+.fin-chartset__veil {
+  background: color-mix(in srgb, var(--page-bg) 30%, transparent);
+  backdrop-filter: none;
+}
+
+.fin-chartset {
+  width: min(520px, calc(100vw - 16px));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+}
+
+.fin-chartset__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.fin-chartset__body {
+  padding: 0 22px 8px;
+}
+
+.fin-chartset__intro {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.fin-chartset__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fin-chartset__row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 8px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.fin-chartset__row:first-child {
+  border-top: 0;
+}
+
+/* The swatches go under the text, aligned with it. */
+.fin-chartset__row .fin-swatches {
+  grid-column: 2;
+}
+
+.fin-chartset__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fin-chartset__name {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fin-chartset__row:not([data-on]) .fin-chartset__name {
+  color: var(--muted);
+}
+
+.fin-chartset__desc {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* "Caja" is always on: a dot where the others have their switch. */
+.fin-chartset__always {
+  justify-self: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--chart-cash);
+}
+
+.fin-chartset__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 22px 18px;
+  border-top: 1px solid var(--line);
+}
+
+/* A switch: role="switch", the knob to the right when on. */
+.fin-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: var(--line-strong);
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.fin-switch[aria-checked="true"] {
+  background: var(--accent);
+}
+
+.fin-switch__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 140ms ease;
+}
+
+.fin-switch[aria-checked="true"] .fin-switch__knob {
+  transform: translateX(16px);
+}
+
+.fin-switch:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Colour swatches: native radios (arrow keys move between them), drawn as
+   dots; the chosen one ringed. "Automático" (the theme's) carries a slash. */
+.fin-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fin-swatches[aria-disabled="true"] {
+  opacity: 0.4;
+}
+
+.fin-swatch {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.fin-swatches[aria-disabled="true"] .fin-swatch {
+  cursor: default;
+}
+
+.fin-swatch__input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.fin-swatch__dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+  pointer-events: none;
+}
+
+.fin-swatch[data-auto="true"] .fin-swatch__dot {
+  background-image: linear-gradient(135deg, transparent 45%, var(--raised) 45%, var(--raised) 55%, transparent 55%) !important;
+}
+
+.fin-swatch:has(.fin-swatch__input:checked) {
+  box-shadow: 0 0 0 2px var(--text);
+}
+
+.fin-swatch:has(.fin-swatch__input:focus-visible) {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .fin-chart-gear {
+    width: 36px;
+    height: 36px;
+  }
+
+  .fin-swatch {
+    width: 36px;
+    height: 36px;
+  }
 }

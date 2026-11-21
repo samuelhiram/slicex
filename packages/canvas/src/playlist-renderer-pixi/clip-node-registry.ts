@@ -94,8 +94,6 @@ const TAB_W = 30;
 // The tab reaches TAB_PAD_TOP above the dates it sits beside.
 const TAB_PAD_TOP = 4;
 const TAB_INNER_RADIUS = 10;
-// Between the corner tab and the dates tag.
-const TAB_DATE_GAP = 8;
 // The third row's margin to the card's bottom edge: tight cards, roomy ones.
 const ROW_BOTTOM_TIGHT = 2;
 const ROW_BOTTOM_ROOMY = 4;
@@ -109,12 +107,20 @@ const PILL_H = 22;
 const PILL_PAD_R = 12;
 // The text boxes' heights in the pill (13 / 12 px Inter).
 const PILL_TITLE_TEXT_H = 17;
+// A short card's COMPACT label (2026-11-20): smaller type, so the bar under
+// it keeps the height — the name at 12 px, the amount at 11; their Text
+// height (font + halo) for centring in the row.
+const COMPACT_TITLE_FONT_SIZE = 12;
+const COMPACT_DETAIL_FONT_SIZE = 11;
+const COMPACT_TITLE_TEXT_H = 16;
 // The item's icon (providers.getClipIcon), first in the pill: a 24-unit
-// stroke glyph drawn ICON_PX wide in the clip's colour, then ICON_GAP to
-// the name.
-const ICON_PX = 14;
+// stroke glyph in the clip's colour, then ICON_GAP to the name. As big as
+// the card lets it be, up to ICON_MAX (never under ICON_MIN): the pill grows
+// to hold it with ICON_PILL_PAD above and below.
+const ICON_MAX = 21;
+const ICON_MIN = 12;
+const ICON_PILL_PAD = 2;
 const ICON_GAP = 6;
-const ICON_ADVANCE = ICON_PX + ICON_GAP;
 const ICON_GRID = 24;
 const ICON_STROKE = 2;
 // Between the lock button and the dates tag: two things, not one.
@@ -131,15 +137,8 @@ const CHIP_SHADE = 0.08;
 const LOCK_SHADE_FREE = 0.1;
 const LOCK_SHADE_FIXED = 0.18;
 const LOCK_SHADE_HOVER = 0.26;
-// The lock button's width (the corner tab, or the badge beside a short
-// card's text) and the gap to the dates tag after it.
+// The lock button's width: the corner tab, or the badge in a short card's tab.
 const lockButtonW = (beside: boolean): number => (beside ? LOCK_W : TAB_W);
-const lockDateGap = (beside: boolean): number => (beside ? LOCK_DATE_GAP : TAB_DATE_GAP);
-// Px the third row takes with `chars` characters of dates (estimate:
-// layout, never drawing): the lock, then the dates tag.
-const chipPx = (chars: number, beside: boolean): number =>
-  lockButtonW(beside) +
-  (chars > 0 ? lockDateGap(beside) + DATE_PAD * 2 + CAL_ICON + CAL_GAP + chars * DETAIL_CHAR_PX : 0);
 
 interface ClipNode {
   container: Container;
@@ -174,6 +173,8 @@ interface ClipNode {
   detailStart: number;
   // The name's real width (measured once per display string; "": stale).
   labelMeasured: string;
+  // The label's type size last applied (a change re-measures the texts).
+  labelSize: number;
   labelTextWidth: number;
   // The amount's real width (same), for the pill.
   detailMeasured: string;
@@ -193,8 +194,21 @@ interface ClipNode {
   iconSource: PlaylistClipIcon | null;
   iconTint: number;
   iconAdvance: number;
-  // The icon advance the dates' display was cut for.
-  periodAdvance: number;
+  // The icon's size and its pill's height this frame (PILL_H without one).
+  iconSize: number;
+  pillH: number;
+  // Where the dates' display was cut to start (-1: never).
+  periodStart: number;
+  // The pill / tab sits over the card's outline (a folder's tab) or under
+  // it (a one-line pill): its z-order follows the layout.
+  pillAbove: boolean;
+  // A folder's tab: where its dates tag starts (local, before the sticky
+  // shift).
+  tabDateX: number;
+  // ... and where the lock badge sits in it (a short card).
+  tabLockX: number;
+  // The lock is drawn over the tab (a badge in it) or under the outline.
+  lockAbove: boolean;
   detailDisplay: string;
   // Sparkline array the body was last drawn with, as returned by the
   // per-renderer getClipSparkline provider (null = provider absent / returned
@@ -452,23 +466,81 @@ export function clipTextWidthPx(title: string, detail: string | null): number {
 // Between the name and the amount in the pill.
 const TITLE_DETAIL_GAP = 10;
 
-// Where things go on a lock-carrying card of `height`:
-//   ROW_SECOND  two lines: the pill (name + amount) centred in the room
-//               above the bottom line, which holds the lock (the corner
-//               tab) and the dates;
-//   ROW_BESIDE  (a card too short for two lines) one line: the pill, then
-//               the lock badge and the dates.
-const ROW_SECOND = 1;
+// A lock-carrying card is its LABEL above its BAR, at every height
+// (2026-11-20): the label — a tab in the canvas' colour from the card's left
+// edge: the icon, the name in the clip's colour, the amount in grey (and,
+// on a tall card, the dates tag), one line — always OUTSIDE the bar, above
+// it; right of it the timeline shows through. The bar under it runs the
+// card's whole length with ONE thickness end to end (all the height the
+// label leaves): the tint, the accent, the payment marks across it. Where
+// the lock goes:
+//   ROW_FOLDER  a tall card: a tab in the bar's bottom-left corner;
+//   ROW_BESIDE  a shorter card: a badge in the label, after the amount; its
+//               dates are not drawn (the hover card and the inspector say
+//               them) and the label row is the compact one.
+const ROW_FOLDER = 1;
 const ROW_BESIDE = 2;
-const TWO_LINES_MIN_HEIGHT = PILL_H + CHIP_H + ROW_BOTTOM_TIGHT + 4;
+// The label row: tall enough for the 21 px icon with its pads on a tall
+// card; on a short one the compact row (12 px type, a 12 px icon, a 14 px
+// lock), so the bar keeps as much height as it can — never less than
+// FOLDER_BODY_MIN.
+const FOLDER_TAB_H = 26;
+const FOLDER_TAB_MIN = 16;
+const FOLDER_BODY_MIN = 6;
+// The lock badge in the tab: after the amount, then the dates.
+const TAB_LOCK_GAP = 8;
+// Between the amount and the dates tag in the tab; the tab's right pad; its
+// top corners.
+const FOLDER_DATE_GAP = 12;
+const FOLDER_TAB_PAD_R = 10;
+const FOLDER_TAB_RADIUS = 8;
+// The dates tag on the tab: a touch more of the ink than on a card.
+const FOLDER_CHIP_SHADE = 0.12;
+// A TALL card from this height: the full label row (21 px icon, the dates)
+// and the lock as a tab in the bar's corner (a bar of 36 px under the 26 px
+// row). Shorter: the compact label, the lock in it.
+const FOLDER_MIN_HEIGHT = 62;
 
 function rowMode(height: number, _titleHeight: number): number {
-  return height >= TWO_LINES_MIN_HEIGHT ? ROW_SECOND : ROW_BESIDE;
+  return height >= FOLDER_MIN_HEIGHT ? ROW_FOLDER : ROW_BESIDE;
 }
 
-/** No room for the row under the name: it goes beside the text block. */
-function lockBeside(height: number, titleHeight: number): boolean {
-  return rowMode(height, titleHeight) === ROW_BESIDE;
+/** The lock sits in the body's bottom-left corner (else: a badge in the tab). */
+function isFolder(height: number): boolean {
+  return height >= FOLDER_MIN_HEIGHT;
+}
+
+/** The label row's height on a card of `height`: FOLDER_TAB_H on a tall card, the compact FOLDER_TAB_MIN on a short one. */
+function tabHeightFor(height: number): number {
+  return isFolder(height) ? FOLDER_TAB_H : Math.max(1, Math.min(FOLDER_TAB_MIN, height - FOLDER_BODY_MIN));
+}
+
+/** Px of a dates tag with `chars` characters (estimate). */
+function dateTagPx(chars: number): number {
+  return DATE_PAD * 2 + CAL_ICON + CAL_GAP + chars * DETAIL_CHAR_PX;
+}
+
+/** Local x where the dates tag starts in the tab: after the amount, or after the lock badge (lockInside). */
+function tabDateStart(textEnd: number, lockInside: boolean): number {
+  return lockInside ? textEnd + TAB_LOCK_GAP + LOCK_W + LOCK_DATE_GAP : textEnd + FOLDER_DATE_GAP;
+}
+
+/** Local x where the folder's tab ends: icon, name, amount (lock badge), dates tag (estimate). */
+function folderTabEnd(
+  titleChars: number,
+  detailChars: number,
+  periodChars: number,
+  iconAdvance = 0,
+  lockInside = false,
+): number {
+  const textEnd = pillEnd(titleChars, detailChars, iconAdvance) - PILL_PAD_R;
+  const end =
+    periodChars > 0
+      ? tabDateStart(textEnd, lockInside) + dateTagPx(periodChars)
+      : lockInside
+        ? textEnd + TAB_LOCK_GAP + LOCK_W
+        : textEnd;
+  return end + FOLDER_TAB_PAD_R;
 }
 
 /** Local x where the pill (the icon, the name, then its amount) ends (estimate). */
@@ -495,11 +567,6 @@ function lockRowStart(beside: boolean, blockEnd: number): number {
   return beside ? blockEnd + 8 : 0;
 }
 
-/** Local x where the third row ends; `periodChars` 0 = the lock alone. */
-function lockRowEnd(beside: boolean, blockEnd: number, periodChars: number): number {
-  return lockRowStart(beside, blockEnd) + chipPx(periodChars, beside);
-}
-
 /** Local y of the third row (under the text): at the card's bottom, so the room left goes above it. */
 function cornerRowY(height: number): number {
   return height - CHIP_H - (height >= ROW_ROOMY_MIN_HEIGHT ? ROW_BOTTOM_ROOMY : ROW_BOTTOM_TIGHT);
@@ -510,12 +577,19 @@ function cornerTabHeight(height: number): number {
   return height - cornerRowY(height) + TAB_PAD_TOP;
 }
 
-/** Local y of the pill: centred above the bottom line (two lines) or on the card (one). */
-function pillTop(height: number): number {
-  return Math.max(
-    1,
-    Math.round(((height >= TWO_LINES_MIN_HEIGHT ? cornerRowY(height) : height) - PILL_H) / 2),
-  );
+/** Local y of the text band: the folder's tab, at the card's top. */
+function pillTop(_height: number, _pillH = PILL_H): number {
+  return 0;
+}
+
+/** The icon's size on a card of `height`: what its tab can hold, ICON_MIN..ICON_MAX. */
+function iconSizeFor(height: number): number {
+  return Math.max(ICON_MIN, Math.min(ICON_MAX, tabHeightFor(height) - 2 * ICON_PILL_PAD));
+}
+
+/** The text band's height: the folder's tab. */
+function pillHeightFor(_iconSize: number, height: number): number {
+  return tabHeightFor(height);
 }
 
 /**
@@ -532,16 +606,18 @@ export function clipCardWidthPx(
   titleHeight: number,
   icon = false,
 ): number {
-  // The amount rides in the pill, beside the name, at any height.
+  // The amount rides in the tab, beside the name, at any height.
   const detailChars = detail ? detail.length : 0;
-  const periodChars = period ? period.length : 0;
-  const pill = pillEnd(title.length, detailChars, icon ? ICON_ADVANCE : 0);
-  if (rowMode(height, titleHeight) === ROW_SECOND) {
-    // The pill on top; lock and dates on the line below.
-    return Math.ceil(Math.max(pill, chipPx(periodChars, false)) + CLIP_TEXT_RIGHT_PAD + 1);
-  }
-  // One line: the pill, then the lock badge and the dates.
-  return Math.ceil(lockRowEnd(true, pill, periodChars) + CLIP_TEXT_RIGHT_PAD + 1);
+  const advance = icon ? iconSizeFor(height) + ICON_GAP : 0;
+  // A tall card: the dates in the tab, the lock in the body's corner. A
+  // short one: the lock as a badge in the tab, no dates.
+  const lockInside = rowMode(height, titleHeight) !== ROW_FOLDER;
+  const periodChars = period && !lockInside ? period.length : 0;
+  return Math.ceil(
+    Math.max(folderTabEnd(title.length, detailChars, periodChars, advance, lockInside), TAB_W + 12) +
+      CLIP_TEXT_RIGHT_PAD +
+      1,
+  );
 }
 
 // Title of a clip of `width` px (same pads as the detail line). Truncated
@@ -622,13 +698,15 @@ export function drawClipContent(
   palette: PixiPaletteColors,
   content: PlaylistClipContent,
   detailVisible: boolean,
+  // Where the bar starts (a labelled card's: under its label; else 0).
+  bodyTop = 0,
 ): void {
   const width = view.rect.width;
   const height = view.rect.height;
   const clip = view.clip;
   const pxPerBeat = width / Math.max(clip.duration, 1e-9);
   const top =
-    view.titleRect.height + (detailVisible ? DETAIL_LINE_HEIGHT : 0) + 2;
+    bodyTop > 0 ? bodyTop + 3 : view.titleRect.height + (detailVisible ? DETAIL_LINE_HEIGHT : 0) + 2;
   const bottom = height - CONTENT_BOTTOM_PAD;
   // The area under the text (guide marks, a level); event bars take the
   // card's whole height instead.
@@ -639,7 +717,7 @@ export function drawClipContent(
   const alphaScale = view.effectivelyMuted ? 0.45 : 1;
   // Content is drawn in the clip's own colour (the card is a tint of it).
   const ink = parseHexColor(clip.color, palette.text);
-  const left = contentLeftPx(width, height);
+  const left = contentLeftPx(width, height - bodyTop);
 
   // Guide marks (e.g. billing cuts): dashed vertical lines across the
   // content area, under the bars. Binary search to the first visible one.
@@ -667,9 +745,11 @@ export function drawClipContent(
     const count = Math.min(beats.length, values.length);
     const barWidth = CONTENT_EVENT_WIDTH;
     const maxX = width - barWidth - 1;
-    // The card's whole height, inset like the accent bar.
-    const barTop = CLIP_ACCENT_INSET;
-    const span = height - CLIP_ACCENT_INSET * 2;
+    // The bar's whole height, inset like the accent (a thin bar: across
+    // it, 1 px in).
+    const inset = height - bodyTop >= 16 ? CLIP_ACCENT_INSET : 1;
+    const barTop = bodyTop + inset;
+    const span = height - bodyTop - inset * 2;
     // First event at or after the clip start.
     let index = sortedUpperBound(beats, start - 1e-9);
     for (; index < count; index += 1) {
@@ -740,6 +820,31 @@ export function drawClipContent(
   });
 }
 
+// A box [x0, x1] x [y0, y1] with radius `r` on its corners — the top-left
+// one square when `squareTopLeft` (a labelled card's bar: its label sits
+// on it).
+function cardShape(
+  g: Graphics,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  r: number,
+  squareTopLeft: boolean,
+): Graphics {
+  if (!squareTopLeft) return g.roundRect(x0, y0, x1 - x0, y1 - y0, r);
+  const rr = Math.max(0, Math.min(r, (x1 - x0) / 2, (y1 - y0) / 2));
+  return g
+    .moveTo(x0, y0)
+    .lineTo(x1 - rr, y0)
+    .arcTo(x1, y0, x1, y0 + rr, rr)
+    .lineTo(x1, y1 - rr)
+    .arcTo(x1, y1, x1 - rr, y1, rr)
+    .lineTo(x0 + rr, y1)
+    .arcTo(x0, y1, x0, y1 - rr, rr)
+    .closePath();
+}
+
 function drawClipBodyLocal(
   body: Graphics,
   view: PlaylistClipPresentation,
@@ -747,10 +852,14 @@ function drawClipBodyLocal(
   localBars: readonly number[] | null,
   detailVisible: boolean,
   content: PlaylistClipContent | null = null,
+  // A labelled card's bar starts under its label (0: the whole card).
+  bodyTop = 0,
 ): void {
   body.clear();
   const width = view.rect.width;
   const height = view.rect.height;
+  const folder = bodyTop > 0;
+  const bodyHeight = height - bodyTop;
   const color = parseHexColor(view.clip.color, 0x777777);
   const muted = view.effectivelyMuted;
   const surface = palette.background ?? COLORS.background;
@@ -763,38 +872,38 @@ function drawClipBodyLocal(
   // fits): the real span is the card, the rest a faint tag.
   const extentPx = contentExtentPx(view, content);
   if (extentPx < width) {
-    body
-      .roundRect(0, 0, width, height, clipRadius(width, height))
-      .fill({ color: mixColor(surface, color, tint * CLIP_TAG_TINT_SCALE) });
-    body
-      .roundRect(0, 0, extentPx, height, clipRadius(extentPx, height))
-      .fill({ color: mixColor(surface, color, Math.min(1, tint * CLIP_DAY_TINT_SCALE)) });
+    cardShape(body, 0, bodyTop, width, height, clipRadius(width, bodyHeight), folder).fill({
+      color: mixColor(surface, color, tint * CLIP_TAG_TINT_SCALE),
+    });
+    cardShape(body, 0, bodyTop, extentPx, height, clipRadius(extentPx, bodyHeight), folder).fill({
+      color: mixColor(surface, color, Math.min(1, tint * CLIP_DAY_TINT_SCALE)),
+    });
   } else {
-    body
-      .roundRect(0, 0, width, height, clipRadius(width, height))
-      .fill({ color: mixColor(surface, color, tint) });
+    cardShape(body, 0, bodyTop, width, height, clipRadius(width, bodyHeight), folder).fill({
+      color: mixColor(surface, color, tint),
+    });
   }
-  const accentHeight = height - CLIP_ACCENT_INSET * 2;
-  if (clipHasAccent(width, height)) {
-    drawAccent(body, accentHeight, color, muted ? 0.4 : 1, content?.accent ?? "solid");
+  const accentHeight = bodyHeight - CLIP_ACCENT_INSET * 2;
+  if (clipHasAccent(width, bodyHeight)) {
+    drawAccent(body, accentHeight, color, muted ? 0.4 : 1, content?.accent ?? "solid", bodyTop + CLIP_ACCENT_INSET);
   }
   if (muted) {
     const step = 8;
-    for (let x = -height; x <= width + height; x += step) {
+    for (let x = -bodyHeight; x <= width + bodyHeight; x += step) {
       const x1 = x;
-      const x2 = x + height;
+      const x2 = x + bodyHeight;
       const clampedX1 = Math.max(0, x1);
       const clampedX2 = Math.min(width, x2);
       if (clampedX1 >= clampedX2) continue;
       body
-        .moveTo(clampedX1, clampedX1 - x1)
-        .lineTo(clampedX2, clampedX2 - x1)
+        .moveTo(clampedX1, bodyTop + clampedX1 - x1)
+        .lineTo(clampedX2, bodyTop + clampedX2 - x1)
         .stroke({ color: palette.textMuted, alpha: 0.22, width: 1 });
     }
   }
   // Host content (getClipContent) replaces the sparkline for this clip.
   if (content !== null) {
-    drawClipContent(body, view, palette, content, detailVisible);
+    drawClipContent(body, view, palette, content, detailVisible, bodyTop);
     return;
   }
   // F9: sparkline stub for pattern clips. Skipped on automation (drawn by
@@ -912,21 +1021,27 @@ function drawLockCornerLocal(
 // card's colour shaded toward the ink, a hairline border of the ink — with
 // the padlock centred; stronger when the dates are fixed and under the
 // pointer. Muted cards: all of it quieter.
-function drawLockBadgeLocal(g: Graphics, look: number, card: number, palette: PixiPaletteColors): void {
+function drawLockBadgeLocal(
+  g: Graphics,
+  look: number,
+  card: number,
+  palette: PixiPaletteColors,
+  h: number = LOCK_H,
+): void {
   g.clear();
   const fixed = (look & LOCK_FIXED) !== 0;
   const hovered = (look & LOCK_HOVER) !== 0;
   const muted = (look & LOCK_MUTED) !== 0;
   const shade = hovered ? LOCK_SHADE_HOVER : fixed ? LOCK_SHADE_FIXED : LOCK_SHADE_FREE;
-  g.roundRect(0, 0, LOCK_W, LOCK_H, CHIP_RADIUS).fill({ color: mixColor(card, palette.text, shade) });
+  g.roundRect(0, 0, LOCK_W, h, CHIP_RADIUS).fill({ color: mixColor(card, palette.text, shade) });
   const border = (hovered ? 0.5 : fixed ? 0.32 : 0.22) * (muted ? 0.6 : 1);
-  g.roundRect(0.5, 0.5, LOCK_W - 1, LOCK_H - 1, CHIP_RADIUS - 0.5).stroke({
+  g.roundRect(0.5, 0.5, LOCK_W - 1, h - 1, CHIP_RADIUS - 0.5).stroke({
     color: palette.text,
     alpha: border,
     width: 1,
   });
   const alpha = hovered ? 1 : muted ? 0.45 : fixed ? 0.95 : 0.75;
-  drawPadlock(g, LOCK_W / 2, LOCK_H / 2, fixed, palette.text, alpha);
+  drawPadlock(g, LOCK_W / 2, h / 2, fixed, palette.text, alpha);
 }
 
 // The dates tag: a soft rectangle in the card's colour shaded toward the
@@ -938,9 +1053,10 @@ function drawDateTagLocal(
   ink: number,
   muted: boolean,
   palette: PixiPaletteColors,
+  shade: number = CHIP_SHADE,
 ): void {
   g.clear();
-  g.roundRect(0, 0, width, CHIP_H, CHIP_RADIUS).fill({ color: mixColor(card, palette.text, CHIP_SHADE) });
+  g.roundRect(0, 0, width, CHIP_H, CHIP_RADIUS).fill({ color: mixColor(card, palette.text, shade) });
   const ix = DATE_PAD;
   const iy = (CHIP_H - CAL_ICON) / 2;
   const line = { color: ink, alpha: muted ? 0.6 : 0.9 };
@@ -969,9 +1085,9 @@ function drawAccent(
   color: number,
   alpha: number,
   shape: "solid" | "dashed" | "dotted",
+  top: number = CLIP_ACCENT_INSET,
 ): void {
   const x = CLIP_ACCENT_INSET - 1;
-  const top = CLIP_ACCENT_INSET;
   if (shape === "solid") {
     body
       .roundRect(x, top, CLIP_ACCENT_WIDTH, accentHeight, CLIP_ACCENT_WIDTH / 2)
@@ -995,12 +1111,19 @@ function drawClipOverlayLocal(
   levelHandles = false,
   highlighted: boolean | "danger" = false,
   extentPx: number = view.rect.width,
+  // A labelled card's bar starts under its label: the outline and the rings
+  // go round the bar (square top-left); the label draws its own part.
+  bodyTop = 0,
 ): void {
   overlay.clear();
   const width = view.rect.width;
   const height = view.rect.height;
-  const radius = clipRadius(width, height);
+  const folder = bodyTop > 0;
+  const radius = clipRadius(width, height - bodyTop);
   const color = parseHexColor(view.clip.color, palette.rowLine);
+  // The card's (or the labelled card's bar's) box, `d` px outside its edge.
+  const box = (d: number, r: number): Graphics =>
+    cardShape(overlay, -d, bodyTop - d, width + d, height + d, r, folder);
 
   // Selection: a soft halo + a crisp accent ring. Host highlight: a warm
   // ring ("danger": red ring + wash, it is about to go). Otherwise a
@@ -1008,34 +1131,20 @@ function drawClipOverlayLocal(
   // extent only for a one-day tag, unless hovered.
   if (highlighted === "danger") {
     const danger = palette.toneDanger ?? COLORS.toneDanger;
-    overlay
-      .roundRect(0, 0, width, height, radius)
-      .fill({ color: danger, alpha: 0.14 });
-    overlay
-      .roundRect(-3, -3, width + 6, height + 6, radius + 3)
-      .stroke({ color: danger, width: 4, alpha: 0.25 });
-    overlay
-      .roundRect(0, 0, width, height, radius)
-      .stroke({ color: danger, width: 2, alpha: 1 });
+    box(0, radius).fill({ color: danger, alpha: 0.14 });
+    box(3, radius + 3).stroke({ color: danger, width: 4, alpha: 0.25 });
+    box(0, radius).stroke({ color: danger, width: 2, alpha: 1 });
   } else if (highlighted && !view.selected) {
     const warm = palette.toneWarning ?? COLORS.toneWarning;
-    overlay
-      .roundRect(-3, -3, width + 6, height + 6, radius + 3)
-      .stroke({ color: warm, width: 4, alpha: 0.25 });
-    overlay
-      .roundRect(0, 0, width, height, radius)
-      .stroke({ color: warm, width: 2, alpha: 1 });
+    box(3, radius + 3).stroke({ color: warm, width: 4, alpha: 0.25 });
+    box(0, radius).stroke({ color: warm, width: 2, alpha: 1 });
   } else if (view.selected) {
-    overlay
-      .roundRect(-2, -2, width + 4, height + 4, radius + 2)
-      .stroke({ color: palette.selected, width: 3, alpha: 0.22 });
-    overlay
-      .roundRect(0, 0, width, height, radius)
-      .stroke({ color: palette.selected, width: 1.75, alpha: 1 });
+    box(2, radius + 2).stroke({ color: palette.selected, width: 3, alpha: 0.22 });
+    box(0, radius).stroke({ color: palette.selected, width: 1.75, alpha: 1 });
   } else {
-    const outline = view.hovered ? width : extentPx;
-    overlay
-      .roundRect(0.5, 0.5, outline - 1, height - 1, clipRadius(outline, height))
+    // A labelled card's bar is outlined whole (its label hides the edge under it).
+    const outline = view.hovered || folder ? width : extentPx;
+    cardShape(overlay, 0.5, bodyTop + 0.5, outline - 0.5, height - 0.5, clipRadius(outline, height - bodyTop), folder)
       .stroke({
         color,
         width: 1,
@@ -1048,7 +1157,7 @@ function drawClipOverlayLocal(
   // Resize affordance: two short grips, only while it is actionable. They
   // sit below the title + detail rows when the card is tall enough, so they
   // never cross the text.
-  const textBottom = view.titleRect.height + DETAIL_LINE_HEIGHT + 2;
+  const textBottom = folder ? bodyTop + 6 : view.titleRect.height + DETAIL_LINE_HEIGHT + 2;
   const gripTop = height - textBottom >= 12 ? textBottom : 6;
   const gripHeight = Math.min(16, height - gripTop - 6);
   if (
@@ -1081,7 +1190,7 @@ function drawClipOverlayLocal(
   // playlist doesn't look noisy.
   if (view.groupId && view.hovered) {
     const dotX = Math.max(8, width - 10);
-    const dotY = 8;
+    const dotY = bodyTop + 8;
     overlay.circle(dotX, dotY, 3).fill({
       color: palette.selected,
       alpha: 0.85,
@@ -1196,6 +1305,10 @@ export function createClipNodeRegistry(
   // A lock-carrying card: the name and the amount in the pill.
   const detailBesideTitle = (view: PlaylistClipPresentation): boolean => timeLock && lockFits(view);
 
+  // Where a lock-carrying card's bar starts: under its label, or 0.
+  const folderTop = (view: PlaylistClipPresentation): number =>
+    detailBesideTitle(view) ? tabHeightFor(view.rect.height) : 0;
+
   // The card's own fill (the same mix the body paints), re-mixed only when
   // the clip's colour / muted state changed (no string parsing per frame).
   function cardFillOf(node: ClipNode, view: PlaylistClipPresentation): number {
@@ -1277,11 +1390,12 @@ export function createClipNodeRegistry(
         },
       }),
     );
+    const compact = besideTitle && !isFolder(view.rect.height);
     applyText(
       text,
       node.detailDisplay,
       palette.textMuted,
-      DETAIL_FONT_SIZE,
+      compact ? COMPACT_DETAIL_FONT_SIZE : DETAIL_FONT_SIZE,
       "600",
     );
     if (besideTitle) {
@@ -1290,10 +1404,11 @@ export function createClipNodeRegistry(
         node.detailMeasured = node.detailDisplay;
         node.detailTextWidth = measured(text, node.detailDisplay.length * DETAIL_CHAR_PX);
       }
-      // In the pill, after the name (its baseline: 1 px lower, the font
+      // In the label, after the name (its baseline: 1 px lower, the font
       // being 1 px smaller).
+      const textH = compact ? COMPACT_TITLE_TEXT_H : PILL_TITLE_TEXT_H;
       text.x = start + shift - HALO_SHIFT;
-      text.y = pillTop(view.rect.height) + Math.round((PILL_H - PILL_TITLE_TEXT_H) / 2) + 1 - HALO_SHIFT;
+      text.y = pillTop(view.rect.height, node.pillH) + Math.round((node.pillH - textH) / 2) + 1 - HALO_SHIFT;
       return;
     }
     node.detailHalo = setHalo(text, cardFillOf(node, view), node.detailHalo);
@@ -1309,15 +1424,18 @@ export function createClipNodeRegistry(
     const hidden = left - view.rect.x;
     if (!(hidden > 0)) return 0;
     const besideTitle = detailBesideTitle(view);
+    const corner = besideTitle && isFolder(view.rect.height);
     const block = besideTitle
-      ? pillEnd(node.labelDisplay.length, node.detailDisplay.length, node.iconAdvance)
+      ? folderTabEnd(
+          node.labelDisplay.length,
+          node.detailDisplay.length,
+          node.periodDisplay.length,
+          node.iconAdvance,
+          !corner,
+        )
       : textBlockEnd(node.labelDisplay.length, node.detailDisplay.length);
-    // The lock row slides with the text: it must fit too.
-    const row = !besideTitle
-      ? 0
-      : lockBeside(view.rect.height, view.titleRect.height)
-        ? lockRowEnd(true, block, node.periodDisplay.length)
-        : chipPx(node.periodDisplay.length, false);
+    // The corner lock slides with the text: it must fit too.
+    const row = corner ? TAB_W : 0;
     const textWidth = Math.max(block, row);
     const room = view.rect.width - textWidth - CLIP_TEXT_RIGHT_PAD;
     return Math.round(Math.max(0, Math.min(hidden, room)));
@@ -1355,19 +1473,28 @@ export function createClipNodeRegistry(
         }),
       );
       const inPill = detailBesideTitle(view);
+      const compact = inPill && !isFolder(height);
+      const size = compact ? COMPACT_TITLE_FONT_SIZE : TITLE_FONT_SIZE;
+      if (node.labelSize !== size) {
+        // Another type size: the widths measured at the old one are stale.
+        node.labelSize = size;
+        node.labelMeasured = "";
+        node.detailMeasured = "";
+      }
       cardFillOf(node, view);
       applyText(
         label,
         node.labelDisplay,
         view.effectivelyMuted ? palette.textMuted : inPill ? node.clipHue : palette.text,
-        TITLE_FONT_SIZE,
+        size,
         inPill ? "700" : "600",
       );
       node.labelHalo = setHalo(label, inPill ? pillFill() : node.cardFill, node.labelHalo);
-      // After the icon, when the pill has one.
+      // After the icon, when the label has one.
+      const textH = compact ? COMPACT_TITLE_TEXT_H : PILL_TITLE_TEXT_H;
       label.x = TITLE_PAD_X + node.iconAdvance + shift - HALO_SHIFT;
       label.y = inPill
-        ? pillTop(height) + Math.round((PILL_H - PILL_TITLE_TEXT_H) / 2) - HALO_SHIFT
+        ? pillTop(height, node.pillH) + Math.round((node.pillH - textH) / 2) - HALO_SHIFT
         : TITLE_Y - HALO_SHIFT;
     }
 
@@ -1444,35 +1571,29 @@ export function createClipNodeRegistry(
   ): void {
     const width = view.rect.width;
     const height = view.rect.height;
+    const block = pillEnd(node.labelDisplay.length, detailVisible ? node.detailDisplay.length : 0, node.iconAdvance);
+    // Where the dates' text starts in the tab: after the amount (and the
+    // lock badge when the lock rides in the tab).
+    const start =
+      tabDateStart(block - PILL_PAD_R, !isFolder(height)) + DATE_PAD + CAL_ICON + CAL_GAP;
     if (
       node.periodSource === period &&
       node.periodWidth === width &&
       node.periodHeight === height &&
-      node.periodAdvance === node.iconAdvance
+      node.periodStart === start
     ) {
       return;
     }
     node.periodSource = period;
     node.periodWidth = width;
     node.periodHeight = height;
-    node.periodAdvance = node.iconAdvance;
+    node.periodStart = start;
     if (period === null || period.length === 0) {
       node.periodDisplay = "";
       return;
     }
-    const block = pillEnd(node.labelDisplay.length, detailVisible ? node.detailDisplay.length : 0, node.iconAdvance);
-    const beside = lockBeside(height, view.titleRect.height);
-    const start =
-      lockRowStart(beside, block) +
-      lockButtonW(beside) +
-      lockDateGap(beside) +
-      DATE_PAD +
-      CAL_ICON +
-      CAL_GAP;
-    node.periodDisplay = truncateToChars(
-      period,
-      Math.floor((width - start - DATE_PAD - CLIP_TEXT_RIGHT_PAD) / DETAIL_CHAR_PX),
-    );
+    const end = width - DATE_PAD - CLIP_TEXT_RIGHT_PAD - FOLDER_TAB_PAD_R;
+    node.periodDisplay = truncateToChars(period, Math.floor((end - start) / DETAIL_CHAR_PX));
   }
 
   // The real width of a Text (measured once per string; the estimate where
@@ -1502,11 +1623,25 @@ export function createClipNodeRegistry(
       // edge stays the card's, crisp over the tab.
       node.container.addChildAt(lock, node.container.getChildIndex(node.overlay));
     }
+    // Tall: the lock in the body's corner; else a badge in the tab.
+    const corner = isFolder(view.rect.height);
+    const tabH = node.pillH;
     const height = view.rect.height;
-    const beside = lockBeside(height, view.titleRect.height);
-    const tabH = beside ? LOCK_H : cornerTabHeight(height);
+    const beside = !corner;
+    const lockH = beside ? Math.max(10, Math.min(LOCK_H, tabH - 2)) : cornerTabHeight(height);
+    // A badge in the tab sits OVER the tab; the corner tab under the card's
+    // outline. Moved only when that flips (never per frame).
+    if (node.lockAbove !== beside) {
+      node.lockAbove = beside;
+      const container = node.container;
+      container.removeChild(lock);
+      const under = beside && node.pill !== null ? node.pill : node.overlay;
+      container.addChildAt(lock, container.getChildIndex(under) + (beside ? 1 : 0));
+    }
     // Sticky: the tab hugs the visible left edge — square, like that edge.
     const outer = shift > 0 ? 0 : clipRadius(view.rect.width, height);
+    // The badge sits on the tab: the tab's colour under it.
+    const base = beside ? pillFill() : card;
     const look =
       (view.clip.timeLocked === true ? LOCK_FIXED : LOCK_FREE) |
       (view.lockHovered ? LOCK_HOVER : 0) |
@@ -1514,48 +1649,71 @@ export function createClipNodeRegistry(
       (beside ? 0 : LOCK_CORNER) |
       (outer === 0 ? LOCK_SQUARE : 0);
     // Numbers, not a string: no allocation per frame.
-    const lockKey = (card * 64 + look) * 32 + tabH;
+    const lockKey = (base * 64 + look) * 32 + lockH;
     if (lockKey !== node.lockKey) {
-      if (beside) drawLockBadgeLocal(lock, look, card, palette);
-      else drawLockCornerLocal(lock, look, card, tabH, outer, palette);
+      if (beside) drawLockBadgeLocal(lock, look, base, palette, lockH);
+      else drawLockCornerLocal(lock, look, card, lockH, outer, palette);
       node.lockKey = lockKey;
     }
     node.lockW = lockButtonW(beside);
-    node.lockH = tabH;
+    node.lockH = lockH;
 
-    // Where the row sits: at the card's bottom (the room left is air under
-    // the amount), or centred on the whole card (beside).
-    const rowY = beside
-      ? Math.min(Math.round((height - CHIP_H) / 2), height - CHIP_H - 1)
-      : cornerRowY(height);
     let x: number;
-    // The badge beside the text is a touch taller than the dates tag.
-    let y = rowY - (LOCK_H - CHIP_H) / 2;
+    let y: number;
     if (!beside) {
       // The corner: flush with the left and bottom edges.
       x = lockRowStart(false, 0) + shift;
-      y = height - tabH;
+      y = height - lockH;
     } else {
-      // After the pill (its real width).
-      x = Math.min(lockRowStart(true, node.pillWidth) + shift, view.rect.width - LOCK_W - 2);
+      // In the tab, after the amount, centred on it.
+      x = Math.min(node.tabLockX + shift, view.rect.width - LOCK_W - 2);
+      y = Math.round((tabH - lockH) / 2);
     }
     lock.x = Math.round(x);
     lock.y = y;
     lock.visible = true;
 
-    // The dates tag, a few px after the lock: a different thing.
-    if (!node.periodDisplay) {
+    // The dates tag: in the folder's tab after the amount, else a few px
+    // after the lock — a different thing.
+    const text = periodTextOf(node, muted);
+    if (text === null) {
       hidePeriod(node);
       return;
     }
-    // The tag first, so the text (added after) paints over it.
+    const tagWidth = DATE_PAD * 2 + CAL_ICON + CAL_GAP + node.periodTextWidth;
+    const tagX = node.tabDateX + shift;
+    // Never past the card (a narrow one cut the dates already).
+    if (tagX + tagWidth > view.rect.width - CLIP_TEXT_RIGHT_PAD) {
+      hidePeriod(node);
+      return;
+    }
+    // The tag under its text (which may have been created first).
     let tag = node.periodBg;
     if (!tag) {
       tag = new Graphics();
       node.periodBg = tag;
-      node.container.addChild(tag);
+      node.container.addChildAt(tag, node.container.getChildIndex(text));
     }
-    // The amount line's grey: one family with the text above.
+    // On the tab: the tab's own colour under it.
+    const tabFill = pillFill();
+    const ink = palette.textMuted;
+    const tagKey = (tabFill * 4096 + tagWidth) * 2 + (muted ? 1 : 0);
+    if (tagKey !== node.periodBgKey) {
+      drawDateTagLocal(tag, tagWidth, tabFill, ink, muted, palette, FOLDER_CHIP_SHADE);
+      node.periodBgKey = tagKey;
+    }
+    tag.x = tagX;
+    tag.y = Math.round((tabH - CHIP_H) / 2);
+    tag.visible = true;
+    text.x = tag.x + DATE_PAD + CAL_ICON + CAL_GAP;
+    text.y = tag.y + Math.round((CHIP_H - DETAIL_LINE_HEIGHT) / 2);
+  }
+
+  // The dates' Text, set to the display and measured once per string (null:
+  // no dates to show).
+  function periodTextOf(node: ClipNode, muted: boolean): Text | null {
+    if (!node.periodDisplay) return null;
+    // The amount line's grey: one family with the text beside it.
     const ink = palette.textMuted;
     const text = ensureText(node, "period", () =>
       new Text({
@@ -1574,23 +1732,17 @@ export function createClipNodeRegistry(
       node.periodMeasured = node.periodDisplay;
       node.periodTextWidth = measured(text, node.periodDisplay.length * DETAIL_CHAR_PX);
     }
-    const tagWidth = DATE_PAD * 2 + CAL_ICON + CAL_GAP + node.periodTextWidth;
-    const tagKey = (card * 4096 + tagWidth) * 2 + (muted ? 1 : 0);
-    if (tagKey !== node.periodBgKey) {
-      drawDateTagLocal(tag, tagWidth, card, ink, muted, palette);
-      node.periodBgKey = tagKey;
-    }
-    tag.x = lock.x + lockButtonW(beside) + lockDateGap(beside);
-    tag.y = rowY;
-    tag.visible = true;
-    text.x = tag.x + DATE_PAD + CAL_ICON + CAL_GAP;
-    text.y = tag.y + Math.round((CHIP_H - DETAIL_LINE_HEIGHT) / 2);
+    return text;
   }
 
-  // The pill behind the name and the amount: from the card's left edge
-  // (the sticky shift: the visible one) to just past the amount, its right
-  // end round. Under the card's outline, over its fill and marks.
-  function placePill(node: ClipNode, view: PlaylistClipPresentation, shift: number): void {
+  // The text band of a lock-carrying card: its folder's TAB (placeTab),
+  // at every height.
+  function placePill(
+    node: ClipNode,
+    view: PlaylistClipPresentation,
+    shift: number,
+    highlighted: boolean | "danger",
+  ): void {
     const label = node.label;
     if (!detailBesideTitle(view) || label === null || !label.visible) {
       if (node.pill) node.pill.visible = false;
@@ -1603,40 +1755,121 @@ export function createClipNodeRegistry(
     }
     const detail = node.detail;
     const detailShown = detail !== null && detail.visible && node.detailDisplay.length > 0;
-    const width = Math.min(
-      Math.ceil(
-        TITLE_PAD_X +
-          node.iconAdvance +
-          node.labelTextWidth +
-          (detailShown ? TITLE_DETAIL_GAP + node.detailTextWidth : 0) +
-          PILL_PAD_R,
-      ),
-      Math.max(0, Math.floor(view.rect.width - shift)),
-    );
+    placeTab(node, view, shift, highlighted, detailShown);
+  }
+
+  // The pill / tab Graphics, in its place: over the card's outline for a
+  // folder's tab (it hides the body's edge under it), under it for a pill.
+  // Moved only when the layout flips (never per frame).
+  function pillGraphics(node: ClipNode, above: boolean): Graphics {
     let pill = node.pill;
+    const container = node.container;
     if (!pill) {
       pill = new Graphics();
+      pill.label = "clip-tab";
       node.pill = pill;
-      node.container.addChildAt(pill, node.container.getChildIndex(node.overlay));
+      const at = container.getChildIndex(node.overlay);
+      container.addChildAt(pill, above ? at + 1 : at);
+      node.pillAbove = above;
+      return pill;
     }
+    if (node.pillAbove !== above) {
+      node.pillAbove = above;
+      node.pillKey = -1;
+      container.removeChild(pill);
+      const at = container.getChildIndex(node.overlay);
+      container.addChildAt(pill, above ? at + 1 : at);
+    }
+    return pill;
+  }
+
+  // The card's LABEL: a tab in the canvas' colour from the card's left edge
+  // (the sticky shift: the visible one) to past the amount (the dates on a
+  // tall card, the lock badge on a short one), its top corners round
+  // (square at the visible edge while sticky), reaching 1 px into the bar
+  // so it hides the bar's edge under it. Selected / highlighted it carries
+  // its part of the card's ring (left, top, right), joining the bar's.
+  // Placed by transform; redrawn only when its width or look change.
+  function placeTab(
+    node: ClipNode,
+    view: PlaylistClipPresentation,
+    shift: number,
+    highlighted: boolean | "danger",
+    detailShown: boolean,
+  ): void {
     const muted = view.effectivelyMuted;
-    // Numbers, not a string: no allocation per frame.
-    const key = width * 2 + (muted ? 1 : 0);
+    const textEnd =
+      TITLE_PAD_X + node.iconAdvance + node.labelTextWidth + (detailShown ? TITLE_DETAIL_GAP + node.detailTextWidth : 0);
+    // A short card's lock rides in the label, after the amount.
+    const lockInside = !isFolder(view.rect.height);
+    node.tabLockX = textEnd + TAB_LOCK_GAP;
+    node.tabDateX = tabDateStart(textEnd, lockInside);
+    const period = periodTextOf(node, muted);
+    const content =
+      (period !== null
+        ? node.tabDateX + DATE_PAD * 2 + CAL_ICON + CAL_GAP + node.periodTextWidth
+        : lockInside
+          ? node.tabLockX + LOCK_W
+          : textEnd) + FOLDER_TAB_PAD_R;
+    const tabH = node.pillH;
+    const width = Math.min(Math.ceil(content), Math.max(0, Math.floor(view.rect.width - shift)));
+    const pill = pillGraphics(node, true);
+    const square = shift > 0;
+    const look =
+      (muted ? 1 : 0) |
+      (view.selected ? 2 : 0) |
+      (highlighted === true ? 4 : 0) |
+      (highlighted === "danger" ? 8 : 0) |
+      (square ? 16 : 0);
+    // Numbers, not a string (negative: never a pill's key).
+    const key = -((width * 32 + look) * 64 + tabH + 1);
     if (key !== node.pillKey) {
       node.pillKey = key;
       pill.clear();
-      const r = PILL_H / 2;
-      pill
-        .moveTo(0, 0)
-        .lineTo(Math.max(0, width - r), 0)
-        .arcTo(width, 0, width, r, r)
-        .arcTo(width, PILL_H, Math.max(0, width - r), PILL_H, r)
-        .lineTo(0, PILL_H)
-        .closePath()
-        .fill({ color: pillFill(), alpha: muted ? 0.6 : 1 });
+      const r = square ? 0 : Math.min(FOLDER_TAB_RADIUS, width / 2);
+      const rr = Math.min(FOLDER_TAB_RADIUS, width / 2);
+      const bottom = tabH + 1;
+      const tab = (): Graphics => {
+        pill.moveTo(0, bottom).lineTo(0, r);
+        if (r > 0) pill.arcTo(0, 0, r, 0, r);
+        return pill
+          .lineTo(width - rr, 0)
+          .arcTo(width, 0, width, rr, rr)
+          .lineTo(width, bottom)
+          .closePath();
+      };
+      tab().fill({ color: pillFill(), alpha: muted ? 0.6 : 1 });
+      // Its part of the ring: up the left (not at the visible edge), across
+      // the top, down the right to the bar's edge — `d` px outside.
+      const edge = (d: number): Graphics => {
+        const top = tabH - d;
+        const rl = square ? 0 : r + d;
+        const rt = rr + d;
+        if (square) pill.moveTo(0, -d);
+        else {
+          pill.moveTo(-d, top).lineTo(-d, -d + rl).arcTo(-d, -d, -d + rl, -d, rl);
+        }
+        return pill
+          .lineTo(width + d - rt, -d)
+          .arcTo(width + d, -d, width + d, -d + rt, rt)
+          .lineTo(width + d, top);
+      };
+      if (highlighted === "danger") {
+        const danger = palette.toneDanger ?? COLORS.toneDanger;
+        tab().fill({ color: danger, alpha: 0.14 });
+        edge(3).stroke({ color: danger, width: 4, alpha: 0.25 });
+        edge(0).stroke({ color: danger, width: 2, alpha: 1 });
+      } else if (highlighted && !view.selected) {
+        const warm = palette.toneWarning ?? COLORS.toneWarning;
+        edge(3).stroke({ color: warm, width: 4, alpha: 0.25 });
+        edge(0).stroke({ color: warm, width: 2, alpha: 1 });
+      } else if (view.selected) {
+        edge(2).stroke({ color: palette.selected, width: 3, alpha: 0.22 });
+        edge(0).stroke({ color: palette.selected, width: 1.75, alpha: 1 });
+      }
     }
     pill.x = shift;
-    pill.y = pillTop(view.rect.height);
+    pill.y = 0;
     pill.visible = true;
     node.pillWidth = width;
   }
@@ -1676,7 +1909,7 @@ export function createClipNodeRegistry(
     if (!icon) {
       icon = new Graphics(glyphContext(glyph));
       icon.eventMode = "none";
-      icon.scale.set(ICON_PX / ICON_GRID);
+      icon.label = "clip-icon";
       node.icon = icon;
       node.container.addChild(icon);
     } else if (node.iconSource !== glyph) {
@@ -1688,8 +1921,11 @@ export function createClipNodeRegistry(
       icon.tint = tint;
       node.iconTint = tint;
     }
+    const size = node.iconSize;
+    // A transform, no rebuild: the shared geometry is on the 24-unit grid.
+    icon.scale.set(size / ICON_GRID);
     icon.x = TITLE_PAD_X + shift;
-    icon.y = pillTop(view.rect.height) + (PILL_H - ICON_PX) / 2;
+    icon.y = pillTop(view.rect.height, node.pillH) + (node.pillH - size) / 2;
     icon.visible = true;
   }
 
@@ -1719,6 +1955,7 @@ export function createClipNodeRegistry(
       detailWidth: -1,
       detailStart: -1,
       labelMeasured: "",
+      labelSize: 0,
       labelTextWidth: 0,
       detailMeasured: "",
       detailTextWidth: 0,
@@ -1730,7 +1967,13 @@ export function createClipNodeRegistry(
       iconSource: null,
       iconTint: -1,
       iconAdvance: 0,
-      periodAdvance: 0,
+      iconSize: 0,
+      pillH: PILL_H,
+      periodStart: -1,
+      pillAbove: false,
+      tabDateX: 0,
+      tabLockX: 0,
+      lockAbove: false,
       detailDisplay: "",
       bars: null,
       content: null,
@@ -1818,6 +2061,7 @@ export function createClipNodeRegistry(
           bars,
           detailVisible,
           content,
+          folderTop(view),
         );
         node.bars = bars;
         node.content = content;
@@ -1832,6 +2076,7 @@ export function createClipNodeRegistry(
           levelHandles,
           highlighted,
           contentExtentPx(view, content),
+          folderTop(view),
         );
         node.highlighted = highlighted;
         node.hash = hash;
@@ -1849,14 +2094,22 @@ export function createClipNodeRegistry(
       }
       // The icon rides in the pill: it takes room before the name there.
       const glyph = getClipIcon && detailBesideTitle(view) ? getClipIcon(view.clip.id) : null;
-      node.iconAdvance = glyph !== null ? ICON_ADVANCE : 0;
+      node.iconSize = glyph !== null ? iconSizeFor(view.rect.height) : 0;
+      node.iconAdvance = glyph !== null ? node.iconSize + ICON_GAP : 0;
+      node.pillH = pillHeightFor(node.iconSize, view.rect.height);
       if (getClipPeriod) {
         refreshTitle(node, view);
-        refreshPeriod(node, view, getClipPeriod(view.clip.id), detailVisible);
+        // A short card's tab carries no dates (its lock rides there).
+        refreshPeriod(
+          node,
+          view,
+          isFolder(view.rect.height) ? getClipPeriod(view.clip.id) : null,
+          detailVisible,
+        );
       }
       const shift = applyLabels(node, view, detailVisible, stickyLeft);
       applyDetail(node, view, detail, detailVisible, shift);
-      placePill(node, view, shift);
+      placePill(node, view, shift, highlighted);
       placeIcon(node, view, glyph, shift);
       if (timeLock) {
         if (lockFits(view)) {

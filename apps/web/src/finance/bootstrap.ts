@@ -3,7 +3,7 @@
 // or — on a first visit — the example year plus the onboarding banner.
 // Pure apart from the bridge calls in applyRecCorrections.
 import {
-  createDemoFinancialDocument,
+  createExampleYearDocument,
   rollForward,
   type ActualRecord,
   type FinancialDocument,
@@ -40,7 +40,8 @@ export interface PlanBootstrap {
 export function bootstrapPlan(today: ISODate, saved: SavedPlan | null): PlanBootstrap {
   if (!saved) {
     return {
-      doc: createDemoFinancialDocument(today),
+      // "El año de ejemplo" (also what "Reiniciar con el ejemplo…" opens).
+      doc: createExampleYearDocument(today),
       layout: null,
       saved: null,
       rec: null,

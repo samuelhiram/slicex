@@ -176,11 +176,12 @@ describe("the bridge's icon provider", () => {
 
   it("follows an edit, and a one-date tag grows by the icon's room", () => {
     const bridge = setup();
-    const plain = bridge.clipMinWidth("bono", 58, 20);
+    const plain = bridge.clipMinWidth("bono", 70, 20);
     const bono = bridge.getItem("bono")!;
     expect(bridge.replaceItem({ ...bono, icon: "gift" })).toBe(true);
     expect(bridge.getClipIcon("bono")).toBe(iconGlyph("gift"));
-    expect(bridge.clipMinWidth("bono", 58, 20)).toBe(plain + 20);
+    // A tall (70 px) card: the 21 px icon + its 6 px gap.
+    expect(bridge.clipMinWidth("bono", 70, 20)).toBe(plain + 27);
   });
 });
 

@@ -44,7 +44,8 @@ import {
 } from "../src/finance/components/ValleyCard";
 import { StatementDialog } from "../src/finance/components/StatementDialog";
 import { DebtStrategyPanel, todayExtraPayment } from "../src/finance/components/DebtStrategyPanel";
-import { FuturesMenu, FuturesPeekChip } from "../src/finance/components/FuturesMenu";
+import { FuturesMenu } from "../src/finance/components/FuturesMenu";
+import { CHART_SETTINGS_KEY, getChartSettings, resetChartSettingsForTests } from "../src/finance/chart-settings";
 import { RecDialog, recResultLine } from "../src/finance/components/RecDialog";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -723,6 +724,23 @@ describe("UX-57: the futures menu holds only menu items; its notes sit outside",
     expect(menu.textContent).not.toContain("Bifurcar");
   });
 
+  it("'Comparar' turns on the chart's 'Plan alterno' (off by default) to show the ghost", () => {
+    resetChartSettingsForTests();
+    localStorage.removeItem(CHART_SETTINGS_KEY);
+    const { bridge } = setup(createDemoFinancialDocument(TODAY));
+    const futures = new Futures(bridge, null);
+    futures.fork(TODAY);
+    futures.setCompare(null);
+    expect(getChartSettings().layers.alternate).toBe(false);
+    mount(h(AnnouncerProvider, null, h(FuturesMenu, { bridge, futures })));
+    click(document.querySelector<HTMLButtonElement>(".fin-futures__trigger")!);
+    click([...document.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]')].find((el) => el.textContent === "Comparar")!);
+    expect(futures.getCompareId()).toBe(MAIN_BRANCH_ID);
+    expect(getChartSettings().layers.alternate).toBe(true);
+    resetChartSettingsForTests();
+    localStorage.removeItem(CHART_SETTINGS_KEY);
+  });
+
   it("Escape closes it and gives the focus back to its button", () => {
     const { bridge } = setup(createDemoFinancialDocument(TODAY));
     const futures = new Futures(bridge, null);
@@ -734,25 +752,6 @@ describe("UX-57: the futures menu holds only menu items; its notes sit outside",
     press(document.activeElement as HTMLElement, "Escape");
     expect(document.querySelector('[role="menu"]')).toBeNull();
     expect(document.activeElement).toBe(trigger);
-  });
-
-  it("FuturesPeekChip: the other future in figures; 'Asomarte' toggles the peek, Escape ends it", () => {
-    const { bridge } = setup(createDemoFinancialDocument(TODAY));
-    const futures = new Futures(bridge, null);
-    futures.fork(TODAY);
-    bridge.setInitialCash(bridge.getDocument().initialCash - 25000);
-    const onPeek = vi.fn();
-    const onEndPeek = vi.fn();
-    mount(h(FuturesPeekChip, { bridge, futures, peeking: false, onPeek, onEndPeek }));
-    expect(document.querySelector(".fin-compare__text")!.textContent).toBe(
-      "Otra versión contra Plan principal: horizonte −$25,000 · punto más bajo −$25,000",
-    );
-    click(buttonByText("Asomarte")!);
-    expect(onPeek).toHaveBeenCalledWith(MAIN_BRANCH_ID);
-    act(() => root!.render(h(FuturesPeekChip, { bridge, futures, peeking: true, onPeek, onEndPeek })));
-    expect(buttonByText("Volver")!.getAttribute("aria-pressed")).toBe("true");
-    press(document.body, "Escape");
-    expect(onEndPeek).toHaveBeenCalled();
   });
 });
 

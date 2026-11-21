@@ -393,6 +393,66 @@ describe("overview lane — cached layer", () => {
     expect(layer.stats.frameRebuilds).toBe(1);
   });
 
+  it("the host's colours replace the theme's (danger never); scaleLabels false hides the scale", () => {
+    const strokeColors = (g: Graphics): number[] =>
+      g.context.instructions
+        .filter((instruction) => instruction.action === "stroke")
+        .map((instruction) => (instruction.data.style as { color: number }).color);
+    const fillColors = (g: Graphics): number[] =>
+      g.context.instructions
+        .filter((instruction) => instruction.action === "fill")
+        .map((instruction) => (instruction.data.style as { color: number }).color);
+    const { parts, layer } = makeLaneLayer();
+    const core = laneCore();
+    const base = overviewData(stepSeries(40, (i) => (i < 10 ? 800 - i * 100 : 400)));
+    const colors = { positive: 0x123456, warning: 0x654321, secondary: 0x0a0b0c, baseline: 0x0c0b0a, annotation: 0x777001 };
+    layer.sync(core.getPresentation(), { ...base, colors, scaleLabels: false });
+    const strokes = strokeColors(parts.curveGraphics);
+    expect(strokes).toContain(0x123456); // the curve above the reserve
+    expect(strokes).toContain(0x0a0b0c); // the debt line
+    expect(strokes).toContain(0x0c0b0a); // the ghost
+    expect(strokeColors(parts.frameGraphics)).toContain(0x654321); // the reserve's dashes
+    expect(fillColors(parts.curveGraphics)).toContain(0x123456);
+    // The valley pin is "danger": the theme's red, not the annotation colour.
+    expect(fillColors(parts.curveGraphics)).not.toContain(0x777001);
+    // No scale labels ($800 at the top) — the threshold names stay.
+    const shown = texts(parts.container);
+    expect(shown).not.toContain("$800");
+    expect(shown).toContain("reserve");
+  });
+
+  it("keeps the host's corner box clear: a threshold name under it moves right of it", () => {
+    const { parts, layer } = makeLaneLayer();
+    const core = laneCore();
+    const lane = core.getPresentation().layout.overviewRect;
+    // A reserve near the top: its name would sit in the top-left corner.
+    const data: PlaylistOverviewData = {
+      ...overviewData(stepSeries(40, () => 300)),
+      thresholds: [{ value: 1000, tone: "warning", label: "reserve" }],
+      annotations: [],
+      domain: { min: 0, max: 1000 },
+    };
+    layer.sync(core.getPresentation(), data);
+    const nameAt = () =>
+      (parts.curveText.children as unknown as Array<{ text: string; visible: boolean; x: number }>).find(
+        (child) => child.visible && child.text === "reserve",
+      )!.x;
+    expect(nameAt()).toBeLessThan(lane.x + 20);
+    layer.sync(core.getPresentation(), { ...data, corner: { width: 38, height: 38 } });
+    expect(nameAt()).toBeGreaterThanOrEqual(lane.x + 38);
+    // A pill near the left edge moves right of the corner too (never dropped).
+    const pinned: PlaylistOverviewData = {
+      ...overviewData(stepSeries(40, (i) => (i < 10 ? 800 - i * 100 : 400))),
+      annotations: [{ beat: 1, value: 100, label: "low", tone: "warning" }],
+    };
+    layer.sync(core.getPresentation(), { ...pinned, corner: { width: 38, height: 38 } });
+    const low = (parts.curveText.children as unknown as Array<{ text: string; visible: boolean; x: number }>).find(
+      (child) => child.visible && child.text === "low",
+    );
+    expect(low).toBeDefined();
+    expect(low!.x).toBeGreaterThanOrEqual(lane.x + 38);
+  });
+
   it("annotation pills live in the lane's top band, above their pin (a dotted leader joins them)", () => {
     const { parts, layer } = makeLaneLayer();
     const core = laneCore();

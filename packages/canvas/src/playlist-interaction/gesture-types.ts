@@ -33,7 +33,15 @@ export type ActiveGesture =
       kind: "marquee";
       pointerId: number;
       startPoint: PlaylistPoint;
+      // Where it was born, in the CONTENT (not the screen): the time and the
+      // rows' y (screen y + scrollY) under the press. A scroll or a zoom
+      // during the drag keeps that corner on its spot of the timeline.
+      startTime: number;
+      startContentY: number;
       additive: boolean;
+      // Track id → index, built the first time a clip out of view is
+      // tested (tracks don't change during a marquee).
+      trackIndexById?: Map<string, number>;
     }
   | {
       kind: "clip-drag";

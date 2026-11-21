@@ -12,6 +12,7 @@ import type {
   PlaylistSnapMode,
   PlaylistToolId,
   PlaylistTooltip,
+  PlaylistTrack,
   PlaylistViewport,
 } from "./types";
 
@@ -72,6 +73,13 @@ export type PlaylistAction =
   // Every materialised row to one height (one dispatch, one undo step).
   | { type: "SET_ALL_TRACK_HEIGHTS"; height: number }
   | { type: "REORDER_TRACK"; fromIndex: number; toIndex: number }
+  // A host's re-arrangement of its rows in ONE step: the new rows (in
+  // order) and the row of each clip it moves (clip id → track id).
+  | {
+      type: "ARRANGE_TRACKS";
+      tracks: PlaylistTrack[];
+      placement: Readonly<Record<string, string>>;
+    }
   | { type: "MAKE_CLIPS_UNIQUE"; clipIds: string[] }
   | { type: "SET_CLIP_LABEL"; clipId: string; label: string }
   | { type: "SET_CLIP_COLOR"; clipId: string; color: string }
@@ -180,6 +188,7 @@ const UNDOABLE_ACTION_TYPES: ReadonlySet<PlaylistActionType> = new Set([
   "SET_TRACK_HEIGHT",
   "SET_ALL_TRACK_HEIGHTS",
   "REORDER_TRACK",
+  "ARRANGE_TRACKS",
   "MAKE_CLIPS_UNIQUE",
   "SET_CLIP_LABEL",
   "SET_CLIP_COLOR",

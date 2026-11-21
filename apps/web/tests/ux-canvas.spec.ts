@@ -283,6 +283,14 @@ const hoisted = vi.hoisted(() => ({
   rendererCallbacks: [] as Array<PlaylistRendererCallbacks | undefined>,
 }));
 
+// The shell opens on "el año de ejemplo" (createExampleYearDocument); these
+// interaction tests walk the engine's stable fixture instead (its rows and
+// names), so the example can change without moving them.
+vi.mock("@slicex/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@slicex/core")>();
+  return { ...actual, createExampleYearDocument: actual.createDemoFinancialDocument };
+});
+
 vi.mock("@slicex/canvas", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@slicex/canvas")>();
   return {

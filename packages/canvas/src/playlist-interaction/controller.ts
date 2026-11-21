@@ -19,6 +19,7 @@ import {
   rectsIntersect,
   screenXToTime,
   screenYToTrackIndex,
+  timeToScreenX,
 } from "../playlist-core";
 import { interpolateBrushPath } from "./brush";
 import type {
@@ -488,25 +489,65 @@ function setCursor(
   host.style.cursor = (cursors?.[toolId] ?? getTool(toolId).cursor);
 }
 
-function selectClipsInMarquee(core: PlaylistCore, additive: boolean): void {
+// Track id → index for a marquee, built once per gesture (on the first clip
+// out of view it tests): the tracks don't change during a marquee.
+function marqueeTrackIndexes(
+  gesture: Extract<ActiveGesture, { kind: "marquee" }>,
+  tracks: readonly { id: string }[],
+): Map<string, number> {
+  if (!gesture.trackIndexById) {
+    gesture.trackIndexById = new Map(tracks.map((track, index) => [track.id, index]));
+  }
+  return gesture.trackIndexById;
+}
+
+// The clips under the marquee. Its rect is in screen px at the CURRENT
+// scroll, and may reach past the view (its corner stays where it was born
+// on the timeline while you scroll): a clip on screen is tested by its
+// drawn rect; one scrolled out of view by its span and its row's box —
+// pre-filtered by time first (two compares, no lookup), so the rest of the
+// year costs nothing.
+function selectClipsInMarquee(
+  core: PlaylistCore,
+  gesture: Extract<ActiveGesture, { kind: "marquee" }>,
+): void {
   const presentation = core.getPresentation();
-  const marquee = presentation.state.marquee;
+  const state = presentation.state;
+  const marquee = state.marquee;
 
   if (!marquee) {
     return;
   }
 
+  const metrics = core.metrics;
   const rect = normalizeRect({
     x: marquee.start.x,
     y: marquee.start.y,
     width: marquee.current.x - marquee.start.x,
     height: marquee.current.y - marquee.start.y,
   });
-  const clipIds = presentation.clipViews
-    .filter((view) => rectsIntersect(rect, view.rect))
-    .map((view) => view.clip.id);
+  const fromTime = screenXToTime(state, rect.x, metrics);
+  const toTime = screenXToTime(state, rect.x + rect.width, metrics);
+  const rectBottom = rect.y + rect.height;
+  const views = presentation.clipViewsById;
+  const clipIds: string[] = [];
+  for (const clip of state.clips) {
+    const view = views.get(clip.id);
+    if (view) {
+      if (rectsIntersect(rect, view.rect)) clipIds.push(clip.id);
+      continue;
+    }
+    if (clip.start > toTime || clip.start + clip.duration < fromTime) continue;
+    const trackIndex = marqueeTrackIndexes(gesture, state.tracks).get(clip.trackId);
+    if (trackIndex === undefined) continue;
+    const laneHeight = getTrackLaneHeight(state.tracks[trackIndex]!, metrics);
+    const top =
+      presentation.trackIndexToScreenY(trackIndex) + (clip.lane ?? 0) * laneHeight + metrics.clipPaddingY;
+    const bottom = top + laneHeight - metrics.clipPaddingY * 2;
+    if (top <= rectBottom && bottom >= rect.y) clipIds.push(clip.id);
+  }
 
-  core.setClipSelection(clipIds, { additive });
+  core.setClipSelection(clipIds, { additive: gesture.additive });
 }
 
 function segmentIntersectsRect(
@@ -1053,6 +1094,8 @@ export function createPlaylistInteractionController(
   // Viewport motion (smooth wheel, zoom, momentum, edge auto-scroll).
   const navigator = createViewportNavigator(core, {
     reducedMotion: prefersReducedMotion,
+    // A drag held while the view glides (the wheel) follows the content.
+    onStep: () => followViewport(),
   });
   const classifyWheel = createWheelClassifier();
   // Hold Space to pan with the left button (tap Space still plays).
@@ -1768,6 +1811,21 @@ export function createPlaylistInteractionController(
     );
   }
 
+  // The drags whose drawing is tied to the content under the pointer (a
+  // clip, a range, the marquee…): when the view moves under a still pointer
+  // — the edge auto-scroll, the wheel, a fling — they are re-applied at it.
+  const followsViewport = (gesture: ActiveGesture): boolean =>
+    gesture.kind === "clip-drag" ||
+    gesture.kind === "clip-resize" ||
+    gesture.kind === "clip-extend" ||
+    gesture.kind === "clip-create-drag" ||
+    gesture.kind === "marquee" ||
+    gesture.kind === "paint-drag" ||
+    gesture.kind === "slip-drag" ||
+    gesture.kind === "marker-drag" ||
+    gesture.kind === "automation-point-drag" ||
+    gesture.kind === "play-position-drag";
+
   // Edge auto-scroll: while a drag sits within EDGE_ZONE px of the
   // timeline's edges, the view glides that way (faster closer to the edge)
   // and the drag is re-applied at the same pointer every frame, so a clip
@@ -1779,17 +1837,7 @@ export function createPlaylistInteractionController(
     return EDGE_MAX_SPEED * t * t;
   };
   const updateEdgeScroll = (gesture: ActiveGesture, point: PlaylistPoint): void => {
-    const horizontal =
-      gesture.kind === "clip-drag" ||
-      gesture.kind === "clip-resize" ||
-      gesture.kind === "clip-extend" ||
-      gesture.kind === "clip-create-drag" ||
-      gesture.kind === "marquee" ||
-      gesture.kind === "paint-drag" ||
-      gesture.kind === "slip-drag" ||
-      gesture.kind === "marker-drag" ||
-      gesture.kind === "automation-point-drag" ||
-      gesture.kind === "play-position-drag";
+    const horizontal = followsViewport(gesture);
     const vertical =
       gesture.kind === "clip-drag" || gesture.kind === "marquee" || gesture.kind === "paint-drag";
     if (!horizontal) return;
@@ -1815,6 +1863,14 @@ export function createPlaylistInteractionController(
   };
   const reapplyGestureMove = (): void => {
     if (activeGesture && lastGestureMove) handlePointerMove(lastGestureMove);
+  };
+  // The view moved by the wheel / a glide / a fling while a drag is held:
+  // the drag follows the content (the marquee keeps its corner on the
+  // timeline and grows; a dragged clip stays under the pointer).
+  const followViewport = (): void => {
+    if (activeGesture && lastGestureMove && followsViewport(activeGesture)) {
+      handlePointerMove(lastGestureMove);
+    }
   };
 
   const handlePointerMove = (event: PointerEvent): void => {
@@ -2048,8 +2104,16 @@ export function createPlaylistInteractionController(
     }
 
     if (gesture.kind === "marquee") {
-      core.setMarquee({ start: gesture.startPoint, current: point });
-      selectClipsInMarquee(core, gesture.additive);
+      // Its corner where it was born on the timeline, at today's scroll /
+      // zoom (it leaves the screen when you scroll away from it).
+      core.setMarquee({
+        start: {
+          x: timeToScreenX(state, gesture.startTime, metrics),
+          y: gesture.startContentY - state.viewport.scrollY,
+        },
+        current: point,
+      });
+      selectClipsInMarquee(core, gesture);
       event.preventDefault();
       return;
     }
@@ -2749,6 +2813,7 @@ export function createPlaylistInteractionController(
       if (device === "trackpad") {
         navigator.stop();
         zoomImmediate(Math.exp(-delta * 0.01), anchorX);
+        followViewport();
       } else {
         navigator.zoomBy(Math.pow(1.25, -delta / 100), anchorX);
       }
@@ -2770,6 +2835,7 @@ export function createPlaylistInteractionController(
         scrollX: Math.max(0, state.viewport.scrollX + sx),
         scrollY: Math.max(0, state.viewport.scrollY + sy),
       });
+      followViewport();
       return;
     }
 

@@ -1,6 +1,220 @@
-// Demo scenario for the MVP (deterministic: every date derives from `startDate`).
+// Example plans (deterministic: every date derives from `startDate`).
+// - createExampleYearDocument: "el año de ejemplo" the app opens on a first
+//   visit and with "Reiniciar con el ejemplo…".
+// - createDemoFinancialDocument: the engine's stable fixture (tests across
+//   the repo read its names and numbers) — change it only with them.
 import { addDays, addMonths } from "./dates";
 import type { FinancialDocument, ISODate } from "./types";
+
+/**
+ * "Mi año": a designer with a part-time studio salary (quincena), freelance
+ * projects and a rented room; rent, groceries and petrol every week, the
+ * usual bills, a car loan, two cards (one with an 18-MSI phone, the other a
+ * 12-MSI fridge), the car insurance in ~3 months and a trip in ~5. Every
+ * item carries an icon (apps/web icons.ts). Tuned so cash stays positive
+ * all year with a dip under the 4 000 reserve around the insurance (a
+ * valley to fix), and the cards are worth paying down.
+ */
+export function createExampleYearDocument(startDate: ISODate): FinancialDocument {
+  const day = (offset: number): ISODate => addDays(startDate, offset);
+  const carAnchor = day(6);
+  return {
+    id: "ejemplo",
+    name: "Mi año",
+    startDate,
+    initialCash: 15000,
+    minimumCashReserve: 4000,
+    horizonMonths: 12,
+    items: [
+      // Ingresos
+      {
+        id: "ej-sueldo",
+        kind: "income",
+        name: "Sueldo del despacho",
+        icon: "briefcase",
+        amount: 11000,
+        recurrence: { frequency: "semimonthly", startDate },
+      },
+      {
+        id: "ej-freelance",
+        kind: "income",
+        name: "Proyectos freelance",
+        icon: "laptop",
+        amount: 7500,
+        recurrence: { frequency: "monthly", startDate: day(12) },
+      },
+      {
+        id: "ej-cuarto",
+        kind: "income",
+        name: "Renta del cuarto",
+        icon: "key-round",
+        amount: 3200,
+        recurrence: { frequency: "monthly", startDate: day(10) },
+      },
+      {
+        id: "ej-aguinaldo",
+        kind: "income",
+        name: "Aguinaldo",
+        icon: "gift",
+        amount: 16000,
+        recurrence: { frequency: "once", startDate: day(28), endDate: day(28) },
+      },
+      // Gastos
+      {
+        id: "ej-renta",
+        kind: "expense",
+        name: "Renta del depa",
+        icon: "house",
+        amount: 9800,
+        recurrence: { frequency: "monthly", startDate: day(11) },
+      },
+      {
+        id: "ej-super",
+        kind: "expense",
+        name: "Súper",
+        icon: "shopping-cart",
+        amount: 1200,
+        recurrence: { frequency: "weekly", startDate: day(2) },
+      },
+      {
+        id: "ej-gasolina",
+        kind: "expense",
+        name: "Gasolina",
+        icon: "fuel",
+        amount: 550,
+        recurrence: { frequency: "weekly", startDate: day(4) },
+      },
+      {
+        id: "ej-luz",
+        kind: "expense",
+        name: "Luz",
+        icon: "zap",
+        amount: 1150,
+        recurrence: { frequency: "monthly", interval: 2, startDate: day(20) },
+      },
+      {
+        id: "ej-internet",
+        kind: "expense",
+        name: "Internet y celular",
+        icon: "wifi",
+        amount: 899,
+        recurrence: { frequency: "monthly", startDate: day(7) },
+      },
+      {
+        id: "ej-gym",
+        kind: "expense",
+        name: "Gimnasio",
+        icon: "dumbbell",
+        amount: 650,
+        recurrence: { frequency: "monthly", startDate: day(12) },
+      },
+      {
+        id: "ej-streaming",
+        kind: "expense",
+        name: "Streaming",
+        icon: "tv",
+        amount: 329,
+        recurrence: { frequency: "monthly", startDate: day(16) },
+      },
+      {
+        id: "ej-luna",
+        kind: "expense",
+        name: "Croquetas de Luna",
+        icon: "paw-print",
+        amount: 780,
+        recurrence: { frequency: "monthly", startDate: day(9) },
+      },
+      {
+        id: "ej-seguro",
+        kind: "expense",
+        name: "Seguro del auto",
+        icon: "shield-check",
+        amount: 9400,
+        recurrence: {
+          frequency: "once",
+          startDate: addMonths(startDate, 3),
+          endDate: addMonths(startDate, 3),
+        },
+      },
+      {
+        id: "ej-viaje",
+        kind: "expense",
+        name: "Viaje a Oaxaca",
+        icon: "plane",
+        amount: 12000,
+        recurrence: {
+          frequency: "once",
+          startDate: addMonths(startDate, 5),
+          endDate: addMonths(startDate, 5),
+        },
+      },
+      // Deudas
+      {
+        id: "ej-auto",
+        kind: "loan",
+        name: "Crédito del auto",
+        icon: "car",
+        paymentAmount: 4850,
+        balance: 62000,
+        annualRate: 13.9,
+        recurrence: {
+          frequency: "monthly",
+          startDate: carAnchor,
+          endDate: addMonths(carAnchor, 12),
+          anchorDate: carAnchor,
+        },
+      },
+      {
+        id: "ej-oro",
+        kind: "credit-card",
+        name: "Tarjeta Oro",
+        icon: "credit-card",
+        balance: 18400,
+        annualRate: 54,
+        cutDay: 3,
+        dueDay: 23,
+        minimumPayment: 1200,
+        paymentAmount: 2500,
+        recurrence: { frequency: "monthly", startDate },
+      },
+      {
+        id: "ej-azul",
+        kind: "credit-card",
+        name: "Tarjeta Azul",
+        icon: "credit-card",
+        balance: 7900,
+        annualRate: 42,
+        cutDay: 12,
+        dueDay: 2,
+        minimumPayment: 600,
+        paymentAmount: 1500,
+        recurrence: { frequency: "monthly", startDate },
+      },
+      {
+        id: "ej-celular",
+        kind: "installment-plan",
+        name: "Celular 18 MSI",
+        icon: "smartphone",
+        cardId: "ej-oro",
+        originalAmount: 21600,
+        installmentsTotal: 18,
+        installmentsPaid: 5,
+        recurrence: { frequency: "monthly", startDate },
+      },
+      {
+        id: "ej-refri",
+        kind: "installment-plan",
+        name: "Refri 12 MSI",
+        icon: "package",
+        cardId: "ej-azul",
+        originalAmount: 13200,
+        installmentsTotal: 12,
+        installmentsPaid: 2,
+        recurrence: { frequency: "monthly", startDate },
+      },
+    ],
+  };
+}
 
 /**
  * "Mi escenario": payroll every quincena, two one-off expenses, a personal

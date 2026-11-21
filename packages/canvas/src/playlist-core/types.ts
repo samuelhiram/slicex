@@ -404,6 +404,14 @@ export interface PlaylistState {
 
 export interface PlaylistMetrics {
   rulerHeight: number;
+  /**
+   * One row for the ruler: the axis' group labels (months, years) share the
+   * row with the tick labels — sticky at the timeline's left edge, after the
+   * "now" pill when they would touch it — instead of a tier of their own, so
+   * a short ruler still says which month (and year) you are in. Default
+   * false: groups get the upper tier.
+   */
+  rulerSingleRow?: boolean;
   trackHeaderWidth: number;
   trackHeight: number;
   trackMinHeight: number;
@@ -561,6 +569,29 @@ export interface PlaylistOverviewData {
    * it moves (e.g. round steps with hysteresis). Absent: the data extent.
    */
   domain?: { min: number; max: number };
+  /**
+   * The host's colours (0xRRGGBB) over the theme's: `positive` the primary
+   * curve above every threshold; `warning` a warning threshold (its line,
+   * its label, the area under it); `secondary` / `baseline` those curves;
+   * `annotation` the pins and pills that are not "danger". Danger (under a
+   * danger threshold) always keeps the theme's.
+   */
+  colors?: PlaylistOverviewColors;
+  /** false: no scale labels at the right edge (extents, guides). Default true. */
+  scaleLabels?: boolean;
+  /**
+   * A box at the lane's top-left (px) kept clear of labels: a host control
+   * sits there (threshold names and pills go round it).
+   */
+  corner?: { width: number; height: number };
+}
+
+export interface PlaylistOverviewColors {
+  positive?: number;
+  warning?: number;
+  secondary?: number;
+  baseline?: number;
+  annotation?: number;
 }
 
 /**

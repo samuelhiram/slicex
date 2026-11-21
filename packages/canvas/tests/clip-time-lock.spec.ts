@@ -6,7 +6,7 @@
 // the title (sticky) without taking its room; the controller asks
 // the renderer where it is (rectOf), so a click lands where it is drawn; a
 // click (Select / Draw) toggles the flag in one undo entry and tells the host.
-import { Container, Text } from "pixi.js";
+import { Container, Graphics, Text, type GraphicsPath } from "pixi.js";
 import { describe, expect, it } from "vitest";
 import {
   createDemoPlaylistState,
@@ -14,6 +14,7 @@ import {
   DEFAULT_PLAYLIST_METRICS,
   getClipExtendHandle,
   type PlaylistClip,
+  type PlaylistClipContent,
   type PlaylistRect,
   type PlaylistState,
 } from "../src/playlist-core";
@@ -263,7 +264,14 @@ describe("the lock button", () => {
 
 // --- Drawn before the title, sliding with it ----------------------------------
 
-function drawn(start: number, duration: number, scrollBeats: number, timeLocked = true, rowHeight?: number) {
+function drawn(
+  start: number,
+  duration: number,
+  scrollBeats: number,
+  timeLocked = true,
+  rowHeight?: number,
+  content: PlaylistClipContent | null = null,
+) {
   const base = createDemoPlaylistState();
   const state: PlaylistState = {
     ...base,
@@ -290,6 +298,7 @@ function drawn(start: number, duration: number, scrollBeats: number, timeLocked 
     timeLock: true,
     getClipDetail: () => "-$7,500 /mes",
     getClipPeriod: () => "10 nov 2026 – 10 abr 2027",
+    ...(content ? { getClipContent: () => content } : {}),
   });
   const parent = new Container();
   const views = core.getPresentation().visibleClipViews;
@@ -308,7 +317,17 @@ function drawn(start: number, duration: number, scrollBeats: number, timeLocked 
   const amount = node.children.find((child) => child instanceof Text && child.text.includes("7,500")) as
     | Text
     | undefined;
+  // The tab (a notch in the card's corner) and the body's event bars.
+  const tab = node.children.find((child) => child.label === "clip-tab") as Graphics | undefined;
+  const body = node.children[0] as Graphics;
+  const bars = body.context.instructions
+    .filter((instruction) => instruction.action === "fill")
+    .map((instruction) => (instruction.data as { path: GraphicsPath }).path.bounds)
+    .filter((bounds) => bounds.width <= 2)
+    .map((bounds) => ({ x: node.x + bounds.minX, top: bounds.minY, bottom: bounds.maxY }));
   return {
+    tab: tab && tab.visible ? { x: node.x + tab.x, width: tab.width } : null,
+    bars,
     amountX: amount && amount.visible ? node.x + amount.x : Number.NaN,
     amountY: amount && amount.visible ? node.y + amount.y : Number.NaN,
     amountText: amount && amount.visible ? amount.text : null,
@@ -327,16 +346,104 @@ function drawn(start: number, duration: number, scrollBeats: number, timeLocked 
   };
 }
 
-describe("the lock sits in the bottom-left corner", () => {
-  it("a tab flush with the card's left and bottom edges, under the text; the title keeps its place", () => {
-    const { rect, lock, titleX } = drawn(5, 50, 0);
-    expect(lock).not.toBeNull();
-    expect(lock!.x).toBe(rect.x);
-    expect(lock!.y + lock!.height).toBe(rect.y + rect.height);
-    expect(lock!.y).toBeGreaterThan(rect.y + 30);
-    // 11 px in; the Text 1 px left of it: its outline (half of 2 px) draws
-    // the letters that far right.
-    expect(titleX).toBe(rect.x + 11 - 1);
+// The card is its LABEL above its BAR at every height (2026-11-20): the
+// label (name, amount; the dates on a tall card, the lock on a short one)
+// always outside the bar, above it; the bar under it runs the whole card
+// with one thickness — all the height the label row leaves (26 px on a tall
+// card, ≥ 62 px; the compact 16 on a shorter one).
+const tabHeightOf = (card: number): number => (card >= 62 ? 26 : 16);
+
+describe("the label above the bar", () => {
+  it("a tall card: the tab holds the name, the amount and the dates; the lock is the body's corner tab", () => {
+    const d = drawn(5, 50, 0);
+    expect(d.rect.height).toBe(70);
+    // The tab's band: 26 px from the card's top; the name centred in it.
+    expect(d.titleY - d.rect.y).toBe(Math.round((26 - 17) / 2) - 1);
+    // 11 px in; the Text 1 px left of it (its outline).
+    expect(d.titleX).toBe(d.rect.x + 11 - 1);
+    // The amount on the name's line, after it.
+    expect(d.amountText).toBe("-$7,500 /mes");
+    expect(Math.abs(d.amountY - d.titleY)).toBeLessThanOrEqual(1);
+    expect(d.amountX).toBeGreaterThan(d.titleX + "Préstamo".length * 6);
+    // The dates tag on the same band, after the amount.
+    expect(d.periodText).toBe("10 nov 2026 – 10 abr 2027");
+    expect(d.badgeY - d.rect.y).toBe(Math.round((26 - 16) / 2));
+    expect(d.badgeX).toBeGreaterThan(d.amountX + "-$7,500 /mes".length * 6);
+    expect(d.periodX - d.badgeX).toBe(6 + 10 + 5);
+    // The label: from the card's left edge to past the dates; right of it
+    // the timeline shows through (the bar runs on under it).
+    expect(d.tab!.x).toBe(d.rect.x);
+    expect(d.tab!.x + d.tab!.width).toBeGreaterThan(d.badgeRight);
+    expect(d.tab!.x + d.tab!.width).toBeLessThan(d.rect.x + d.rect.width - 100);
+    // The lock: the corner tab (30 px), flush with the body's left and
+    // bottom edges, under the tab.
+    expect(d.lock!.x).toBe(d.rect.x);
+    expect(d.lock!.width).toBe(30);
+    expect(d.lock!.y + d.lock!.height).toBe(d.rect.y + d.rect.height);
+    expect(d.lock!.y).toBeGreaterThanOrEqual(d.rect.y + 26 + 4);
+  });
+
+  it("at every height the text stays in the tab; a short card's tab carries no dates", () => {
+    for (const [row, card] of [
+      [84, 70],
+      [72, 58],
+      [68, 54],
+      [60, 46],
+      [52, 38],
+      [42, 28],
+    ] as const) {
+      const d = drawn(5, 50, 0, true, row);
+      expect(d.rect.height).toBe(card);
+      const tabBottom = d.rect.y + tabHeightOf(card);
+      // The name and the amount within the tab's band.
+      expect(d.titleY).toBeGreaterThanOrEqual(d.rect.y - 1);
+      expect(d.titleY + 17).toBeLessThanOrEqual(tabBottom + 1);
+      expect(d.amountText).toBe("-$7,500 /mes");
+      if (card >= 62) {
+        // Tall: the dates in the tab; the lock in the body's corner.
+        expect(d.badgeY).toBeGreaterThanOrEqual(d.rect.y);
+        expect(d.badgeY + 16).toBeLessThanOrEqual(tabBottom);
+        expect(d.lock!.x).toBe(d.rect.x);
+        expect(d.lock!.y).toBeGreaterThanOrEqual(tabBottom);
+        expect(d.lock!.y + d.lock!.height).toBe(d.rect.y + d.rect.height);
+      } else {
+        // Short: no dates (the hover card and the inspector say them); a
+        // lock badge in the tab, after the amount; the tab ends after it.
+        expect(d.periodText).toBeNull();
+        expect(d.lock!.width).toBe(24);
+        expect(d.lock!.y).toBeGreaterThanOrEqual(d.rect.y);
+        expect(d.lock!.y + d.lock!.height).toBeLessThanOrEqual(tabBottom);
+        expect(d.lock!.x).toBeGreaterThan(d.amountX + "-$7,500 /mes".length * 6);
+        expect(d.tab!.x + d.tab!.width).toBeLessThan(d.lock!.x + d.lock!.width + 20);
+      }
+    }
+  });
+
+  it("the bar: one thickness end to end, under the label; the payment marks fill it", () => {
+    // 52 px rows: a 38 px card — the compact 16 px label row, a 22 px bar.
+    const content: PlaylistClipContent = {
+      kind: "events",
+      beats: [10, 15, 20, 25, 30, 35, 40, 45, 50],
+      values: [-1, -1, -1, -1, -1, -1, -1, -1, -1],
+    };
+    const d = drawn(5, 50, 0, true, 52, content);
+    expect(d.rect.height).toBe(38);
+    expect(d.bars.length).toBe(9);
+    // Every mark the same: the bar's height less the accent's 4 px inset
+    // each side — under the label and right of it alike.
+    for (const bar of d.bars) {
+      expect(bar.top).toBe(16 + 4);
+      expect(bar.bottom).toBe(38 - 4);
+    }
+    const tabEnd = d.tab!.x + d.tab!.width;
+    expect(d.bars.some((bar) => bar.x < tabEnd)).toBe(true);
+    expect(d.bars.some((bar) => bar.x > tabEnd)).toBe(true);
+    // A tall card (70 px): the 26 px row, a 44 px bar.
+    const tall = drawn(5, 50, 0, true, 84, content);
+    for (const bar of tall.bars) {
+      expect(bar.top).toBe(26 + 4);
+      expect(bar.bottom).toBe(70 - 4);
+    }
   });
 
   it("slides with the title to the timeline's left edge (sticky)", () => {
@@ -347,112 +454,33 @@ describe("the lock sits in the bottom-left corner", () => {
     expect(lock!.x).toBeLessThanOrEqual(titleX);
   });
 
-  it("a card too short for two lines keeps it on the pill's line, after the pill, centred", () => {
-    const { rect, lock, textEnd, amountText, amountX } = drawn(5, 50, 0, true, 44);
-    expect(rect.height).toBeLessThan(44);
-    expect(lock).not.toBeNull();
-    // The amount stays in the pill, after the name (no body room needed).
-    expect(amountText).toBe("-$7,500 /mes");
-    expect(amountX).toBeGreaterThan(textEnd);
-    // After the pill: the amount's end + the pill's 12 px round end.
-    const pillEnd = amountX + 1 + "-$7,500 /mes".length * 7.3 + 12;
-    expect(lock!.x).toBeGreaterThanOrEqual(pillEnd);
-    expect(lock!.x - pillEnd).toBeLessThan(10);
-    expect(Math.abs(lock!.y + lock!.height / 2 - (rect.y + rect.height / 2))).toBeLessThanOrEqual(1);
-  });
-
-  it("two lines: the pill (name + amount) centred above the bottom line, the lock + dates at the bottom", () => {
-    for (const [row, card, bottomPad] of [
-      [84, 70, 4],
-      [72, 58, 2],
-      [60, 46, 2],
-    ] as const) {
-      const d = drawn(5, 50, 0, true, row);
-      expect(d.rect.height).toBe(card);
-      // The bottom line: the corner tab, the dates tag 2–4 px off the bottom.
-      expect(d.lock!.x).toBe(d.rect.x);
-      const rowTop = card - 16 - bottomPad;
-      expect(d.badgeY).toBe(d.rect.y + rowTop);
-      // The pill (22 px) centred in the room above it; the name in it, the
-      // amount on the same line, after the name.
-      const pillTop = Math.round((rowTop - 22) / 2);
-      expect(d.titleY - d.rect.y).toBe(pillTop + Math.round((22 - 17) / 2) - 1);
-      expect(d.amountText).toBe("-$7,500 /mes");
-      expect(Math.abs(d.amountY - d.titleY)).toBeLessThanOrEqual(1);
-      expect(d.amountX).toBeGreaterThan(d.titleX + "Préstamo".length * 6);
-      // The pill ends before the bottom line starts.
-      expect(d.rect.y + pillTop + 22).toBeLessThanOrEqual(d.badgeY);
-    }
-  });
-
-  it("a short card: the amount moves up beside the name; the lock + dates take its line", () => {
-    // 60 px row: a 46 px card — no room for three lines.
-    const short = drawn(5, 50, 0, true, 60);
-    expect(short.rect.height).toBe(46);
-    // The amount: on the name's line, after it ("Préstamo" ≈ 8 × 7.2 px).
-    expect(short.amountText).toBe("-$7,500 /mes");
-    expect(Math.abs(short.amountY - short.titleY)).toBeLessThanOrEqual(1);
-    expect(short.amountX).toBeGreaterThan(short.titleX + "Préstamo".length * 6);
-    // The lock in the corner, the dates after it, on the bottom line.
-    expect(short.lock!.x).toBe(short.rect.x);
-    expect(short.lock!.y + short.lock!.height).toBe(short.rect.y + short.rect.height);
-    expect(short.badgeX).toBeGreaterThan(short.lock!.x + short.lock!.width);
-    expect(short.badgeY).toBeGreaterThanOrEqual(short.rect.y + 20);
-  });
-
-  it("a card too short for two lines (38 px) keeps everything beside the name", () => {
-    const tiny = drawn(5, 50, 0, true, 52);
-    expect(tiny.rect.height).toBe(38);
-    expect(tiny.lock!.x).toBeGreaterThanOrEqual(tiny.textEnd);
-  });
-
   it("a free clip shows it too (open); a card too narrow shows none", () => {
     expect(drawn(5, 50, 0, false).lock).not.toBeNull();
     // 2 beats = 40 px.
     expect(drawn(5, 2, 0).lock).toBeNull();
   });
-});
 
-describe("the third row: the lock button, then the dates tag (two things)", () => {
-  it("under the name and the amount: the corner tab (30 px, the row's height), the dates tag 8 px after it", () => {
-    const { rect, titleY, lock, badgeX, badgeY, periodX, periodText } = drawn(5, 50, 0);
-    expect(periodText).toBe("10 nov 2026 – 10 abr 2027");
-    // The lock's hit area is the tab alone: the third row's band, bounded.
-    expect(lock!.width).toBe(30);
-    expect(lock!.height).toBeGreaterThanOrEqual(18);
-    expect(lock!.height).toBeLessThanOrEqual(26);
-    // A gap, then the tag: padding, calendar glyph, its gap, the text.
-    expect(badgeX - (lock!.x + lock!.width)).toBe(8);
-    expect(periodX - badgeX).toBe(6 + 10 + 5);
-    // The tag sits within the tab's band.
-    expect(badgeY).toBeGreaterThanOrEqual(lock!.y);
-    expect(badgeY + 16).toBeLessThanOrEqual(lock!.y + lock!.height);
-    // The bottom line: under the pill (its text at titleY), inside the card.
-    expect(badgeY).toBeGreaterThan(titleY + 17);
-    expect(lock!.y + lock!.height).toBeLessThanOrEqual(rect.y + rect.height);
-  });
-
-  it("beside the text on a short card; cut to fit a narrow one", () => {
-    const short = drawn(5, 50, 0, true, 44);
-    expect(short.periodText).toBe("10 nov 2026 – 10 abr 2027");
-    expect(short.lock!.x).toBeGreaterThanOrEqual(short.textEnd);
-    expect(short.badgeX).toBeGreaterThanOrEqual(short.lock!.x + short.lock!.width);
-    // 10 beats = 200 px: the dates are cut, never past the card.
-    const narrow = drawn(5, 10, 0);
+  it("the dates are cut to fit a narrow card, never past it", () => {
+    // 20 beats = 400 px: room for part of the dates after the amount.
+    const narrow = drawn(5, 20, 0);
     expect(narrow.periodText!.endsWith("…")).toBe(true);
     expect(narrow.badgeRight).toBeLessThanOrEqual(narrow.rect.x + narrow.rect.width);
+    // 15 beats = 300 px: no room after the amount — no dates rather than
+    // past the card.
+    const tight = drawn(5, 15, 0);
+    if (tight.periodText !== null) {
+      expect(tight.badgeRight).toBeLessThanOrEqual(tight.rect.x + tight.rect.width);
+    }
   });
 
-  it("clipCardWidthPx fits what the card draws", () => {
+  it("clipCardWidthPx fits the tab: name, amount, dates (a short card: the lock badge, no dates)", () => {
     const tall = clipCardWidthPx("Bono", "+$4,000", "9 dic 2026", 70, 20);
-    // The row: the corner tab + gap + tag (padding, glyph, gap, text).
-    expect(tall).toBeGreaterThanOrEqual(30 + 8 + 6 * 2 + 10 + 5 + "9 dic 2026".length * 6.7);
-    // Too short for two lines (36 px): all beside the name — wider.
-    expect(clipCardWidthPx("Bono", "+$4,000", "9 dic 2026", 36, 20)).toBeGreaterThan(tall);
-    // Two lines (46 px): the wider of "name + amount" and "lock + dates".
-    const name = "Un nombre bastante largo";
-    expect(clipCardWidthPx(name, "+$4,000", "9 dic 2026", 46, 20)).toBeGreaterThanOrEqual(
-      11 + name.length * 7.2 + 10 + "+$4,000".length * 6.7,
-    );
+    // pad + name, gap + amount, gap + tag (padding, glyph, gap, text), pad.
+    const tab = 11 + 4 * 7.8 + 10 + 7 * 7.3 + 12 + (6 * 2 + 10 + 5 + 10 * 7.3) + 10;
+    expect(tall).toBeGreaterThanOrEqual(tab);
+    // A short card: pad + name, gap + amount, gap + the lock badge, pad.
+    const short = clipCardWidthPx("Bono", "+$4,000", "9 dic 2026", 36, 20);
+    expect(short).toBeGreaterThanOrEqual(11 + 4 * 7.8 + 10 + 7 * 7.3 + 8 + 24 + 10);
+    expect(short).toBeLessThan(tall);
   });
 });

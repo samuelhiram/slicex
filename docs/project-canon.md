@@ -15,8 +15,13 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
 
 - `apps/web/src/App.tsx` monta directamente `PlaylistShell` (no hay router; la entrada es
   `index.html` → `src/main.tsx` → `<App />`).
-- `PlaylistShell` crea un **documento financiero demo** (`createDemoFinancialDocument(hoy)` de
-  `@slicex/core`), lo proyecta a estado de playlist (`apps/web/src/finance/mapping.ts`), inicializa
+- `PlaylistShell` abre el plan guardado o, en la primera visita y con "Reiniciar con el
+  ejemplo…" (Mi plan ▾ o `?reset`), **el año de ejemplo** (`createExampleYearDocument(hoy)` de
+  `@slicex/core`, 2026-11-20: "Mi año" — sueldo de despacho, freelance, cuarto rentado, renta,
+  súper, servicios, crédito del auto, dos tarjetas con MSI, seguro y viaje, todos con ícono; caja
+  positiva todo el año con valles bajo la reserva para arreglar). `createDemoFinancialDocument`
+  sigue como fixture estable del motor y de las pruebas (las de interacción del shell lo fijan
+  con un `vi.mock` parcial de `createExampleYearDocument`). Lo proyecta a estado de playlist (`apps/web/src/finance/mapping.ts`), inicializa
   core + interacción + renderer y el `FinancialBridge`, y monta `PlaylistInspector`, los paneles
   financieros (`apps/web/src/finance/components/`) y `ErrorBoundary`.
 - `@slicex/canvas` exporta tres capas claras:
@@ -130,8 +135,8 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     (`MovementsPanel`, 2026-11-18): columna a la derecha del timeline (~¼ de pantalla,
     `clamp(320px, 25vw, 560px)`) que empuja el canvas (el ResizeObserver del renderer lo sigue;
     se pliega sin animar el ancho). Abierto por defecto en **"Gastos del mes"**: el título dice
-    lo que se ve ("Ingresos de hoy", "Todo lo que pasó", "Préstamos de tu plan"), con la cifra
-    total debajo. El botón del header (antes "Buscar") lo pliega y despliega; **F** lo abre y
+    lo que se ve ("Ingresos de hoy", "Todo lo que pasó", "Préstamos de tu plan") en la barra de
+    título de los paneles (con "Registrar" y la X), y la cifra total encabeza los controles. El botón del header (antes "Buscar") lo pliega y despliega; **F** lo abre y
     enfoca su búsqueda. Plegado o abierto lo recuerda el navegador (`localStorage`
     `slicex.records-panel.v1`; sin elección: abierto desde 900 px, plegado debajo, donde cubre
     el stage en vez de empujarlo); la vista (sección y filtros) la recuerda la pestaña
@@ -158,7 +163,13 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
   (`packages/canvas/src/playlist-renderer-pixi/palette.ts`, `LIGHT_PALETTE`/`DARK_PALETTE`);
   se cambian juntos. Fuente Inter (woff2 locales en `apps/web/src/assets/fonts/inter/`, OFL);
   el shell espera a la fuente antes de crear el renderer (Pixi rasteriza cada `Text` una vez).
-  Regla de dos niveles (mes / días, píldora "Hoy", fines de semana sombreados) vía
+  **Regla de un renglón** (2026-11-20, `metrics.rulerSingleRow`, 34 px en vez de 52): el mes
+  con su año ("dic 2026") va en el mismo renglón que los días, como etiqueta suave (negrita
+  sobre un relleno tenue, para que un día anterior nunca se lea como su fecha), pegada al
+  borde izquierdo mientras su mes está a la vista y después de la píldora "Hoy"; los días que
+  la tocarían ceden. Muy lejos, "nov 2026" por mes cuando cabe; si no, el año como etiqueta
+  ("2027") y los meses "feb", "mar". El motor conserva los dos niveles sin esa opción.
+  Antes: regla de dos niveles (mes / días, píldora "Hoy", fines de semana sombreados) vía
   `PlaylistTimeAxis.bands()` + ticks `centered`/`emphasis`/`dim`; clips como tarjetas tintadas
   con barra de acento; headers con íconos (ojo / enfoque / candado) en vez de "M S L".
 - **Estándar Soft UI (regla de implementación, 2026-11-08).** Toda UI nueva lo cumple:
@@ -184,6 +195,40 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     (64 / 60) — el carril solo lleva el título "Caja"; la lectura del día vive en el header. 60 px es el mínimo que conserva nombre + subtítulo + medidor del header de
     track. "Análisis" vive en la fila del título "Caja" para que la celda del carril quepa en
     88 px. Las capas DOM se alinean con `--pl-ruler-h` / `--pl-lane-h` / `--pl-header-w`.
+  - **Ajustes del gráfico de balance** (2026-11-20, `ChartSettings.tsx` +
+    `apps/web/src/finance/chart-settings.ts`). Una **tuerca** de 26 px integrada en la esquina
+    superior izquierda del gráfico (`.fin-chart-gear`, en el stage) abre un modal "Ajustes del
+    gráfico", anclado bajo ella y sobre un velo tenue sin desenfoque, para ver cada cambio en
+    vivo. Tiene un interruptor por extra: **Mínimos** (pines y píldoras de los puntos bajos),
+    **Deuda** (su línea en su escala), **Reserva** (línea, etiqueta y tono de aviso bajo ella),
+    **Plan alterno** (el fantasma del futuro comparado) y **Escala** (guías redondas y
+    etiquetas de la derecha). **Todo empieza apagado**: el gráfico es la curva de caja y su línea
+    de $0; debajo de $0 sigue en rojo. Cada elemento, la caja incluida, elige su color:
+    "Automático" (el del tema, tokens `--chart-*` ↔ `palette.ts`) o uno de 7 tonos que se leen
+    en ambos temas, sin rojo. Preferencia del navegador (`localStorage` `slicex.chart.v1`), no
+    del plan. El puente recibe `setOverviewView(view)` (`OverviewView` en `visuals.ts`; por
+    defecto todo encendido, para pruebas y otros hosts); el shell se lo pasa desde el primer
+    cuadro y en cada cambio. El canvas acepta `PlaylistOverviewData.colors` (nunca para
+    "danger"), `scaleLabels: false` y `corner` (una caja libre de etiquetas donde está la
+    tuerca: los nombres de umbral y las píldoras se corren a su derecha). Elegir "Comparar" en
+    Futuros enciende "Plan alterno". El fantasma del gesto y el de "Ver mi año sin esto" no
+    dependen de él.
+  - **Sin barra encima de la regla** (2026-11-20). Hubo un renglón de 40 px sobre la regla
+    (`.fin-timebar`) con **"Asomarte a «Plan principal»"** (`FuturesPeekChip`) y la franja azul
+    **"Estás en «Otra versión» (hipótesis) · Volver al plan principal"** (`FutureStrip`, UX-19);
+    se quitó entera, con los dos componentes y sus estilos. El escenario vuelve a ir pegado al
+    header. Asomarte al otro futuro es **mantener Q**; en qué versión estás lo dice el botón de
+    Futuros (su nombre), y volver al plan principal se hace desde su menú ("Plan principal").
+  - **Paneles laterales: un solo aspecto, el de "Comparar y pagar deudas"** (2026-11-19). Todo
+    panel al costado del timeline (ese rail, el de movimientos, el inspector) es una columna
+    acoplada al stage, sin hueco, sin tarjeta propia y sin sombra, en `--raised`, con una línea
+    `--line` entre ella y el stage, y una barra de título de 52 px: título de 15 px/600 en color
+    de texto, sus acciones y su cierre (X de 32 px) a la derecha, línea abajo. El stage y sus
+    paneles forman UNA tarjeta: `.playlist-shell__workspace` lleva el radio y la sombra (con
+    `overflow: hidden`) y el stage pierde los suyos, así las esquinas exteriores coinciden con
+    el header y no hay muescas en las uniones. (Chromium headless, sin GPU, puede capturar el
+    canvas con huecos transparentes bajo el inspector abierto en esta disposición; un navegador
+    real lo dibuja completo — verificado con ventana, 2026-11-19.)
   - **Controles secundarios = rellenos suaves** (`--surface-2`) sin contorno; una sola acción
     primaria rellena (`--ink`) por superficie. Radios `--radius-s/m/l` = 8/12/18 px.
   - **Header: un solo tamaño** (bloque final de `globals.css`): todo control del header mide
@@ -205,7 +250,10 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     con el panel de movimientos oculto), **"Pagar deudas"** (`FinancialSidePanel`
     `placement="header"`; su rail "Comparar y pagar deudas" se abre al costado del stage), el
     botón del panel, el
-    futuro (solo ícono en el plan principal) y "+ Nuevo". Reglas al final de `globals.css`
+    futuro (solo ícono, cuadro de 40 px, mientras el plan principal es el único futuro; con más
+    futuros se ensancha: ícono, nombre del futuro activo recortado con "…" y cuántos hay en una
+    píldora — bajo 1430 px el nombre cede y quedan ícono y número, nunca apretados en el cuadro)
+    y "+ Nuevo". Reglas al final de `globals.css`
     ("Header v3"); prevalecen sobre las de abajo que hablan de etiquetas de herramientas y de
     cifras que se acomodan por ancho.
   - **Formularios — estándar v2 (2026-11-18)** (bloque final de `globals.css`): etiqueta arriba
@@ -291,9 +339,25 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     `metrics.trackHeight` (su copia propia) y re-aplica al deshacer / cargar; viaja en el layout
     guardado (`FinancialTrackLayout.rowHeight`). A su derecha, **↺ Restaurar**: todas las líneas
     a su alto normal (el de la densidad) y el zoom de inicio; apagado si ya están así. Debajo,
-    la celda del carril de caja (`TimelineCell`) dice **"Plano de eventos"** (el canvas ya no
+    la celda del carril de caja (`TimelineCell`; **sin título visible** desde 2026-11-20 — el grupo se
+    llama "Plano de eventos" solo para lectores de pantalla; el canvas ya no
     dibuja "Caja") y lleva botones de solo ícono del timeline: el de filas (tres filas iguales y
-    una flecha de alto) pone todas las líneas a su alto normal en un clic.
+    una flecha de alto) pone todas las líneas a su alto normal en un clic, y **"Compactar"**
+    (2026-11-20; las filas aplastadas en líneas y dos flechas que se cierran) las deja a la
+    mitad del normal (42 px). Cada uno es un paso de deshacer y se apaga cuando ya está en su
+    alto. El tercero, **"Ordenar por tipo"** (2026-11-20; una "A" y una flecha curva), pone
+    cada objeto en **su propia línea**, agrupados por tipo — ingresos, gastos y luego las deudas
+    (`KIND_ORDER`) y, dentro de un tipo, en el orden del plan —, sin importar cómo estaban:
+    llenan **las primeras líneas, sin huecos** (las vacías sin nombre se quitan; las que la
+    persona nombró y quedaron vacías van después). Cada línea nueva conserva lo de la línea de
+    su objeto: excluida, solo, bloqueada, su alto; y su nombre propio si esa línea solo tenía ese
+    objeto. Las fechas y montos no cambian. Un solo paso de deshacer (acción del motor
+    `ARRANGE_TRACKS` / `core.arrangeTracks`; el cálculo es puro, `arrangementByKind` en
+    `mapping.ts`), anunciado con "Deshacer"; lleva la vista a la primera línea y se apaga cuando
+    ya están así (el puente lo cachea por líneas / tarjetas / objetos). **El alto mínimo de una línea de evento es 38 px** (2026-11-20,
+    `FINANCE_PLAYLIST_METRICS.trackMinHeight`): el controlador, las flechas, el arrastre de una
+    fila y un plan guardado nunca bajan de ahí (el core lo recorta); a 38, cada tarjeta (32 px)
+    es su etiqueta compacta de 16 px sobre una barra de 16 px.
   - **Nada se encima, en cascada** (`lanes.ts`): un objeto de una sola fecha se dibuja tan ancho
     como su nombre, más que su día; en una fila compartida los carriles separan las tarjetas
     *dibujadas*: el que empieza primero se queda arriba y los que tocaría bajan un carril, en
@@ -301,27 +365,51 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     re-acomoda al crear o editar un objeto (`FinancialBridge` pasa el objeto pendiente a
     `clipMinWidth`), al cargar el plan (el shell llama `core.relayoutLanes()` tras crear el
     bridge) y al cruzar un nivel de zoom (×1.25).
-  - **Cada tarjeta dice sus fechas, en una tercera fila** (`describePeriod` → `getClipPeriod`
-    del renderer): "9 dic 2026", "1 dic 2026 – 1 sep 2027", "13 nov 2026 – Indefinido"; una deuda
-    o MSI hasta su liquidación estimada. Bajo el nombre y el monto van DOS cosas distintas: el
-    candado, un botón en la esquina (pestaña de 30 px del alto de la fila, al ras de los bordes
-    izquierdo e inferior, con el radio de la tarjeta en su esquina y el otro lado bien curvo;
-    relleno sólido del color de la tarjeta sombreado hacia la tinta, sin degradado, bajo el
-    contorno de la tarjeta: la esquina "se lo traga"; más fuerte con las
-    fechas fijas y bajo el puntero; lo único que reacciona; al desplazar la tarjeta sigue el
-    borde visible con la esquina recta; en una tarjeta baja es un badge con borde al lado del
-    texto), y 8 px después la etiqueta de fechas, información: ícono de calendario, relleno
-    opaco del color de la tarjeta un tono más claro (más oscuro en tema claro), sin borde,
-    esquinas suaves, el gris de la línea del monto — parte de la tarjeta, tapa las marcas de
-    pago. La fila va anclada abajo (2–4 px del borde): el alto que sobre queda como aire bajo el
-    monto; en una tarjeta de menos de 64 px el nombre y el monto suben 2 y 4 px para que ese
-    aire se note. En una tarjeta baja (~40–56 px, sin alto para tres líneas) el candado y las
-    fechas se quedan abajo, en el renglón del monto, y **el monto sube junto al nombre** (en
-    su mismo renglón, a su derecha; se recorta antes que el nombre) — la curva de una deuda
-    no se dibuja en una franja de menos de 8 px. Solo en una tarjeta
-    de menos de ~40 px (sin alto para dos líneas) la fila va al lado del
-    bloque nombre + monto, centrada. Recortada con "…" si no cabe; la etiqueta de una sola fecha
-    crece para mostrarla (`clipCardWidthPx`, misma geometría que el dibujo).
+  - **Cada tarjeta es su etiqueta encima de su barra, a cualquier alto** (2026-11-20; sustituye a
+    la pestaña "en muesca", cuyo cuerpo era grueso a la derecha de la pestaña y delgado debajo de
+    ella). La **etiqueta** —una pestaña del color del canvas desde el borde izquierdo: el
+    **ícono**, el nombre en negrita **en el color del objeto**, el monto en gris y, en una tarjeta
+    alta, la etiqueta de fechas (`describePeriod` → `getClipPeriod`)— va **siempre fuera de la
+    barra, encima de ella**; a su derecha se ve el timeline. La **barra** corre todo el largo del
+    objeto con **un solo grosor de punta a punta**: todo el alto que deja la etiqueta (el tinte, el
+    acento y las marcas de pago a lo alto de la barra). Para que la barra sea lo más gruesa posible
+    y no sobre aire: **3 px arriba y abajo de cada tarjeta** (`FINANCE_PLAYLIST_METRICS.clipPaddingY`;
+    antes 7), y el renglón de la etiqueta mide 26 px en una tarjeta alta (≥ 62 px: ícono de 21,
+    fechas, candado en la esquina) y es **compacto, 16 px**, en una más baja (nombre a 12 px, monto
+    a 11, ícono de 12, candado de 14): con alto 84 la barra mide 52 px; con "Compactar" (42), 20;
+    con el mínimo de 38, 16. El **candado**: en una tarjeta alta, la pestaña de la esquina inferior izquierda de la barra
+    (30 px, sólida, bajo el contorno; más fuerte con las fechas fijas y bajo el puntero; al
+    desplazar la tarjeta sigue el borde visible con la esquina recta); en una baja, una insignia
+    dentro de la etiqueta después del monto, y **sin fechas** (las dice la tarjeta del hover y el
+    inspector). El contorno normal rodea la barra (esquina superior izquierda recta: ahí se apoya
+    la etiqueta); la selección y los resaltados rodean etiqueta y barra (la etiqueta dibuja su
+    parte del anillo). Sin trabajo por cuadro: la etiqueta se mueve por transformación con el texto
+    pegado al borde y se redibuja solo si cambia su ancho o su estado. Recortado con "…" si no
+    cabe; la etiqueta de una sola fecha crece para mostrarlo todo (`clipCardWidthPx`, misma
+    geometría que el dibujo, ícono incluido). El agarre del monto queda sobre la etiqueta. La zona
+    de clic es el rectángulo de la tarjeta.
+  - **Íconos de los objetos** (2026-11-19). Cada objeto puede llevar un ícono:
+    `FinancialItem.icon` guarda solo su **nombre** (kebab-case, p. ej. `"house"`,
+    `"shopping-cart"`; `ItemIconSchema` de `@slicex/contracts` valida la forma, no el catálogo:
+    un nombre desconocido —un plan de una app más nueva— no dibuja nada). El motor lo ignora;
+    duplicar o cambiar de tipo lo conserva; al cargar el plan un nombre mal formado se descarta
+    sin perder el objeto. **Fuente: catálogo propio** (`apps/web/src/finance/icons.ts`, ~50
+    íconos en 7 grupos con etiqueta y palabras de búsqueda en español): trazos SVG en una
+    cuadrícula de 24 con trazo 2 redondo, dentro del bundle — cero dependencias, cero red, cero
+    fuentes web: latencia cero. Los nombres siguen los de Lucide donde existe uno (un cliente
+    nativo o un cambio a ese set los mapea uno a uno). Instalar Lucide quedó pendiente de
+    permiso (2026-11-19); con permiso, cambiar la fuente no migra datos. Mismos datos en DOM
+    (`ItemIcon`, SVG con `currentColor`) y canvas: el bridge da `getClipIcon` (el MISMO arreglo
+    por ícono) y el registro de nodos arma un `GraphicsContext` por glifo, compartido por todas
+    las tarjetas y teñido con el color de cada una (cero trabajo por cuadro; se reconstruye solo
+    si cambia la referencia). **Tamaño en la tarjeta: 21 px** (2026-11-20; se probó 28 y se
+    pidió el 75 %), dentro de la pestaña de la carpeta (26 px); con la pestaña reducida de una
+    tarjeta compacta se encoge a lo que quepa (18 px con filas de 42, nunca menos de 14). El
+    tamaño es una escala del mismo glifo, no otra geometría. Se elige en el editor con el botón cuadrado antes del Nombre
+    (`IconPicker`): buscador (sin acentos), "Para <tipo>" primero (`KIND_ICON_SUGGESTIONS`),
+    luego el catálogo por grupos, "Quitar"; flechas por geometría, Enter elige, Esc cierra. Se
+    ve también en la mini timeline del editor y en "En tu plan" (en lugar del punto del tipo).
+    El plan demo trae íconos.
   - **En el canvas la rueda es vertical** (2026-11-09; `mouseWheel: "rows"` del controller):
     sube y baja entre líneas de evento como cualquier documento; Shift + rueda, la rueda
     inclinable o la rueda sobre la regla / el carril de Caja mueven el tiempo; Ctrl + rueda o
@@ -348,7 +436,13 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
   motor (`isAutoRowLabel`); el renderer muestra las vacías con `formatTrackLabel`. Al cargar un
   plan guardado, las etiquetas que puso la app se vuelven automáticas (`appGivenRowLabel` en
   `mapping.ts`). La cabecera ya no lleva el medidor de 3 px sin rótulo (se leía como un fader);
-  el subtítulo dice el peso de la línea en palabras.
+  el subtítulo dice el peso de la línea en palabras. **Sin color propio (2026-11-20):** el punto
+  de color de la cabecera hacía pensar que la línea acepta un solo tipo (verde = solo
+  ingresos); hoy todas llevan el mismo triángulo "play" en el gris de los íconos inactivos
+  (`drawRowGlyph` en `layers/track-rows.ts`; más tenue si la línea está excluida), y el nombre
+  va en peso medio (500), no en negrita; las filas vacías del final, en gris. El menú de la línea
+  ya no tiene "Color de la línea de evento…" (abría el `<input type="color">` nativo). `track.color`
+  sigue en el modelo (y el puente lo fija al crear) pero ya no se pinta.
 - **Carriles apilados dentro de una línea** (`packages/canvas/src/playlist-core/lanes.ts`, port
   del schedule de postalhub-dashboard `ShiftPlanner/shiftCalendarLayout.ts`): clips que se pisan
   en el tiempo nunca se tapan; cada uno tiene `clip.lane` y la línea `track.lanes`, y mide
@@ -515,6 +609,19 @@ Los 17 `kind` de `playlist-interaction/gesture-types.ts`:
 - `paint-drag`, `delete-drag`, `mute-drag`
 - `track-resize`, `track-reorder`
 - `marker-drag`
+
+**El recuadro de selección se ancla al timeline, no a la pantalla** (2026-11-20). El gesto
+`marquee` guarda su esquina de inicio como tiempo + y del contenido (`startTime`,
+`startContentY`); en cada movimiento se vuelve a proyectar con el scroll y el zoom de ese
+momento, así que con el botón presionado puedes bajar con la rueda (o dejar que el borde
+desplace la vista) y seleccionar de arriba abajo y de lado a lado en un solo arrastre. La
+selección incluye las tarjetas que ya salieron de la vista mientras el recuadro las cubra: las
+visibles por su rect dibujado; las de fuera, primero filtradas por fecha y luego por la caja de su
+fila. Cuando la vista se mueve bajo un puntero quieto (rueda, deslizamiento, inercia, zoom con
+trackpad), el arrastre en curso se vuelve a aplicar en el último puntero
+(`ViewportNavigatorOptions.onStep` → `followViewport`; el auto-scroll del borde ya lo hacía).
+Aplica a los arrastres atados al contenido (recuadro, mover / estirar tarjetas, pintar, marcas…),
+nunca a `pan`. Pruebas: `packages/canvas/tests/marquee-scroll.spec.ts`.
 
 ### Acciones por contexto
 

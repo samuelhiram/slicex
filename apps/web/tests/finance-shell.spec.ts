@@ -49,6 +49,14 @@ const hoisted = vi.hoisted(() => ({
   interactionOptions: [] as Array<PlaylistInteractionOptions | undefined>,
 }));
 
+// The shell opens on "el año de ejemplo" (createExampleYearDocument); these
+// interaction tests walk the engine's stable fixture instead (its rows and
+// names), so the example can change without moving them.
+vi.mock("@slicex/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@slicex/core")>();
+  return { ...actual, createExampleYearDocument: actual.createDemoFinancialDocument };
+});
+
 vi.mock("@slicex/canvas", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@slicex/canvas")>();
   return {
@@ -241,6 +249,18 @@ vi.mock("../src/finance/financial-bridge", async () => {
     getComparison() {
       return this.comparison;
     }
+    overviewView: unknown = null;
+    setOverviewView(view: unknown) {
+      this.overviewView = view;
+    }
+    arranged = 0;
+    arrangeByKind() {
+      this.arranged += 1;
+      return true;
+    }
+    isArrangedByKind() {
+      return false;
+    }
     animateFrom() {}
     isAnimating() {
       return false;
@@ -260,6 +280,7 @@ vi.mock("../src/finance/financial-bridge", async () => {
 });
 
 import { PlaylistShell } from "../src/components/PlaylistShell";
+import { resetChartSettingsForTests } from "../src/finance/chart-settings";
 import { RECORDS_OPEN_KEY } from "../src/finance/records-panel-state";
 
 let root: Root | null = null;
@@ -782,9 +803,36 @@ describe("finance-native toolbar", () => {
     const rows = [...document.querySelector(".playlist-shell")!.children].map(
       (el) => el.className,
     );
-    // UX-47: the stage sits in the workspace row (beside the analysis rail).
+    // UX-47: the stage sits in the workspace row (beside the analysis rail),
+    // right under the header: no bar between them (2026-11-20).
     expect(rows.indexOf("playlist-shell__workspace")).toBe(rows.indexOf("fin-summary") + 1);
     expect(document.querySelector(".playlist-shell__workspace > .playlist-shell__stage")).not.toBeNull();
+    expect(document.querySelector(".fin-timebar, .playlist-shell__timeline, .fin-compare, .fin-branch-strip")).toBeNull();
+  });
+});
+
+describe("the balance chart's settings: a gear built into its corner", () => {
+  it("the bridge starts with every extra off; the gear opens the dialog; a switch reaches the bridge", async () => {
+    resetChartSettingsForTests();
+    const { bridge } = await mountShell();
+    const viewOf = () => (bridge as unknown as { overviewView: Record<string, unknown> }).overviewView;
+    expect(viewOf()).toMatchObject({ minimums: false, debt: false, reserve: false, alternate: false, scale: false });
+    const gear = document.querySelector<HTMLButtonElement>(".playlist-shell__stage > .fin-chart-gear")!;
+    expect(gear.getAttribute("aria-label")).toBe("Ajustes del gráfico");
+    act(() => gear.click());
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("Ajustes del gráfico");
+    // Modal: the rest of the shell waits under it.
+    expect(document.querySelector(".playlist-shell__stage")!.hasAttribute("inert")).toBe(true);
+    const debt = [...dialog.querySelectorAll<HTMLButtonElement>('[role="switch"]')].find(
+      (el) => document.getElementById(el.getAttribute("aria-labelledby")!)!.textContent === "Deuda",
+    )!;
+    act(() => debt.click());
+    expect(viewOf()).toMatchObject({ debt: true, reserve: false });
+    act(() => [...dialog.querySelectorAll("button")].find((el) => el.textContent === "Listo")!.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector(".playlist-shell__stage")!.hasAttribute("inert")).toBe(false);
+    resetChartSettingsForTests();
   });
 });
 

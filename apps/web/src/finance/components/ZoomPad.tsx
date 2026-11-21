@@ -33,6 +33,16 @@ export function normalRowHeights(core: PlaylistCore, normal: number): void {
   core.setAllTrackHeights(normal);
 }
 
+/** The compact height: half the normal one. */
+export function compactRowHeight(normal: number): number {
+  return Math.round(normal / 2);
+}
+
+/** Every event line at half its normal height (one undo step). */
+export function compactRowHeights(core: PlaylistCore, normal: number): void {
+  core.setAllTrackHeights(compactRowHeight(normal));
+}
+
 /** Every line at `normal` (rows of their own included). */
 export function rowsAtNormal(core: PlaylistCore, normal: number): boolean {
   if (core.metrics.trackHeight !== normal) return false;
@@ -49,27 +59,32 @@ export function rowsAtNormal(core: PlaylistCore, normal: number): boolean {
 export function useAtDefaults(core: PlaylistCore, normal: number, pxPerBeat: number): {
   rows: boolean;
   zoom: boolean;
+  /** Every line at the compact height (half the normal one). */
+  compact: boolean;
 } {
   const read = React.useCallback(
     () => ({
       rows: rowsAtNormal(core, normal),
       zoom: Math.abs(core.getState().viewport.pxPerBeat - pxPerBeat) < 1e-6,
+      compact: rowsAtNormal(core, compactRowHeight(normal)),
     }),
     [core, normal, pxPerBeat],
   );
   const [rows, setRows] = React.useState(() => read().rows);
   const [zoom, setZoom] = React.useState(() => read().zoom);
+  const [compact, setCompact] = React.useState(() => read().compact);
   React.useEffect(() => {
     const sync = () => {
       const next = read();
       setRows(next.rows);
       setZoom(next.zoom);
+      setCompact(next.compact);
     };
     sync();
     const sub = core.subscribe(sync);
     return () => sub.unsubscribe();
   }, [core, read]);
-  return { rows, zoom };
+  return { rows, zoom, compact };
 }
 
 /** The lines' height (the default; the pad keeps every row on it). */

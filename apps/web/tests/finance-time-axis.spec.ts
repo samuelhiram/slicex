@@ -83,11 +83,13 @@ describe("calendar time axis — lower tier (days)", () => {
     expect(ticks.find((t) => t.beat === 16)?.label).toBe("23");
   });
 
-  it("< 2.5 px/day: month starts with short month names", () => {
+  it("far out (months too narrow for 'nov 2026'): month starts named 'ene', 'feb' under the year", () => {
     const ticks = axis.ticks(0, 365, 1.5).filter((t) => !t.emphasis);
     expect(ticks).toHaveLength(12);
     expect(ticks.every((t) => t.major)).toBe(true);
-    expect(ticks.find((t) => t.beat === 55)?.label).toBe("Ene");
+    expect(ticks.find((t) => t.beat === 55)?.label).toBe("ene");
+    // Wide enough for a 'nov 2026' group each: the month starts go unnamed.
+    expect(axis.ticks(0, 365, 2.45).filter((t) => !t.emphasis).every((t) => t.label === null)).toBe(true);
   });
 
   it("never emits negative beats", () => {
@@ -96,18 +98,18 @@ describe("calendar time axis — lower tier (days)", () => {
 });
 
 describe("calendar time axis — bands", () => {
-  it("months on the upper tier: long names when there is room", () => {
+  it("months with their year, 'nov 2026' (one row with the days: rulerSingleRow)", () => {
     const groups = axis.bands!(0, 60, 10).filter((b) => b.kind === "group");
     expect(groups.map((g) => [g.start, g.end, g.label])).toEqual([
-      [-6, 24, "Noviembre 2026"],
-      [24, 55, "Diciembre 2026"],
-      [55, 86, "Enero 2027"],
+      [-6, 24, "nov 2026"],
+      [24, 55, "dic 2026"],
+      [55, 86, "ene 2027"],
     ]);
   });
 
-  it("short month names at mid zoom, years when far out", () => {
+  it("the same at mid zoom; the year alone when months are too narrow", () => {
     const mid = axis.bands!(0, 60, 3).filter((b) => b.kind === "group");
-    expect(mid[0]?.label).toBe("Nov 2026");
+    expect(mid[0]?.label).toBe("nov 2026");
     const far = axis.bands!(0, 500, 1.5).filter((b) => b.kind === "group");
     expect(far.map((g) => g.label)).toEqual(["2026", "2027", "2028"]);
     expect(far[1]?.start).toBe(55);

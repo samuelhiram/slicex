@@ -19,6 +19,7 @@ import type {
   PlaylistClipContent,
   PlaylistDragAnnotation,
   PlaylistOverviewAnnotation,
+  PlaylistOverviewColors,
   PlaylistOverviewData,
   PlaylistStepSeries,
   PlaylistTrackMeta,
@@ -210,6 +211,33 @@ function seriesExtent(series: PlaylistStepSeries, acc: { min: number; max: numbe
   }
 }
 
+/**
+ * What the money lane shows besides the cash curve and the $0 line (the
+ * chart's settings, chart-settings.ts): its lowest points (pins + pills),
+ * the debt line, the reserve (its line, label and the warning tone under
+ * it), the compared future's ghost, the round-amount scale — and the
+ * colours of each. The scale's shape never changes with them.
+ */
+export interface OverviewView {
+  minimums: boolean;
+  debt: boolean;
+  reserve: boolean;
+  alternate: boolean;
+  scale: boolean;
+  colors?: PlaylistOverviewColors;
+  /** A box at the lane's top-left kept clear of labels (the settings button). */
+  corner?: { width: number; height: number };
+}
+
+/** Everything on, theme colours (the bridge's default; the app sets the person's view). */
+export const FULL_OVERVIEW_VIEW: OverviewView = {
+  minimums: true,
+  debt: true,
+  reserve: true,
+  alternate: true,
+  scale: true,
+};
+
 export function buildOverview(
   doc: FinancialDocument,
   projection: FinancialProjection,
@@ -217,15 +245,18 @@ export function buildOverview(
   baseline: PlaylistStepSeries | null,
   // The lane's previous bounds (hysteresis, see overviewDomain); null = fresh.
   previousDomain: OverviewDomain | null = null,
+  view: OverviewView = FULL_OVERVIEW_VIEW,
 ): PlaylistOverviewData {
   const reserve = doc.minimumCashReserve;
-  const annotations: PlaylistOverviewAnnotation[] = warnings.map((warning) => ({
-    beat: beatOf(doc, warning.date),
-    value: warning.cash,
-    label: `${formatMoneyWhole(warning.cash)} · ${formatDateShort(warning.date)}`,
-    tone: warning.severity === "negative" ? "danger" : "warning",
-  }));
-  if (annotations.length === 0 && projection.points.length > 0) {
+  const annotations: PlaylistOverviewAnnotation[] = !view.minimums
+    ? []
+    : warnings.map((warning) => ({
+        beat: beatOf(doc, warning.date),
+        value: warning.cash,
+        label: `${formatMoneyWhole(warning.cash)} · ${formatDateShort(warning.date)}`,
+        tone: warning.severity === "negative" ? "danger" : "warning",
+      }));
+  if (view.minimums && annotations.length === 0 && projection.points.length > 0) {
     const min = projection.minimumCash;
     annotations.push({
       beat: beatOf(doc, min.date),
@@ -244,17 +275,21 @@ export function buildOverview(
     previousDomain,
   );
   const constant = Math.max(1000, reserve);
-  return {
+  const data: PlaylistOverviewData = {
     // The lane's header cell is the shell's ("Plano de eventos" + its
     // buttons, TimelineCell): no title drawn on the canvas.
     title: "",
     primary,
-    secondary: debtSeries(doc, projection),
+    secondary: view.debt ? debtSeries(doc, projection) : null,
     baseline,
-    thresholds: [
-      { value: reserve, tone: "warning", label: `Reserva ${compactMoney(reserve)}` },
-      { value: 0, tone: "danger" },
-    ],
+    // Without the reserve: no line, no label, no warning tone — the area
+    // keeps one colour down to $0 (under it: the danger tone, always).
+    thresholds: view.reserve
+      ? [
+          { value: reserve, tone: "warning", label: `Reserva ${compactMoney(reserve)}` },
+          { value: 0, tone: "danger" },
+        ]
+      : [{ value: 0, tone: "danger" }],
     annotations,
     formatValue: compactMoney,
     // Detail near the reserve and the valleys matters more than the size
@@ -262,9 +297,13 @@ export function buildOverview(
     // the non-linear scale readable; the bounds move only by steps.
     scale: { kind: "symlog", constant },
     domain,
-    guides: overviewGuides(domain, reserve, constant),
     endBeat: horizonBeat(doc),
   };
+  if (view.scale) data.guides = overviewGuides(domain, reserve, constant);
+  else data.scaleLabels = false;
+  if (view.colors) data.colors = view.colors;
+  if (view.corner) data.corner = view.corner;
+  return data;
 }
 
 // --- gesture effect ------------------------------------------------------

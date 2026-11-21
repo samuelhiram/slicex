@@ -135,6 +135,8 @@ export const selectTool: PlaylistTool = {
       kind: "marquee",
       pointerId: event.pointerId,
       startPoint: point,
+      startTime: screenXToTime(state, point.x, metrics),
+      startContentY: point.y + state.viewport.scrollY,
       additive,
     };
   },

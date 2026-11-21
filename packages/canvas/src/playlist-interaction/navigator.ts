@@ -37,6 +37,12 @@ export interface ViewportNavigatorOptions {
   scheduler?: NavigatorScheduler | null;
   // true → no animation (prefers-reduced-motion). Read on every call.
   reducedMotion?: () => boolean;
+  /**
+   * After every viewport step it applies (a glide, a fling, a jump; the
+   * edge auto-scroll has its own `onStep`): the host re-applies a drag in
+   * progress at its last pointer, so what it draws stays on the content.
+   */
+  onStep?: () => void;
 }
 
 export interface ViewportNavigator {
@@ -98,6 +104,7 @@ export function createViewportNavigator(
   const scheduler =
     options.scheduler === undefined ? defaultScheduler() : options.scheduler;
   const reducedMotion = options.reducedMotion ?? (() => false);
+  const onStep = options.onStep ?? null;
 
   let mode: Mode = "idle";
   let frameId = 0;
@@ -192,6 +199,7 @@ export function createViewportNavigator(
     mode = "idle";
     anchorActive = false;
     rangeActive = false;
+    onStep?.();
   }
 
   function startTarget(): void {
@@ -249,9 +257,11 @@ export function createViewportNavigator(
         anchorActive = false;
         rangeActive = false;
         lastTime = -1;
+        onStep?.();
         return;
       }
       schedule();
+      onStep?.();
       return;
     }
 
@@ -269,9 +279,11 @@ export function createViewportNavigator(
       if (Math.hypot(vx, vy) < FLING_MIN_SPEED) {
         mode = "idle";
         lastTime = -1;
+        onStep?.();
         return;
       }
       schedule();
+      onStep?.();
       return;
     }
 

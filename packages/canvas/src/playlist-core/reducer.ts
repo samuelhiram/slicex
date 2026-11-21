@@ -12,6 +12,7 @@ import type {
   PlaylistHover,
   PlaylistSnapHint,
   PlaylistTooltip,
+  PlaylistTrack,
 } from "./types";
 import {
   createInsertedTrack,
@@ -210,6 +211,8 @@ export function playlistReducer(
       return setAllTrackHeights(state, action.height, metrics);
     case "REORDER_TRACK":
       return reorderTrack(state, action.fromIndex, action.toIndex);
+    case "ARRANGE_TRACKS":
+      return arrangeTracks(state, action.tracks, action.placement);
     case "MAKE_CLIPS_UNIQUE":
       return makeClipsUnique(state, action.clipIds);
     case "SET_CLIP_LABEL":
@@ -1090,6 +1093,28 @@ function reorderTrack(
   const [moved] = tracks.splice(fromIndex, 1);
   tracks.splice(clamped, 0, moved!);
   return { ...state, tracks };
+}
+
+// The host's new rows and the row of each clip it names. A clip going to
+// another row restarts at lane 0 (the lane layout settles it); a clip whose
+// row is gone and that is not placed goes to the first row (never lost).
+function arrangeTracks(
+  state: PlaylistState,
+  tracks: readonly PlaylistTrack[],
+  placement: Readonly<Record<string, string>>,
+): PlaylistState {
+  if (tracks.length === 0) return state;
+  const ids = new Set(tracks.map((track) => track.id));
+  const fallback = tracks[0]!.id;
+  const clips = state.clips.map((clip) => {
+    const placed = placement[clip.id];
+    const trackId =
+      placed !== undefined && ids.has(placed) ? placed : ids.has(clip.trackId) ? clip.trackId : fallback;
+    if (trackId === clip.trackId) return clip;
+    const { lane: _lane, ...rest } = clip;
+    return { ...rest, trackId };
+  });
+  return { ...state, tracks: tracks.map((track) => ({ ...track })), clips };
 }
 
 function makeClipsUnique(

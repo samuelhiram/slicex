@@ -31,9 +31,9 @@ import { formatDateShort, formatMoneyWhole } from "../src/finance/format";
 import { Futures } from "../src/finance/futures";
 import {
   FinancialSummaryBar,
-  FutureStrip,
   type PlanMenuActions,
 } from "../src/finance/components/FinancialSummaryBar";
+import { FuturesMenu } from "../src/finance/components/FuturesMenu";
 import { HIDE_GRACE_MS } from "../src/finance/components/MetricHelp";
 import { describeSpanDays, matchSpan } from "../src/finance/components/NavControls";
 import { PlaylistInspector } from "../src/components/PlaylistInspector";
@@ -418,27 +418,24 @@ describe("UX-48: 'Mi plan ▾' holds the plan's global actions", () => {
   });
 });
 
-describe("UX-19: outside the main plan it shows, and going back is one click", () => {
-  it("the strip says it; 'Volver al plan principal'", () => {
+describe("UX-19: outside the main plan, the futures button names it; going back is in its menu", () => {
+  it("the button says which version you are in; 'Plan principal' in the menu takes you back", () => {
     const bridge = realBridge();
     const futures = new Futures(bridge);
-    mount(
-      h(
-        AnnouncerProvider,
-        null,
-        h(FinancialSummaryBar, { bridge, onCreateDraft: vi.fn(), futures }),
-        h(FutureStrip, { futures }),
-      ),
-    );
-    expect(document.querySelector(".fin-branch-strip")).toBeNull();
+    mount(h(AnnouncerProvider, null, h(FuturesMenu, { bridge, futures })));
     act(() => {
       futures.fork(START, "Comprar la laptop");
     });
-    const strip = document.querySelector<HTMLElement>(".fin-branch-strip")!;
-    expect(strip.textContent).toContain("Estás en Comprar la laptop (hipótesis)");
-    click([...strip.querySelectorAll("button")].find((b) => b.textContent === "Volver al plan principal")!);
-    expect(futures.activeBranch().id).toBe("main");
+    // No strip of its own any more (2026-11-20): the trigger names it.
     expect(document.querySelector(".fin-branch-strip")).toBeNull();
+    const trigger = document.querySelector<HTMLButtonElement>(".fin-futures__trigger")!;
+    expect(trigger.querySelector(".fin-futures__name")!.textContent).toBe("Comprar la laptop");
+    click(trigger);
+    const main = [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((item) =>
+      item.textContent!.includes("Plan principal"),
+    )!;
+    click(main);
+    expect(futures.activeBranch().id).toBe("main");
   });
 });
 

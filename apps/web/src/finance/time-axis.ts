@@ -2,14 +2,17 @@
 // ("today"). Plugged into @slicex/canvas through the generic
 // PlaylistTimeAxis option, so the canvas package stays finance-agnostic.
 //
-// Two tiers, like a calendar app: the upper tier names the month (or the
-// year when zoomed far out) and sticks to the left edge; the lower tier
-// labels days. Granularity adapts to zoom so labels never overlap:
+// The groups name the month with its year ("dic 2026") — or the year
+// alone ("2027") when months are too narrow for that — and stick to the
+// left edge; the finance ruler draws them in ONE row with the ticks
+// (metrics.rulerSingleRow), the ticks giving way. Granularity adapts to
+// zoom so labels never overlap:
 //   ≥ 38 px/day → every day "Lu 16" (weekday + day), centred
 //   ≥ 16 px/day → every day "16", centred
 //   ≥ 6 px/day  → a tick per day, Mondays labelled "16"
 //   ≥ 2.5 px/day→ a tick per Monday, labelled when there is room
-//   below       → month starts labelled "Ene", years on the upper tier
+//   below       → months: "nov 2026" groups when they fit, else the year
+//                 as the group and the months "feb", "mar" as ticks
 // Today is a pill in the "now" colour (its own day label when days are
 // labelled, "Hoy" otherwise), centred in its cell. The canvas resolves label
 // collisions at draw time (the pill wins), so the axis never blanks labels
@@ -37,21 +40,6 @@ const MONTHS_SHORT = [
   "dic",
 ] as const;
 
-const MONTHS_LONG = [
-  "Enero",
-  "Febrero",
-  "Marzo",
-  "Abril",
-  "Mayo",
-  "Junio",
-  "Julio",
-  "Agosto",
-  "Septiembre",
-  "Octubre",
-  "Noviembre",
-  "Diciembre",
-] as const;
-
 const WEEKDAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"] as const;
 // Two-letter weekday names, Monday first (as in es-MX date pickers).
 const WEEKDAY_INITIALS = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"] as const;
@@ -76,10 +64,6 @@ function weekdayIndex(dayNumber: number): number {
   return (((dayNumber + 3) % 7) + 7) % 7;
 }
 
-function capitalize(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
 function monthStartDay(year: number, month: number): number {
   return toDayNumber(`${year}-${String(month).padStart(2, "0")}-01`);
 }
@@ -90,8 +74,13 @@ export const DAY_INITIAL_PX = 38;
 export const DAY_NUMBER_PX = 16;
 export const DAY_TICK_PX = 6;
 export const WEEK_TICK_PX = 2.5;
-// Upper-tier month names: long ("Noviembre 2026") from this month width.
-const LONG_MONTH_PX = 150;
+// A month wide enough for its "nov 2026" group label (8 chars at 7.8 px +
+// pads), in px per day over its shortest length (28 days).
+const MONTH_GROUP_PX = 68 / 28;
+
+function monthLabel(month: number, year: number): string {
+  return `${MONTHS_SHORT[month - 1]} ${year}`;
+}
 
 export function formatAxisDate(dayNumber: number): string {
   const parts = partsOf(dayNumber);
@@ -115,8 +104,7 @@ export function createCalendarTimeAxis(startDate: ISODate): PlaylistTimeAxis {
       const last = Math.ceil(toBeat);
       const bands: PlaylistTimeAxisBand[] = [];
       if (last < first) return bands;
-      if (pxPerBeat >= WEEK_TICK_PX) {
-        const long = pxPerBeat * 30 >= LONG_MONTH_PX;
+      if (pxPerBeat >= MONTH_GROUP_PX) {
         const start = partsOf(origin + first);
         let year = start.year;
         let month = start.month;
@@ -126,14 +114,7 @@ export function createCalendarTimeAxis(startDate: ISODate): PlaylistTimeAxis {
           const nextYear = month === 12 ? year + 1 : year;
           const nextMonth = month === 12 ? 1 : month + 1;
           const end = monthStartDay(nextYear, nextMonth) - origin;
-          bands.push({
-            kind: "group",
-            start: begin,
-            end,
-            label: long
-              ? `${MONTHS_LONG[month - 1]} ${year}`
-              : `${capitalize(MONTHS_SHORT[month - 1]!)} ${year}`,
-          });
+          bands.push({ kind: "group", start: begin, end, label: monthLabel(month, year) });
           year = nextYear;
           month = nextMonth;
         }
@@ -306,8 +287,9 @@ export function createCalendarTimeAxis(startDate: ISODate): PlaylistTimeAxis {
       return ticks;
     }
 
-    // Far out: month starts, labelled with the short month name.
-    const roomForMonths = pxPerBeat * 28 >= 30;
+    // Far out: month starts — unlabelled when each month is a group ("nov
+    // 2026"), else labelled "feb" under the year's group.
+    const roomForMonths = pxPerBeat < MONTH_GROUP_PX && pxPerBeat * 28 >= 30;
     const start = partsOf(origin + first);
     let year = start.year;
     let month = start.month;
@@ -324,7 +306,7 @@ export function createCalendarTimeAxis(startDate: ISODate): PlaylistTimeAxis {
       ticks.push({
         beat,
         major: true,
-        label: roomForMonths ? capitalize(MONTHS_SHORT[month - 1]!) : null,
+        label: roomForMonths ? MONTHS_SHORT[month - 1]! : null,
       });
       month += 1;
       if (month > 12) {

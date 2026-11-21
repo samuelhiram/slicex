@@ -1,14 +1,14 @@
 // "Futuros": alternative versions of the year. The button shows the active
 // future; its menu switches between them (the money lane morphs from one to
 // the other), creates a new one, compares one as a ghost under the active
-// curve, renames, makes one the main plan or discards it. Hold Q anywhere —
-// or press "Asomarte" — to peek at the other future.
+// curve, renames, makes one the main plan or discards it. Hold Q anywhere to
+// peek at the other future.
 //
 // UX audit 2026-11-11:
 // - UX-20: every future shows its figures (horizon, lowest point) and the
 //   difference against the active one, read from summaries cached per
-//   document (futures.summaryOf); "Asomarte" (FuturesPeekChip) does what
-//   holding Q does, without a key (≥ 44 px on touch).
+//   document (futures.summaryOf). (The "Asomarte" button and the timeline
+//   bar that held it are gone, 2026-11-20: holding Q does it.)
 // - UX-54: unique names, "Probar otra versión de mi año" (no fork date that
 //   did nothing), "Hacer este mi plan principal" / "Descartar este futuro" in
 //   one action each, announced with "Deshacer". "Reiniciar…" lives in the
@@ -21,9 +21,10 @@ import { createPortal } from "react-dom";
 import type { ProjectionSummary } from "@slicex/core";
 import { useFitInViewport } from "../../ui/fit-in-viewport";
 import { useAnnounce } from "../../ui/announcer";
-import { useEscapeLayer, useOverlay } from "../../ui/use-overlay";
+import { useOverlay } from "../../ui/use-overlay";
 import type { FinancialBridgeApi } from "../bridge-api";
 import { formatMoneyWhole, formatSignedMoneyWhole } from "../format";
+import { setChartLayer } from "../chart-settings";
 import { MAIN_BRANCH_ID, type Futures } from "../futures";
 import { useFinancialRevision, usePlayheadDay } from "./FinancialUi";
 
@@ -196,7 +197,12 @@ export function FuturesMenu({ bridge, futures, inert = false }: FuturesMenuProps
                           className="fin-futures__chip"
                           data-on={isCompared}
                           title="Dibujar este futuro como fantasma bajo tu curva"
-                          onClick={() => futures.setCompare(isCompared ? null : branch.id)}
+                          onClick={() => {
+                            futures.setCompare(isCompared ? null : branch.id);
+                            // Picking a future to compare shows its ghost (the
+                            // chart's "Plan alterno", off by default).
+                            if (!isCompared) setChartLayer("alternate", true);
+                          }}
                         >
                           {isCompared ? "Comparando" : "Comparar"}
                         </button>
@@ -283,7 +289,7 @@ export function FuturesMenu({ bridge, futures, inert = false }: FuturesMenuProps
               </div>
               {branches.length > 1 ? (
                 <p className="fin-futures__hint">
-                  Mantén <kbd>Q</kbd> o pulsa «Asomarte» para ver el otro futuro sin cambiarte.
+                  Mantén <kbd>Q</kbd> para ver el otro futuro sin cambiarte.
                 </p>
               ) : (
                 <p className="fin-futures__hint">
@@ -297,58 +303,3 @@ export function FuturesMenu({ bridge, futures, inert = false }: FuturesMenuProps
     </div>
   );
 }
-
-export interface FuturesPeekChipProps {
-  bridge: FinancialBridgeApi;
-  futures: Futures;
-  /** A peek started by this chip is on. */
-  peeking: boolean;
-  /** Another peek (Q / A held) is on: the button waits. */
-  busy?: boolean;
-  /** Starts the same peek as holding Q, on future `id`. */
-  onPeek: (id: string) => void;
-  onEndPeek: () => void;
-}
-
-/**
- * UX-20: with two or more futures, the active one against the other in
- * figures ("Este futuro contra «Plan principal»: horizonte −$25,000 · punto
- * más bajo igual") and "Asomarte" — the peek of holding Q, as a toggle
- * (Escape or "Volver" ends it). Summaries are cached per document: O(1) on
- * re-renders.
- */
-export const FuturesPeekChip = React.memo(function FuturesPeekChip({
-  bridge,
-  futures,
-  peeking,
-  busy = false,
-  onPeek,
-  onEndPeek,
-}: FuturesPeekChipProps) {
-  useFuturesVersion(futures);
-  useFinancialRevision(bridge);
-  useEscapeLayer(peeking, onEndPeek);
-  const target = futures.peekTarget();
-  if (!target) return null;
-  const active = futures.activeBranch();
-  const mine = futures.summaryOf(active.id);
-  const other = futures.summaryOf(target.id);
-  return (
-    <div className="fin-compare" role="group" aria-label={`${active.name} contra ${target.name}`}>
-      <p className="fin-compare__text">
-        <strong>{active.name}</strong> contra <strong>{target.name}</strong>
-        {mine && other ? `: ${futureDelta(mine, other)}` : ""}
-      </p>
-      <button
-        type="button"
-        className="fin-compare__peek"
-        aria-pressed={peeking}
-        disabled={busy}
-        title={peeking ? "Volver a tu futuro (Esc)" : `Ver ${target.name} en el carril, sin cambiarte (o mantén Q)`}
-        onClick={() => (peeking ? onEndPeek() : onPeek(target.id))}
-      >
-        {peeking ? "Volver" : "Asomarte"}
-      </button>
-    </div>
-  );
-});

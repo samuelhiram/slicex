@@ -28,6 +28,7 @@ import {
   sortedUpperBound,
   stepSeriesValueAt,
   type PlaylistOverviewAnnotation,
+  type PlaylistOverviewColors,
   type PlaylistOverviewData,
   type PlaylistOverviewThreshold,
   type PlaylistPresentation,
@@ -188,18 +189,27 @@ export function overviewToneOf(value: number, scale: OverviewScale): number {
   return OVERVIEW_TONE_POSITIVE;
 }
 
-function toneColor(tone: number): number {
+// The host's colours (data.colors) over the theme's; danger is always the
+// theme's.
+function toneColor(tone: number, colors: PlaylistOverviewColors | undefined): number {
   if (tone === OVERVIEW_TONE_DANGER) return COLORS.toneDanger;
-  if (tone === OVERVIEW_TONE_WARNING) return COLORS.toneWarning;
-  return COLORS.tonePositive;
+  if (tone === OVERVIEW_TONE_WARNING) return colors?.warning ?? COLORS.toneWarning;
+  return colors?.positive ?? COLORS.tonePositive;
 }
 
-function thresholdColor(threshold: PlaylistOverviewThreshold): number {
-  return threshold.tone === "danger" ? COLORS.toneDanger : COLORS.toneWarning;
+function thresholdColor(
+  threshold: PlaylistOverviewThreshold,
+  colors: PlaylistOverviewColors | undefined,
+): number {
+  return threshold.tone === "danger" ? COLORS.toneDanger : (colors?.warning ?? COLORS.toneWarning);
 }
 
-function annotationColor(annotation: PlaylistOverviewAnnotation): number {
+function annotationColor(
+  annotation: PlaylistOverviewAnnotation,
+  colors: PlaylistOverviewColors | undefined,
+): number {
   if (annotation.tone === "danger") return COLORS.toneDanger;
+  if (colors?.annotation !== undefined) return colors.annotation;
   if (annotation.tone === "warning") return COLORS.toneWarning;
   return COLORS.toneInfo;
 }
@@ -382,7 +392,7 @@ export function createOverviewLaneLayer(
         const y = yLine(threshold.value);
         if (y < lane.y || y > laneBottom) continue;
         dashH(g, lane.x, right, y);
-        g.stroke({ color: thresholdColor(threshold), width: 1, alpha: 0.7 });
+        g.stroke({ color: thresholdColor(threshold, frameData.colors), width: 1, alpha: 0.7 });
       }
       // Guides: faint dotted lines at the host's round values (their labels
       // go with the other fixed labels, see drawFixedLabels).
@@ -468,7 +478,7 @@ export function createOverviewLaneLayer(
           g.lineTo(xOf(from), y).lineTo(xOf(to), y);
         });
         // Legible on its own (the header cell names it "Deuda"): UX-11.
-        g.stroke({ color: COLORS.overviewSecondary, width: 1.25, alpha: 0.7 });
+        g.stroke({ color: data.colors?.secondary ?? COLORS.overviewSecondary, width: 1.25, alpha: 0.7 });
       }
     }
 
@@ -479,7 +489,7 @@ export function createOverviewLaneLayer(
     const closeRun = (): void => {
       g.lineTo(runEndX, yZero)
         .closePath()
-        .fill({ color: toneColor(runKey >> 1), alpha: COLORS.areaAlpha });
+        .fill({ color: toneColor(runKey >> 1, data.colors), alpha: COLORS.areaAlpha });
     };
     walkVisibleSteps(data.primary, fromBeat, toBeat, (from, to, value) => {
       const x0 = xOf(from);
@@ -508,7 +518,7 @@ export function createOverviewLaneLayer(
         g.moveTo(x0, y);
         lineTone = tone;
       } else if (tone !== lineTone) {
-        g.stroke({ color: toneColor(lineTone), width: LINE_WIDTH });
+        g.stroke({ color: toneColor(lineTone, data.colors), width: LINE_WIDTH });
         g.moveTo(x0, lastY);
         lineTone = tone;
       }
@@ -516,7 +526,7 @@ export function createOverviewLaneLayer(
       lastY = y;
     });
     if (lineTone >= 0) {
-      g.stroke({ color: toneColor(lineTone), width: LINE_WIDTH });
+      g.stroke({ color: toneColor(lineTone, data.colors), width: LINE_WIDTH });
     }
 
     // 4. Baseline: gray dashed step line on the primary scale.
@@ -533,7 +543,7 @@ export function createOverviewLaneLayer(
         drew = true;
       });
       if (drew) {
-        g.stroke({ color: COLORS.overviewBaseline, width: 1, alpha: 0.75 });
+        g.stroke({ color: data.colors?.baseline ?? COLORS.overviewBaseline, width: 1, alpha: 0.75 });
       }
     }
 
@@ -542,6 +552,9 @@ export function createOverviewLaneLayer(
     // their boxes first, then every pin, then the annotation pills, which
     // avoid all of them. Rebuild-time only.
     placedLabels.length = 0;
+    // The host's control at the top-left: every label goes round it.
+    const corner = data.corner;
+    if (corner) placedLabels.push(lane.x, lane.y, corner.width, corner.height);
     drawFixedLabels(g, text, lane, data);
     const annotations = data.annotations;
     for (let i = 0; i < annotations.length; i += 1) {
@@ -550,7 +563,7 @@ export function createOverviewLaneLayer(
       if (x < lane.x - PIN_RADIUS || x > right + PIN_RADIUS) continue;
       const y = clampNumber(yOf(annotation.value), plotTop, plotBottom);
       g.circle(x, y, PIN_RADIUS)
-        .fill({ color: annotationColor(annotation) })
+        .fill({ color: annotationColor(annotation, data.colors) })
         .stroke({ color: COLORS.overviewBackground, width: 2 });
       placedLabels.push(x - PIN_RADIUS - 1, y - PIN_RADIUS - 1, PIN_RADIUS * 2 + 2, PIN_RADIUS * 2 + 2);
     }
@@ -561,11 +574,12 @@ export function createOverviewLaneLayer(
       const x = xOf(annotation.beat);
       if (x < lane.x - PIN_RADIUS || x > right + PIN_RADIUS) continue;
       const y = clampNumber(yOf(annotation.value), plotTop, plotBottom);
-      const color = annotationColor(annotation);
+      const color = annotationColor(annotation, data.colors);
       const width = label.length * LABEL_CHAR_PX + 14;
       const labelX = clampNumber(
         x - width / 2,
-        lane.x + 2,
+        // Right of the host's corner control (never dropped for it).
+        lane.x + (corner ? corner.width + 4 : 2),
         Math.max(lane.x + 2, right - width - 2),
       );
       // The top band first (a second row when two pills meet), as long as
@@ -640,19 +654,22 @@ export function createOverviewLaneLayer(
       if (lineY < lane.y || lineY > laneBottom) continue;
       const y = lineY - 15 >= lane.y + 1 ? lineY - 15 : lineY + 2;
       const width = threshold.label.length * LABEL_CHAR_PX + 8;
-      const x = lane.x + 4;
+      // Right of the host's corner control when it would sit under it.
+      const corner = data.corner;
+      const x =
+        corner && y < lane.y + corner.height ? lane.x + corner.width + 4 : lane.x + 4;
       g.roundRect(x, y, width, 14, 4).fill({
         color: COLORS.overviewBackground,
         alpha: 0.88,
       });
       addText(text, threshold.label, x + 4, y + 1, {
         size: LABEL_SIZE,
-        color: thresholdColor(threshold),
+        color: thresholdColor(threshold, data.colors),
         weight: "600",
       });
       placedLabels.push(x, y, width, 14);
     }
-    if (scale.dataMax > scale.dataMin) {
+    if (data.scaleLabels !== false && scale.dataMax > scale.dataMin) {
       const format = data.formatValue ?? defaultFormatValue;
       const topY = clampNumber(yOf(scale.dataMax) - 7, lane.y + 1, laneBottom - 15);
       const bottomY = clampNumber(yOf(scale.dataMin) - 7, lane.y + 1, laneBottom - 15);
@@ -736,7 +753,7 @@ export function createOverviewLaneLayer(
       .stroke({ color: COLORS.playPosition, width: 1.5 });
     if (dotTone >= 0) {
       g.circle(playX + 0.5, dotY, DOT_RADIUS)
-        .fill({ color: toneColor(dotTone) })
+        .fill({ color: toneColor(dotTone, plotData?.colors) })
         .stroke({ color: COLORS.overviewBackground, width: 2 });
     }
   }

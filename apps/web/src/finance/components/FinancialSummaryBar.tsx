@@ -32,7 +32,7 @@ import { useDismiss } from "../../ui/use-dismiss";
 import { useOverlay } from "../../ui/use-overlay";
 import type { FinancialBridgeApi } from "../bridge-api";
 import { formatDateLong, formatDateShort, formatMoney, formatMoneyWhole } from "../format";
-import { MAIN_BRANCH_ID, type Futures } from "../futures";
+import type { Futures } from "../futures";
 import { KIND_COLORS, KIND_LABELS } from "../labels";
 import {
   computeVerdict,
@@ -805,48 +805,6 @@ function ExclusionChip({
       <button type="button" className="fin-exclusion__button" onClick={onReactivate}>
         Reactivar todo
       </button>
-    </div>
-  );
-}
-
-/** "Estás en <futuro> (hipótesis) · Volver al plan principal" (UX-19). */
-export function FutureStrip({ futures }: { futures: Futures }) {
-  useFuturesVersion(futures);
-  const announce = useAnnounce();
-  const active = futures.activeBranch();
-  if (active.id === MAIN_BRANCH_ID) return null;
-  const main = futures.list().find((branch) => branch.id === MAIN_BRANCH_ID) ?? null;
-  return (
-    <div className="fin-branch-strip" role="region" aria-label="Futuro activo">
-      <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-        <circle cx="4" cy="3.5" r="1.6" />
-        <circle cx="4" cy="12.5" r="1.6" />
-        <circle cx="12" cy="6" r="1.6" />
-        <path d="M4 5.1v5.8M12 7.6c0 2.6-3 2.4-6.6 4" />
-      </svg>
-      <p className="fin-branch-strip__text">
-        Estás en <strong>{active.name}</strong> (hipótesis)
-        <span className="fin-branch-strip__note">
-          : lo que cambies aquí no toca tu plan principal
-        </span>
-        .
-      </p>
-      {main ? (
-        <button
-          type="button"
-          className="fin-button"
-          onClick={() => {
-            futures.switchTo(MAIN_BRANCH_ID);
-            announce({ message: `Volviste a ${main.name}.` });
-            // The strip goes away: the futures button keeps the focus.
-            requestAnimationFrame(() => {
-              document.querySelector<HTMLElement>(".fin-futures__trigger")?.focus();
-            });
-          }}
-        >
-          Volver al plan principal
-        </button>
-      ) : null}
     </div>
   );
 }

@@ -40,13 +40,23 @@ export const FINANCE_PLAYLIST_METRICS: PlaylistMetrics = {
   ...DEFAULT_PLAYLIST_METRICS,
   beatsPerBar: 7,
   minPxPerBeat: 1.5,
-  // Two-tier calendar ruler (month over days) and a header column wide
-  // enough for the item name + its yearly impact.
-  rulerHeight: 52,
+  // ONE-row calendar ruler (2026-11-20): "dic 2026" sticky at the left in
+  // the same row as the days (rulerSingleRow), 18 px less than the two
+  // tiers; and a header column wide enough for the item name + its yearly
+  // impact.
+  rulerHeight: 34,
+  rulerSingleRow: true,
   trackHeaderWidth: 216,
-  // A card of 70 px (84 − 2 × 7): name and amount on top, the lock + dates
-  // row at the bottom (on the corner tab), ~11 px of air between them.
+  // 3 px of air above and below each card (2026-11-20; it was 7: rows of
+  // empty space around a thin bar). A card of 78 px at the normal 84: its
+  // label on top (name, amount, dates), its bar under it.
+  clipPaddingY: 3,
   trackHeight: 84,
+  // The floor for every event line (2026-11-20): 38 px — a 32 px card, its
+  // compact label (name, amount, lock) over a 16 px bar. The pad, the
+  // arrows, a row's own resize and a saved plan never go below it (the
+  // core clamps to it).
+  trackMinHeight: 38,
   // The horizontal scrollbar is the timeline navigator (miniature of the
   // year + zoomable window): thicker than the vertical bar, so it is easy
   // to grab and to wheel over (the wheel there moves time).
@@ -499,6 +509,74 @@ export function createFinancialPlaylistState(
 }
 
 /** The layout of a playlist state (see FinancialTrackLayout). */
+/**
+ * "Ordenar por tipo" (2026-11-20): every item on an event line of its own,
+ * grouped by kind — incomes, expenses, then the debts (KIND_ORDER) — and,
+ * within a kind, in the plan's order, whatever the rows held before. The
+ * items fill the FIRST lines, one after another, nothing empty in between;
+ * lines the person named that end up empty go after them; plain empty lines
+ * go (the endless rows below draw the same). Each new line keeps what its
+ * item's line said — excluded, solo, locked, its height — and a name the
+ * person gave when that line held only this item. Pure; null when the rows
+ * already are like this.
+ */
+export function arrangementByKind(
+  doc: FinancialDocument,
+  state: PlaylistState,
+): { tracks: PlaylistTrack[]; placement: Record<string, string> } | null {
+  const trackById = new Map(state.tracks.map((track) => [track.id, track]));
+  const clipById = new Map(state.clips.map((clip) => [clip.id, clip]));
+  const itemIds = new Set(doc.items.map((item) => item.id));
+  const clipsPerTrack = new Map<string, number>();
+  const holdsOthers = new Set<string>();
+  for (const clip of state.clips) {
+    clipsPerTrack.set(clip.trackId, (clipsPerTrack.get(clip.trackId) ?? 0) + 1);
+    if (!itemIds.has(clip.id)) holdsOthers.add(clip.trackId);
+  }
+  // Kept as they are, after the items: lines holding something that is not
+  // an item (never in a plan), and named lines left empty.
+  const kept = state.tracks.filter(
+    (track) =>
+      holdsOthers.has(track.id) || ((clipsPerTrack.get(track.id) ?? 0) === 0 && !isAutoRowLabel(track.label)),
+  );
+  const used = new Set(kept.map((track) => track.id));
+  const tracks: PlaylistTrack[] = [];
+  const placement: Record<string, string> = {};
+  for (const kind of KIND_ORDER) {
+    for (const item of doc.items) {
+      if (item.kind !== kind || !clipById.has(item.id)) continue;
+      const from = trackById.get(clipById.get(item.id)!.trackId);
+      let id = `trk-${item.id}`;
+      for (let n = 2; used.has(id); n += 1) id = `trk-${item.id}-${n}`;
+      used.add(id);
+      const alone = from !== undefined && clipsPerTrack.get(from.id) === 1;
+      const track: PlaylistTrack = {
+        id,
+        label: alone && !isAutoRowLabel(from.label) ? from.label : "",
+        color: KIND_COLORS[kind],
+      };
+      if (from?.muted) track.muted = true;
+      if (from?.soloed) track.soloed = true;
+      if (from?.locked) track.locked = true;
+      if (from?.height !== undefined) track.height = from.height;
+      tracks.push(track);
+      placement[item.id] = id;
+    }
+  }
+  tracks.push(...kept);
+  // Already so: the same lines on top, each item on its own, and nothing
+  // below them but plain empty lines.
+  const same =
+    tracks.every((track, index) => state.tracks[index]?.id === track.id) &&
+    state.tracks
+      .slice(tracks.length)
+      .every((track) => (clipsPerTrack.get(track.id) ?? 0) === 0 && isAutoRowLabel(track.label)) &&
+    Object.entries(placement).every(
+      ([itemId, trackId]) => clipById.get(itemId)!.trackId === trackId && (clipById.get(itemId)!.lane ?? 0) === 0,
+    );
+  return same ? null : { tracks, placement };
+}
+
 export function trackLayoutOf(
   state: PlaylistState,
   isItem: (clipId: string) => boolean,

@@ -101,6 +101,7 @@ import {
   itemClipGeometry,
   itemColor,
   openEndBeat,
+  arrangementByKind,
   trackLayoutOf,
   type FinancialTrackLayout,
   type ObservedGeometry,
@@ -113,7 +114,9 @@ import {
   describeItemAt,
   dragAnnotation,
   formatMonthYear,
+  FULL_OVERVIEW_VIEW,
   type OverviewDomain,
+  type OverviewView,
 } from "./visuals";
 
 // Label the playlist gives to clips created without a template.
@@ -415,6 +418,9 @@ export class FinancialBridge implements FinancialBridgeApi {
   private level: { itemId: string; value: number } | null = null;
   // Bounds of the money lane (hysteresis across revisions, visuals.ts).
   private overviewDomain: OverviewDomain | null = null;
+  // What the money lane shows besides the cash curve (the chart's
+  // settings); everything until the app says otherwise.
+  private overviewView: OverviewView = FULL_OVERVIEW_VIEW;
   // Info cards of clips (hover / tap), per revision.
   private readonly infoCache = new Map<string, string | null>();
   private infoDay = Number.NaN;
@@ -612,9 +618,12 @@ export class FinancialBridge implements FinancialBridgeApi {
   // else a preview (what-if) over the current curve, else the compared
   // future, else just the current curve. Cached per (revision, mode key).
   private settledOverview(): PlaylistOverviewData {
+    const view = this.overviewView;
     const baseline = this.gestureBaseline();
     const preview = baseline ? null : this.preview;
-    const comparison = baseline || preview ? null : this.comparison;
+    // The compared future's ghost only with "Plan alterno" on (the gesture's
+    // "before" and a what-if are the feedback of what you are doing: always).
+    const comparison = baseline || preview || !view.alternate ? null : this.comparison;
     const key: object | null = baseline ?? preview ?? comparison;
     const cached = this.overviewCache;
     if (cached && cached.revision === this.revision && cached.baseline === key) {
@@ -629,6 +638,7 @@ export class FinancialBridge implements FinancialBridgeApi {
         this.warnings,
         cashSeries(this.doc, this.projectionOf(baseline)),
         domain,
+        view,
       );
     } else if (preview) {
       const view = this.previewData(preview);
@@ -638,6 +648,7 @@ export class FinancialBridge implements FinancialBridgeApi {
         view.warnings,
         cashSeries(this.doc, this.projection),
         domain,
+        this.overviewView,
       );
     } else if (comparison) {
       data = buildOverview(
@@ -646,9 +657,10 @@ export class FinancialBridge implements FinancialBridgeApi {
         this.warnings,
         this.comparisonSeries(comparison),
         domain,
+        view,
       );
     } else {
-      data = buildOverview(this.doc, this.projection, this.warnings, null, domain);
+      data = buildOverview(this.doc, this.projection, this.warnings, null, domain, view);
     }
     // The lane keeps its bounds until the data leaves their round step.
     this.overviewDomain = data.domain ?? null;
@@ -1068,6 +1080,45 @@ export class FinancialBridge implements FinancialBridgeApi {
   setComparison(doc: FinancialDocument | null): void {
     if (doc === this.comparison) return;
     this.comparison = doc;
+    this.notifyVisual();
+  }
+
+  /**
+   * "Ordenar por tipo": every item on its own event line, incomes first,
+   * then expenses, then the debts, from the first line down
+   * (arrangementByKind). One undo step. false when already so.
+   */
+  arrangeByKind(): boolean {
+    const plan = arrangementByKind(this.doc, this.core.getState());
+    if (!plan) return false;
+    this.core.arrangeTracks(plan.tracks, plan.placement);
+    return true;
+  }
+
+  // Read on every core notify (a hover too): cached per rows / clips /
+  // items, O(1) until one of them changes.
+  private arrangedCache: {
+    tracks: PlaylistState["tracks"];
+    clips: PlaylistState["clips"];
+    items: FinancialDocument["items"];
+    value: boolean;
+  } | null = null;
+
+  isArrangedByKind(): boolean {
+    const state = this.core.getState();
+    const cached = this.arrangedCache;
+    if (cached && cached.tracks === state.tracks && cached.clips === state.clips && cached.items === this.doc.items) {
+      return cached.value;
+    }
+    const value = arrangementByKind(this.doc, state) === null;
+    this.arrangedCache = { tracks: state.tracks, clips: state.clips, items: this.doc.items, value };
+    return value;
+  }
+
+  setOverviewView(view: OverviewView): void {
+    if (view === this.overviewView) return;
+    this.overviewView = view;
+    this.overviewCache = null;
     this.notifyVisual();
   }
 
