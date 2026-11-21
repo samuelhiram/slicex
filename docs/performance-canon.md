@@ -123,6 +123,18 @@ El timeline es infinito por diseño. El control de costo va por la
 **presentación** (cull al viewport), no por **clampear el scroll**.
 Volver a poner caps en geometry es regresión.
 
+**Excepción declarada — eje Y con `virtualTracks: false`.** Un host cuyos
+tracks son su propio modelo (`PlaylistCoreOptions.virtualTracks: false`,
+p. ej. un track por categoría) no tiene filas virtuales debajo del último
+track: no hay nada que revelar. Ahí, y sólo ahí, `core.updateViewport` /
+`core.setViewportSize` limitan `scrollY` a `getRealTracksScrollLimit` (el
+fondo del último track queda sobre el scrollbar horizontal) y la extensión
+vertical del scrollbar cubre sólo los tracks reales. No es un control de
+costo (el costo ya lo acota el cull de la presentación) sino UX: el espacio
+vacío no es contenido. `getMaxScrollY` / `getMaxScrollX` **siguen siendo
+infinitos** (lint + test), y con `virtualTracks` por defecto (true) el eje Y
+sigue sin límite. El eje X no tiene excepción.
+
 ### 2.6 Suscriptores que disparan re-render por estado irrelevante
 
 ```ts
@@ -196,6 +208,35 @@ Un drag = una entrada de undo. El controller llama `beginGesture()` /
 entre ambos no se push-ean al historial individualmente. Cualquier
 nuevo gesto que mute state debe hacer lo mismo.
 
+Contrato del gesto (`PlaylistCore`):
+
+- `endGesture()` push-ea **solo si** hubo al menos un dispatch undoable
+  (fuera de `amend`) dentro del gesto. Selección, marquee, overlays,
+  clipboard o viewport solos no crean entrada.
+- El destino del undo es el present **justo antes del primer dispatch
+  undoable** del gesto (`getGestureBase()`; `null` sin gesto abierto).
+  Lo no-undoable previo (p. ej. la selección del click) queda fuera de
+  la entrada, igual que si se hubiera dispatchado sin gesto.
+- El controller abre el gesto **antes** de `tool.onPointerDown` y lo
+  cierra en el acto si la tool no devuelve un drag que mute el doc. Así
+  un pointer-down que ya crea/borra/mutea (paint, Shift clone-drag,
+  Delete/Mute, doble click de Draw) + el drag + el `amend` del host en
+  microtask son **una** entrada (R2-BRIDGE-1).
+
+```ts
+// ❌ PROHIBIDO: el dispatch creador queda en su propia entrada; un Ctrl+Z
+// revierte solo el drag y deja el clip sin corregir (o un clon oculto)
+const gesture = tool.onPointerDown(env); // core.createClip(...) → push
+if (gesture) core.beginGesture();
+```
+
+```ts
+// ✅ OBLIGATORIO
+core.beginGesture();
+const gesture = tool.onPointerDown(env);
+if (!gesture || !gestureMutatesDoc(gesture)) core.endGesture();
+```
+
 ### 3.5 rAF tick selectivo
 
 El tick del `requestAnimationFrame` solo despacha cuando hay trabajo
@@ -236,6 +277,95 @@ clip-node-registry.ts`. El lint `check-perf-patterns.mjs` permite
 como factories — `renderer-impl.ts` (init one-shot) y los
 `*-registry.ts` que implementan este patrón.
 
+**Providers del host** (`PlaylistRendererCallbacks.getClipDetail` /
+`getClipSparkline`): `syncFrame` los llama una vez por clip **visible** por
+frame (sparkline: solo clips pattern). Contrato:
+
+- Ambos son lookups O(1) sobre un índice que el host ya construyó. Nada de
+  proyección/cálculo dentro del frame.
+- `getClipDetail` devuelve un string estable; un string distinto redibuja
+  ese clip (forma parte de `clipVisualHash`).
+- `getClipSparkline` devuelve **la misma referencia de array** mientras las
+  barras no cambian, y un array **nuevo** cuando cambian (nunca mutar en
+  sitio un array ya devuelto). El body se redibuja si cambió el hash **o**
+  si la referencia difiere de la última dibujada (`node.bars`), así que las
+  barras pueden depender de cosas fuera del hash (p. ej. la posición del
+  clip en un calendario) sin meter `clip.start` en el hash — un move puro
+  sigue sin redibujar nada cuando no hay providers.
+
+```ts
+// ❌ PROHIBIDO: array nuevo en cada llamada → redibuja el clip cada frame
+getClipSparkline: (id) => projection.barsFor(id).map(normalize),
+```
+
+```ts
+// ✅ OBLIGATORIO: índice recalculado solo cuando cambian los datos; un
+// array sin cambios elemento a elemento conserva la referencia previa.
+getClipSparkline: (id) => sparkIndex.get(id) ?? null,
+```
+
+**Providers visuales (Ola 1).** Mismo contrato de identidad para todo lo que
+el host dibuja a través del renderer: se llaman desde el render loop, son
+lookups **O(1)** y devuelven **el mismo objeto** mientras sus datos no
+cambian (referencia nueva = repintar; nunca mutar en sitio un objeto ya
+devuelto). El canvas no interpreta el dominio: recibe beats, valores y tonos.
+
+| Callback | Se llama | Repinta cuando |
+|---|---|---|
+| `getClipContent(clipId)` → `PlaylistClipContent` | 1×/frame por clip **visible** no-automation | cambia la referencia, `clip.start` o el zoom (px/beat) — el contenido vive en beats absolutos. Non-null gana al sparkline (que entonces ni se consulta). |
+| `getOverviewData()` → `PlaylistOverviewData` | 1×/frame, sólo si `metrics.overviewLaneHeight > 0` | ver §3.14 |
+| `getDragAnnotation()` → `PlaylistDragAnnotation` | 1×/frame, sólo mientras hay `state.tooltip` | cambia la referencia. Seguir al cursor es un transform del Container, no un repaint. |
+| `getTrackMeta(trackId)` → `PlaylistTrackMeta` | 1×/frame por fila **real visible** (no overscan, no virtuales) | el header ya es inmediato; el string derivado (subtítulo truncado) se cachea por track y se recalcula sólo si cambia la referencia. |
+
+`PlaylistStepSeries` (`initial` + `beats` ascendentes + `values`) es la
+forma común de las curvas: el canvas la evalúa con búsqueda binaria
+(`stepSeriesValueAt` / `sortedUpperBound`, O(log n), sin allocations) y la
+recorre sólo en el rango visible (`walkVisibleSteps`). **Nunca** iterar una
+serie entera por frame.
+
+```ts
+// ❌ PROHIBIDO: objeto nuevo por llamada → el lane se reconstruye cada frame
+getOverviewData: () => ({ title: "Cash", primary: projection.cash(), ... }),
+```
+
+```ts
+// ✅ OBLIGATORIO: construido una vez por cambio de datos, devuelto tal cual
+getOverviewData: () => overviewCache,
+```
+
+### 3.14 Overview lane (`metrics.overviewLaneHeight`)
+
+`overviewLaneHeight > 0` reserva una banda de esa altura **entre la regla
+(`rulerHeight`) y el primer track**. Con 0 (default) el layout es
+idéntico al histórico.
+
+- **Una sola fuente de verdad para el inicio de los tracks:**
+  `getTracksTop(metrics) = rulerHeight + overviewLaneHeight`. Todo consumidor
+  del área de tracks pasa por ahí (tops de filas, `screenY ↔ track`,
+  hit-test, extensión/scrollbar vertical, máscara del timeline, grid, línea
+  de snap, ghost de drop, headers). `rulerHeight` a secas sólo describe la
+  regla (ticks, markers, loop region, play marker). Prohibido volver a usar
+  `metrics.rulerHeight` como "top de los tracks".
+- **Interacción:** el lane se comporta como la regla (hit `ruler`: seek +
+  scrub del playhead); su celda en la columna de headers es `chrome` inerte.
+  Nada se hit-testea "a través" del lane (filas/clips scrolleados debajo).
+- **Render — capa cacheada en tres niveles** (`layers/overview-lane.ts`,
+  DisplayObjects creados en el init de `renderer-impl.ts`):
+  1. *Frame* (fondos, línea de cero, umbrales punteados + labels, labels de
+     escala, título): se reconstruye sólo si cambia la referencia de datos,
+     `viewport.width` o la geometría del lane. Scroll y zoom **no** lo tocan.
+  2. *Curvas* (secundaria, área+línea primaria por tono, baseline punteada,
+     anotaciones): lo anterior + `scrollX` / `pxPerBeat`. Recorre sólo los
+     steps visibles (búsqueda binaria del primero).
+  3. *Dinámico* (línea del playhead + punto sobre la curva): se redibuja
+     sólo si cambia x del playhead, y del punto o su tono (evaluación por
+     búsqueda binaria, sin allocations).
+  Hover, selección, playhead, `scrollY`, alto del viewport: **0 rebuilds**
+  (test `perf-budget.spec.ts`).
+- **Escala Y:** min/max **globales** de primary ∪ baseline ∪ umbrales ∪ 0
+  (estable al scrollear), calculada una vez por referencia de datos — O(n)
+  por cambio de datos, nunca por frame. La secundaria tiene escala propia.
+
 ### 3.10 rAF coalescing + dirty-layer caching en el renderer
 
 `dispatch()` invoca `notify()` síncronamente; durante un pointermove
@@ -265,9 +395,24 @@ deben cachear su geometría:
 - `timelineGridGraphics` depende solo de `pxPerBeat`, `scrollX`,
   `viewport.width`, `sceneRect.height`, y la lista de ticks. Hover /
   selección / cualquier otra cosa **no** lo invalida.
+- Overview lane: frame / curvas / dinámico con sus propias keys (§3.14),
+  comparadas campo a campo (sin construir strings por frame).
+- Pill de anotación del drag: se pinta una vez por referencia y sigue al
+  tooltip moviendo su Container.
 
 El patrón es: calcula un hash de las dependencies, comparalo con el
 hash del frame anterior, salta `clear()` + re-emit si no cambió.
+
+**Repintar sin notify del core.** Cuando cambian datos de un provider
+(`getClipDetail` / `getClipSparkline` / `getClipContent` / `getOverviewData`
+/ `getDragAnnotation` / `getTrackMeta`) pero `PlaylistState` no, el host
+llama `renderer.invalidate()`. Entra por el mismo `requestRender`
+coalescido: N invalidates + N notifies del mismo frame = 1 `renderNow()`,
+y no arranca ningún tick (§3.11). Prohibido forzar un repaint despachando
+una acción "dummy" al core (ensucia history/notify) o con un rAF propio.
+El callback del rAF limpia `renderFrameId` **antes** de `renderNow()`: un
+frame que cae antes de que Pixi esté listo no puede dejar el id colgado y
+bloquear todos los renders siguientes.
 
 ### 3.11 rAF idle stop
 
@@ -278,10 +423,74 @@ lo activa y arrancar/parar el rAF en respuesta. NO mantener un tick
 en el reducer, el callback del rAF, la lectura de `performance.now()`
 y la entrada al dispatch suman.
 
+**Pixi no lleva ticker propio.** `Application.init` va siempre con
+`autoStart: false` (lo enforce `check-perf-patterns`, regla
+`pixi-idle-ticker`): el ticker por defecto de Pixi repinta TODO el stage
+cada frame aunque nada cambie. Pintar es asunto de `requestRender` (§3.10).
+Su `EventSystem` tampoco se usa (el controller es dueño del input): se
+desconecta tras `init` (`renderer.events.setTargetElement(null)`), o escucha
+cada `pointermove` del documento y mantiene un rAF que re-despacha un
+`pointermove` falso cada 10 ms. En reposo el canvas hace 0 draw calls. (2026-11-08: ese repintado continuo,
+bajo el fondo difuminado del editor, congeló Chrome en una máquina modesta.)
+
 Ejemplo canónico: `PlaylistShell` se suscribe a
 `state.playPosition.isRunning`. El tick que llama
 `advancePlayPosition` solo arranca cuando `isRunning` pasa de false a
 true, y se cancela cuando vuelve a false.
+
+### 3.13 Identidad estable de `state.clips` / `state.tracks`
+
+Una acción que no toca clips/tracks (hover, playhead, viewport, tool,
+selección, overlays…) **conserva la referencia** de `state.clips` y
+`state.tracks`. `PlaylistCore.dispatch` pasa el estado previo a
+`normalizeState(reduced, metrics, previous)`, que reutiliza el array previo
+cuando el reducer devolvió el mismo — sin clonar ni re-normalizar (la
+normalización de un clip depende solo del clip + `metrics`, y el previo ya
+está normalizado). Arrays que sí cambiaron se reconstruyen con objetos
+nuevos, como siempre.
+
+Consecuencias obligatorias:
+
+- Los reducers que no tocan clips/tracks hacen `{ ...state, x }` — nunca
+  `clips: state.clips.map(...)` "por si acaso".
+- Los suscriptores pueden (y deben) cortar con
+  `state.clips === lastClips && state.tracks === lastTracks` antes de
+  cualquier trabajo O(N) (bridge financiero, inspector, caches).
+- El state es inmutable (§1.4): dos entradas de history pueden compartir el
+  mismo array; mutarlo en sitio corrompe el undo.
+
+```ts
+// ❌ PROHIBIDO: re-clona N clips en cada hover/tick (60 Hz × O(N) allocs)
+const next = normalizeState(reduced, metrics);
+```
+
+```ts
+// ✅ OBLIGATORIO
+const next = normalizeState(reduced, metrics, previous);
+```
+
+### 3.15 Carriles apilados (`playlist-core/lanes.ts`)
+
+Clips de una misma línea que se pisan en el tiempo van en carriles (`clip.lane`,
+`track.lanes`; `getTrackHeight = alto de carril × lanes`). El reparto corre en
+`PlaylistCore.dispatch` justo después de `normalizeState`:
+
+- **Fuera de un gesto** y sólo si cambiaron clips/tracks: `settleLanes`, O(n log n)
+  (búsqueda binaria por carril, sin O(k²)). Hover / playhead / viewport: 0 trabajo.
+- **Anchos dibujados** (`PlaylistLayoutOptions.clipMinWidthPx`: una etiqueta de un día tan
+  ancha como su nombre): los carriles separan las tarjetas *dibujadas* — dos pasadas O(n log n),
+  primero por tiempo (el carril propio, `homeLane`) y luego en cascada por inicio. Su ancho en
+  beats depende del zoom, pero el zoom se lee en **niveles de ×1.25** (cada uno tomado en su
+  extremo más alejado, así nada se toca dentro del nivel): se re-asienta sólo al cruzar de
+  nivel, nunca por cuadro de zoom. Sin `clipMinWidthPx`, el viewport sigue costando 0.
+- **Dentro de un gesto** (drag, resize…): `provisionalLanes`, O(n) por move — nada se
+  reacomoda, sólo se ajusta `track.lanes` (base al abrir el gesto + carril libre). El
+  asentado ocurre UNA vez en `endGesture`, dentro de la misma entrada de undo.
+- **Identidad (§3.13):** si ningún carril cambia se devuelven los MISMOS arrays; sólo
+  se copian los clips/tracks cuyo `lane`/`lanes` cambió. `lane` 0 y `lanes` 1 no se
+  guardan (ausentes), así los clips sin apilar no cambian de forma.
+- El controller cachea por línea (en el gesto) si hay otros clips y cuántos carriles tenía
+  al empezar: O(n) una vez por línea visitada, O(1) por move.
 
 ### 3.9 Batch dispatch para gestures que generan N mutaciones por move
 
@@ -356,6 +565,8 @@ ResizeObserver) y **están obligadas a ser idempotentes en el reducer**:
 
 - `ADVANCE_PLAY_POSITION`
 - `SET_HOVER`
+- `SET_HOVER_TIME` (indicador de hover: la celda bajo el puntero; misma
+  `state` mientras el puntero no cruce a otra celda)
 - `SET_PLAY_POSITION`
 - `SET_PLAY_RUNNING`
 - `SET_VIEWPORT_SIZE`
@@ -367,6 +578,17 @@ ResizeObserver) y **están obligadas a ser idempotentes en el reducer**:
 - `SET_DRAG_PREVIEW` (F1/F3)
 - `SET_SNAP_HINT` (F1/F3)
 - `SET_TOOLTIP` (F1/F3)
+- `MOVE_CLIPS` (cada pointermove de un clip-drag): misma `state` cuando
+  ninguna track se materializa y cada update deja `max(0, start)` y el
+  `trackId` destino iguales a los del clip. Si algo cambia, el array de
+  clips se copia desde el primer clip que se mueve.
+- `RESIZE_CLIP` (cada pointermove de un resize): misma `state` cuando
+  `start`, `duration` y `contentOffset` resultantes no cambian (borde
+  donde ya está, o ya clampeado a `minClipDuration` / 0).
+
+Sin esto, cada pointermove por debajo de un paso de snap re-normalizaba
+N clips y obligaba a todo suscriptor (bridge financiero: ~1.3 ms a 600
+items) a un pase O(N) por un no-op (PERF2-3).
 
 Cada vez que aparezca una nueva acción que se invoque ≥30Hz, agregarla
 a esta lista y a los tests de `perf-budget.spec.ts`.
@@ -383,6 +605,7 @@ a esta lista y a los tests de `perf-budget.spec.ts`.
 | `clipViews.length` con 1000 clips fuera del viewport | < 50 |
 | `trackRows.length` con `scrollY=1_000_000` | < 40 |
 | Notify rate sobre 1000 dispatches idempotentes | == 0 |
+| `moveClips` / `resizeClip` a la posición actual × 500 en un drag (1000 clips) | 0 notifies, mismo `state.clips` |
 | `dispatch` × 10000 con state estable | < 100 ms (10 µs/dispatch) |
 | Brush path interpolación cubre todas las celdas snapped | sí, sin saltos |
 | Paint en track virtual produce clip visible | sí, track materializada |
@@ -391,6 +614,13 @@ a esta lista y a los tests de `perf-budget.spec.ts`.
 | N notifies del mismo frame coalescen en 1 render | sí |
 | rAF idle stop: tick cancelado al pausar play | sí |
 | Mask / grid solo redibujan al cambiar sus deps | sí |
+| hover / playhead / viewport conservan `state.clips` y `state.tracks` (1000 clips) | misma referencia |
+| 1000 cambios de hover con 1000 clips | < 30 ms |
+| `setHoverTime` × 500 dentro de la misma celda | 0 notifies, mismo `state` |
+| Overview lane: rebuilds de geometría en 100 frames de hover / playhead / selección | == 0 |
+| Overview lane: geometría emitida para una ventana visible de una serie de 1000 vs 100 000 steps | idéntica (O(log n + visibles)), < 1000 `lineTo` |
+| Overview lane: 100 rebuilds por scroll (serie de 1000 y de 100 000 steps) | < 150 ms c/u (medido ≈ 26 ms aislado) |
+| Clip content: redraws de body en 100 frames con referencias estables (1000 clips) | == 0 |
 
 Estos números **no se tocan para que pasen los tests**. Si un test
 falla, hay un bug de performance real que arreglar.

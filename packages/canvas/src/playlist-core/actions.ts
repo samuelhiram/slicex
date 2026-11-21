@@ -12,6 +12,7 @@ import type {
   PlaylistSnapMode,
   PlaylistToolId,
   PlaylistTooltip,
+  PlaylistTrack,
   PlaylistViewport,
 } from "./types";
 
@@ -19,6 +20,10 @@ export interface PlaylistClipMoveUpdate {
   id: string;
   start: number;
   trackIndex: number;
+  // Lane to drop on inside the destination track (a drag: the lane under
+  // the pointer). Absent: kept within the same track; a move to another
+  // track without one lets the lane layout pick the first free lane.
+  lane?: number;
 }
 
 export type PlaylistAction =
@@ -65,12 +70,27 @@ export type PlaylistAction =
   | { type: "TOGGLE_TRACK_SOLO"; trackIndex: number }
   | { type: "TOGGLE_TRACK_LOCK"; trackIndex: number }
   | { type: "SET_TRACK_HEIGHT"; trackIndex: number; height: number }
+  // Every materialised row to one height (one dispatch, one undo step).
+  | { type: "SET_ALL_TRACK_HEIGHTS"; height: number }
   | { type: "REORDER_TRACK"; fromIndex: number; toIndex: number }
+  // A host's re-arrangement of its rows in ONE step: the new rows (in
+  // order) and the row of each clip it moves (clip id → track id).
+  | {
+      type: "ARRANGE_TRACKS";
+      tracks: PlaylistTrack[];
+      placement: Readonly<Record<string, string>>;
+    }
   | { type: "MAKE_CLIPS_UNIQUE"; clipIds: string[] }
   | { type: "SET_CLIP_LABEL"; clipId: string; label: string }
   | { type: "SET_CLIP_COLOR"; clipId: string; color: string }
   | { type: "SET_CLIP_CONTENT_OFFSET"; clipId: string; contentOffset: number }
   | { type: "SET_CLIP_STRETCH_RATIO"; clipId: string; stretchRatio: number }
+  | { type: "SET_CLIP_NO_SLICE"; clipId: string; noSlice: boolean }
+  | { type: "SET_CLIP_TIME_LOCKED"; clipId: string; timeLocked: boolean }
+  // History checkpoint: a new present with identical content. Lets a host
+  // whose own data changed (no playlist field did) get an undo step that
+  // undo/redo can map back to its data (see PlaylistCore.touch).
+  | { type: "TOUCH" }
   | {
       type: "STRETCH_RESIZE_CLIP";
       clipId: string;
@@ -102,6 +122,7 @@ export type PlaylistAction =
   | { type: "SET_SELECTION"; selection: Partial<PlaylistSelection> }
   | { type: "SET_MARQUEE"; marquee: PlaylistMarquee | null }
   | { type: "SET_HOVER"; hover: PlaylistHover }
+  | { type: "SET_HOVER_TIME"; time: number | null }
   | { type: "SET_CONTEXT_MENU"; contextMenu: PlaylistContextMenu }
   | {
       type: "OPEN_TRACK_CONTEXT_MENU";
@@ -165,12 +186,17 @@ const UNDOABLE_ACTION_TYPES: ReadonlySet<PlaylistActionType> = new Set([
   "TOGGLE_TRACK_SOLO",
   "TOGGLE_TRACK_LOCK",
   "SET_TRACK_HEIGHT",
+  "SET_ALL_TRACK_HEIGHTS",
   "REORDER_TRACK",
+  "ARRANGE_TRACKS",
   "MAKE_CLIPS_UNIQUE",
   "SET_CLIP_LABEL",
   "SET_CLIP_COLOR",
   "SET_CLIP_CONTENT_OFFSET",
   "SET_CLIP_STRETCH_RATIO",
+  "SET_CLIP_NO_SLICE",
+  "SET_CLIP_TIME_LOCKED",
+  "TOUCH",
   "STRETCH_RESIZE_CLIP",
   "SLICE_CLIPS_AT_TIME",
   "ADD_MARKER",

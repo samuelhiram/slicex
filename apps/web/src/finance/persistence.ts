@@ -1,0 +1,164 @@
+// Local persistence of the plan (every future + the ledger of what really
+// happened) in the browser's localStorage. Server persistence (the dormant
+// @slicex/db / /api/timelines scaffolding) is a later step; this keeps a
+// person's year across reloads today.
+//
+// Never throws: a blocked / full / corrupted storage just means "no save".
+import { FinancialDocumentSchema, FinancialItemSchemaStrict, ItemIconSchema, MovementSchema } from "@slicex/contracts";
+import type { FinancialDocument, FinancialItem, ISODate, LedgerEntry, Movement } from "@slicex/core";
+import { parseTrackLayout, type FinancialTrackLayout } from "./mapping";
+
+export const PLAN_STORAGE_KEY = "slicex.plan.v1";
+
+export interface SavedBranch {
+  id: string;
+  name: string;
+  /** Day the future forked from its parent (null for the main plan). */
+  forkDate: ISODate | null;
+  doc: FinancialDocument;
+  /** The playlist rows of this future (empty ones too) and who sits where. */
+  layout?: FinancialTrackLayout | null;
+  /** "Probar cambios" (UX-21): the future this temporary trial was made from. */
+  trialOf?: string;
+}
+
+export interface SavedPlan {
+  v: 1;
+  activeId: string;
+  /** Branch drawn as a ghost under the active one (null = none). */
+  compareId: string | null;
+  branches: SavedBranch[];
+  /** What really happened, as recorded by "Rec" (oldest first). */
+  ledger: LedgerEntry[];
+  /**
+   * Real movements recorded by hand ("Registrar", oldest first): ONE journal
+   * for every future. Their effect is already in each future's cash / card
+   * debts. Absent in plans saved before it existed (read as none).
+   */
+  movements?: Movement[];
+}
+
+function storage(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The document read back from storage, validated with the shared schema of
+ * @slicex/contracts — the same one the editor uses. Storage is outside the
+ * app's control (old versions, hand edits, a corrupted write): a document
+ * that is not valid is dropped; an ITEM that is not valid is dropped alone
+ * (the rest of the plan survives), never fed to the projection as is.
+ */
+function parseDocument(value: unknown): FinancialDocument | null {
+  const doc = FinancialDocumentSchema.safeParse(value);
+  if (!doc.success) return null;
+  const items: FinancialItem[] = [];
+  for (const raw of doc.data.items) {
+    const item = FinancialItemSchemaStrict.safeParse(withoutBadIcon(raw));
+    if (item.success) items.push(item.data as FinancialItem);
+  }
+  return { ...doc.data, items };
+}
+
+/** A malformed icon name is dropped, never the item that carries it. */
+function withoutBadIcon(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || !("icon" in raw)) return raw;
+  if (ItemIconSchema.safeParse((raw as { icon: unknown }).icon).success) return raw;
+  const { icon: _icon, ...rest } = raw as Record<string, unknown>;
+  return rest;
+}
+
+/**
+ * The journal read back: a movement that is not valid is dropped alone (the
+ * rest of the journal survives), like an item of the plan.
+ */
+function parseMovements(value: unknown): Movement[] {
+  if (!Array.isArray(value)) return [];
+  const movements: Movement[] = [];
+  for (const raw of value) {
+    const movement = MovementSchema.safeParse(raw);
+    if (movement.success) movements.push(movement.data as Movement);
+  }
+  return movements;
+}
+
+export function parsePlan(raw: string | null): SavedPlan | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<SavedPlan>;
+    if (value.v !== 1 || !Array.isArray(value.branches) || value.branches.length === 0) {
+      return null;
+    }
+    const branches: SavedBranch[] = [];
+    for (const branch of value.branches) {
+      if (!branch || typeof branch.id !== "string" || typeof branch.name !== "string") continue;
+      const doc = parseDocument(branch.doc);
+      if (doc) branches.push({ ...branch, doc });
+    }
+    if (branches.length === 0) return null;
+    const activeId = branches.some((branch) => branch.id === value.activeId)
+      ? (value.activeId as string)
+      : branches[0]!.id;
+    const compareId =
+      typeof value.compareId === "string" &&
+      value.compareId !== activeId &&
+      branches.some((branch) => branch.id === value.compareId)
+        ? value.compareId
+        : null;
+    return {
+      v: 1,
+      activeId,
+      compareId,
+      branches: branches.map((branch) => {
+        const { layout: rawLayout, trialOf: rawTrialOf, ...rest } = branch;
+        const layout = parseTrackLayout(rawLayout);
+        // A trial survives a reload only while the future it came from does.
+        const trialOf =
+          typeof rawTrialOf === "string" &&
+          rawTrialOf !== branch.id &&
+          branches.some((other) => other.id === rawTrialOf)
+            ? rawTrialOf
+            : undefined;
+        return {
+          ...rest,
+          forkDate: typeof branch.forkDate === "string" ? branch.forkDate : null,
+          ...(layout ? { layout } : {}),
+          ...(trialOf !== undefined ? { trialOf } : {}),
+        };
+      }),
+      ledger: Array.isArray(value.ledger) ? value.ledger : [],
+      ...(Array.isArray(value.movements) ? { movements: parseMovements(value.movements) } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function loadPlan(): SavedPlan | null {
+  try {
+    return parsePlan(storage()?.getItem(PLAN_STORAGE_KEY) ?? null);
+  } catch {
+    return null;
+  }
+}
+
+export function savePlan(plan: SavedPlan): boolean {
+  try {
+    storage()?.setItem(PLAN_STORAGE_KEY, JSON.stringify(plan));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function clearPlan(): void {
+  try {
+    storage()?.removeItem(PLAN_STORAGE_KEY);
+  } catch {
+    // nothing to clear
+  }
+}

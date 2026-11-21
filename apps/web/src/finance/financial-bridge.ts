@@ -1,0 +1,2279 @@
+// FinancialBridge — keeps a FinancialDocument and the playlist in sync and
+// owns the derived projection. Plain TS (no React); React reads it through
+// FinancialBridgeApi.
+//
+// Direction of truth (see bridge-api.ts):
+//   playlist clip geometry ─► item dates      (drag, resize, slice, slip…)
+//   clip label / colour / mute / lock ─► item name / colour / enabled / lockDates
+//   editor / add buttons ─► item ─► clip geometry
+//
+// Undo / redo: the playlist history is the single undo stack. Every state
+// the bridge sees is mapped (WeakMap, O(1)) to the document items that
+// belong to it; when undo/redo makes an older state present again, the
+// bridge restores exactly those items instead of re-deriving them. Every
+// financial edit therefore has to be a playlist history entry — editor
+// saves that don't move the clip still `touch()` the playlist so they get
+// their own undo step.
+//
+// Identity: item.id === clip.id, and every financial clip carries a
+// sourceId of its own. A clip that appears without an item (paste,
+// clone-drag, duplicate, slice, draw with a selection) is materialised
+// from the clip its sourceId came from — the exact clip that was copied —
+// or, for a cut→paste, from the archived item of that clip.
+//
+// Performance (canon §1.2/§2.6): hover / playhead / viewport notifies keep
+// clips/tracks identity, so they cost one WeakMap.set. Real edits cost O(N)
+// and recompute the projection only when an item actually changed. React
+// listeners are notified only then.
+import {
+  applyMovementEffect,
+  createDefaultFinancialItem,
+  explainValley,
+  isEmptyMovementEffect,
+  withCardDebtDelta,
+  type MovementEffect,
+  findLiquidityWarnings,
+  nextPayment,
+  projectFinancialDocument,
+  snapshotAt,
+  solveDebtPayment,
+  statementDueDate,
+  suggestValleyFixes,
+  type ValleyFix,
+  type FinancialDocument,
+  type FinancialItem,
+  type FinancialItemKind,
+  type FinancialProjection,
+  type FinancialProjectionPoint,
+  type FinancialSnapshot,
+  type ISODate,
+  type LiquidityWarning,
+  type UpcomingPayment,
+  debtByAccountAt,
+  estimateDebtPayoffs,
+  type DebtPayoffEstimate,
+} from "@slicex/core";
+import {
+  clipCardWidthPx,
+  prefersReducedMotion,
+  stepSeriesValueAt,
+  type PlaylistClip,
+  type PlaylistClipContent,
+  type PlaylistClipIcon,
+  type PlaylistCore,
+  type PlaylistDragAnnotation,
+  type PlaylistOverviewData,
+  type PlaylistState,
+  type PlaylistStepSeries,
+  type PlaylistTrackMeta,
+} from "@slicex/canvas";
+import type {
+  FinancialBridgeApi,
+  FinancialPlacement,
+  FinancialPreview,
+  FinancialSession,
+  PreviewEffect,
+  ValleyInsight,
+} from "./bridge-api";
+import {
+  formatDateLong,
+  formatDateShort,
+  formatMoney,
+  formatMoneyWhole,
+  formatSignedMoneyWhole,
+} from "./format";
+import { iconGlyph } from "./icons";
+import { frequencyShort, isAutoRowLabel, KIND_COLORS, KIND_LABELS } from "./labels";
+import { cadenceText } from "./schedule-ui";
+import {
+  beatOf,
+  canonicalItem,
+  createFinancialPlaylistState,
+  dateOf,
+  datesLockedByDefault,
+  deriveRecurrence,
+  isDatesLocked,
+  isPayoffPinned,
+  isPointItem,
+  isPointTrackOf,
+  isSliceable,
+  horizonBeat,
+  itemClipGeometry,
+  itemColor,
+  openEndBeat,
+  arrangementByKind,
+  trackLayoutOf,
+  type FinancialTrackLayout,
+  type ObservedGeometry,
+} from "./mapping";
+import {
+  buildClipContents,
+  buildOverview,
+  buildTrackMeta,
+  cashSeries,
+  describeItemAt,
+  dragAnnotation,
+  formatMonthYear,
+  FULL_OVERVIEW_VIEW,
+  type OverviewDomain,
+  type OverviewView,
+} from "./visuals";
+
+// Label the playlist gives to clips created without a template.
+const GENERIC_CLIP_LABEL = "Clip";
+const MAX_SPARK_BARS = 64;
+const EMPTY_BARS: number[] = [];
+// Movements listed under a date tooltip before "y N más".
+const DAY_DETAIL_MAX = 5;
+const NO_POINTS: readonly FinancialProjectionPoint[] = [];
+
+/**
+ * The dates an item covers, as its card shows them next to its lock:
+ * "9 dic 2026" (one date), "1 dic 2026 – 1 sep 2027" (a window), "13 nov
+ * 2026 – Indefinido" (open-ended), a debt or MSI up to its payoff ("… – 10
+ * jun 2028"; "– Indefinido" when the estimate never clears it).
+ */
+export function describePeriod(item: FinancialItem, payoff?: DebtPayoffEstimate): string {
+  const start = formatDateLong(item.recurrence.startDate);
+  if (isPointItem(item)) return start;
+  if (item.recurrence.endDate !== undefined) return `${start} – ${formatDateLong(item.recurrence.endDate)}`;
+  if (payoff?.payoffDate) return `${start} – ${formatDateLong(payoff.payoffDate)}`;
+  return `${start} – Indefinido`;
+}
+
+interface Observed {
+  start: number;
+  duration: number;
+  label: string;
+  color: string;
+  sourceId: string | undefined;
+  trackId: string;
+}
+
+interface Template {
+  item: FinancialItem;
+  geometry: ObservedGeometry | null;
+}
+
+// What undo/redo restores for a playlist state. Shared by reference while
+// unchanged, so recording a hover/playhead state allocates nothing.
+interface DocSnapshot {
+  items: FinancialItem[];
+  initialCash: number;
+  minimumCashReserve: number;
+  /** The reality booked when this snapshot was taken (see RealityStamp). */
+  reality: RealityStamp;
+}
+
+// Reality (real movements, applyReality) is NOT part of the plan's undo
+// history: undoing a plan edit never un-spends money. Each snapshot carries
+// the running total of reality booked through this bridge when it was
+// taken; restoring a snapshot adds what was booked since (cash, and each
+// card's debt). Immutable: a new stamp per booking, so "nothing booked
+// since" is one reference check.
+interface RealityStamp {
+  /** Signed cash booked so far. */
+  cash: number;
+  /** Signed debt booked so far, per card id. */
+  debts: ReadonlyMap<string, number>;
+}
+
+const NO_REALITY: RealityStamp = { cash: 0, debts: new Map() };
+
+const EPS = 1e-6;
+
+// Amount by hand: px of upward travel that multiply the amount by e (Shift:
+// a finer hand, LEVEL_FINE_FACTOR times slower, whole pesos).
+const LEVEL_PX_PER_E = 120;
+const LEVEL_FINE_FACTOR = 8;
+// Branch switch morph of the money lane.
+const TRANSITION_MS = 320;
+
+function now(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+/** The amount a vertical drag edits, or null when the item has none. */
+export function levelValue(item: FinancialItem): number | null {
+  switch (item.kind) {
+    case "income":
+    case "expense":
+    case "card-purchase":
+      return item.amount;
+    case "loan":
+      return item.paymentAmount;
+    case "credit-card":
+      return item.paymentMode === "statement" ? null : item.paymentAmount ?? item.minimumPayment;
+    case "installment-plan":
+      return item.originalAmount;
+  }
+}
+
+export function withLevel<T extends FinancialItem>(item: T, value: number): T {
+  switch (item.kind) {
+    case "income":
+    case "expense":
+    case "card-purchase":
+      return { ...item, amount: value };
+    case "loan":
+      return { ...item, paymentAmount: value };
+    case "credit-card":
+      return { ...item, paymentAmount: value };
+    case "installment-plan":
+      return { ...item, originalAmount: value };
+  }
+  return item;
+}
+
+/** Friendly rounding while dragging an amount: fewer digits as it grows. */
+export function niceAmount(raw: number): number {
+  const value = Math.max(1, raw);
+  const step = value < 100 ? 1 : value < 1000 ? 10 : value < 10_000 ? 50 : value < 100_000 ? 100 : 1000;
+  return Math.max(step, Math.round(value / step) * step);
+}
+
+export function levelText(
+  item: FinancialItem,
+  value: number,
+  doc: FinancialDocument,
+  // The amount when the drag started: shown "(antes $X)" once it differs.
+  before?: number,
+): string {
+  const main = levelMain(item, value, doc);
+  return before !== undefined && Math.abs(before - value) >= 0.5
+    ? `${main} (antes ${formatMoneyWhole(before)})`
+    : main;
+}
+
+function levelMain(item: FinancialItem, value: number, doc: FinancialDocument): string {
+  const freq = frequencyShort(item.recurrence);
+  const once = item.recurrence.frequency === "once";
+  switch (item.kind) {
+    case "income":
+      return once ? `+${formatMoneyWhole(value)}` : `+${formatMoneyWhole(value)} ${freq}`;
+    case "expense":
+      return once ? `−${formatMoneyWhole(value)}` : `−${formatMoneyWhole(value)} ${freq}`;
+    case "loan":
+      return `Pagas ${formatMoneyWhole(value)} ${freq}`;
+    case "credit-card":
+      return `Pagas ${formatMoneyWhole(value)}/mes`;
+    case "card-purchase": {
+      const card = doc.items.find((candidate) => candidate.id === item.cardId);
+      return card ? `−${formatMoneyWhole(value)} con ${card.name}` : `−${formatMoneyWhole(value)}`;
+    }
+    case "installment-plan": {
+      const months = Math.max(1, item.installmentsTotal);
+      return `${formatMoneyWhole(value)} en ${months} MSI · −${formatMoney(
+        Math.round((value / months) * 100) / 100,
+      )}/mes`;
+    }
+  }
+}
+
+/** Money to cents (binary noise of repeated sums never accumulates). */
+function cents(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function easeInOut(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function cloneItem<T extends FinancialItem>(item: T, id: string): T {
+  const copy = JSON.parse(JSON.stringify(item)) as T;
+  copy.id = id;
+  return copy;
+}
+
+function sameBars(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function isDebtItem(item: FinancialItem): boolean {
+  return (
+    item.kind === "credit-card" ||
+    item.kind === "installment-plan" ||
+    (item.kind === "loan" && item.balance !== undefined)
+  );
+}
+
+export function describeItem(
+  item: FinancialItem,
+  doc: FinancialDocument,
+): string {
+  const freq = frequencyShort(item.recurrence);
+  switch (item.kind) {
+    case "income":
+      return `+${formatMoney(item.amount)} ${freq}`;
+    case "expense":
+      // A budget with no fixed day says so on the timeline.
+      return `−${formatMoney(item.amount)} ${freq}${item.recurrence.flexibleDay === true ? " · presupuesto" : ""}`;
+    case "loan":
+      return item.balance !== undefined
+        ? `−${formatMoney(item.paymentAmount)} ${freq} · resta ${formatMoney(item.balance)}`
+        : `−${formatMoney(item.paymentAmount)} ${freq}`;
+    case "credit-card":
+      return `Deuda ${formatMoney(item.balance)} · tasa ${item.annualRate}% · paga ${formatMoney(
+        item.paymentAmount ?? item.minimumPayment,
+      )}`;
+    case "card-purchase": {
+      const card = doc.items.find((candidate) => candidate.id === item.cardId);
+      return card
+        ? `−${formatMoney(item.amount)} con ${card.name}`
+        : `−${formatMoney(item.amount)} (sin tarjeta)`;
+    }
+    case "installment-plan": {
+      const monthly =
+        item.installmentsTotal > 0 ? item.originalAmount / item.installmentsTotal : 0;
+      return `−${formatMoney(monthly)}/mes · ${item.installmentsPaid} de ${item.installmentsTotal} pagos`;
+    }
+  }
+}
+
+export class FinancialBridge implements FinancialBridgeApi {
+  readonly core: PlaylistCore;
+
+  private doc: FinancialDocument;
+  private projection: FinancialProjection;
+  private warnings: LiquidityWarning[];
+  private revision = 0;
+  private readonly listeners = new Set<() => void>();
+
+  // Document data per playlist state (history-aligned undo/redo).
+  private readonly snapshots = new WeakMap<PlaylistState, DocSnapshot>();
+  private snap: DocSnapshot;
+  // Reality booked so far (see RealityStamp). Every snapshot points at the
+  // stamp current when it was taken.
+  private reality: RealityStamp = NO_REALITY;
+
+  // Last observed clip fields by clip id: tells a user edit (label changed
+  // since last time) from a stale value, and gives templates their geometry.
+  private observed = new Map<string, Observed>();
+  private lastClips: PlaylistState["clips"] | null = null;
+  private lastTracks: PlaylistState["tracks"] | null = null;
+
+  // Items whose clip was removed, by that clip's sourceId (cut → paste).
+  private readonly archiveBySource = new Map<string, Template>();
+
+  private itemIndex = new Map<string, FinancialItem>();
+  private readonly detailCache = new Map<string, string | null>();
+  private detailDay = Number.NaN;
+  // Least drawn width of one-time events (their text) per card height,
+  // and every card's dates; both per revision.
+  private readonly minWidthCache = new Map<string, { height: number; titleHeight: number; width: number }>();
+  // The item addItem / replaceItem is laying out (clipMinWidth reads it
+  // while its clip settles its lane, before the document has it).
+  private pendingItem: FinancialItem | null = null;
+  private minWidthRevision = -1;
+  private readonly periodCache = new Map<string, string | null>();
+  private periodRevision = -1;
+  private debtAtDay: { revision: number; day: number; value: Map<string, number> } | null =
+    null;
+  // Renderer providers: rebuilt lazily once per revision, identity-stable.
+  private contentIndex: Map<string, PlaylistClipContent> | null = null;
+  private previousContent: Map<string, PlaylistClipContent> = new Map();
+  private trackMetaIndex: Map<string, PlaylistTrackMeta> | null = null;
+  private previousTrackMeta: Map<string, PlaylistTrackMeta> = new Map();
+  private overviewCache: {
+    revision: number;
+    // Mode key: the gesture baseline, the preview or the comparison object.
+    baseline: object | null;
+    data: PlaylistOverviewData;
+  } | null = null;
+  private dragCache: {
+    revision: number;
+    baseline: DocSnapshot;
+    // The goal-seek note it was built with: a move that leaves the payment
+    // (and so the revision) the same still moves the goal date.
+    note: object | null;
+    data: PlaylistDragAnnotation;
+  } | null = null;
+  private readonly snapshotProjections = new WeakMap<DocSnapshot, FinancialProjection>();
+  private payoffCache: {
+    key: FinancialItem[];
+    value: Map<string, DebtPayoffEstimate>;
+  } | null = null;
+  private sparkIndex: Map<string, number[]> | null = null;
+  private previousSpark = new Map<string, number[]>();
+
+  private applying = 0;
+  // Follow-up corrections, flushed in one microtask (see queueCorrections).
+  private readonly pendingLabel = new Set<string>();
+  private readonly pendingUnique = new Set<string>();
+  private readonly pendingNoSlice = new Set<string>();
+  private readonly pendingTimeLock = new Set<string>();
+  private readonly pendingOffset = new Set<string>();
+  private readonly pendingRepin = new Set<string>();
+  private correctionQueued = false;
+  private destroyed = false;
+  private idCounter = 0;
+  private readonly subscription: { unsubscribe: () => void };
+
+  // Wave 2/3 interaction state.
+  private gestureOpen = false;
+  // Goal-seek result of the open gesture, shown in the drag pill.
+  private gestureNote: { text: string; tone: PlaylistDragAnnotation["tone"] } | null = null;
+  private level: { itemId: string; value: number } | null = null;
+  // Bounds of the money lane (hysteresis across revisions, visuals.ts).
+  private overviewDomain: OverviewDomain | null = null;
+  // What the money lane shows besides the cash curve (the chart's
+  // settings); everything until the app says otherwise.
+  private overviewView: OverviewView = FULL_OVERVIEW_VIEW;
+  // Info cards of clips (hover / tap), per revision.
+  private readonly infoCache = new Map<string, string | null>();
+  private infoDay = Number.NaN;
+  // Debt payoffs of a gesture's baseline (the "antes" of a goal-seek).
+  private basePayoffs: { snapshot: DocSnapshot; value: Map<string, DebtPayoffEstimate> } | null =
+    null;
+  private preview: FinancialPreview | null = null;
+  private previewCache: {
+    revision: number;
+    preview: FinancialPreview;
+    doc: FinancialDocument;
+    projection: FinancialProjection;
+    warnings: LiquidityWarning[];
+  } | null = null;
+  private comparison: FinancialDocument | null = null;
+  private comparisonCache: { doc: FinancialDocument; series: PlaylistStepSeries } | null =
+    null;
+  private transition: {
+    from: PlaylistStepSeries;
+    t0: number;
+    beats: number[];
+  } | null = null;
+  private highlight: ReadonlySet<string> = new Set();
+  private valleyCache: { revision: number; byKey: Map<string, ValleyInsight> } = {
+    revision: -1,
+    byKey: new Map(),
+  };
+
+  constructor(core: PlaylistCore, doc: FinancialDocument) {
+    this.core = core;
+    this.doc = { ...doc, items: doc.items.map(canonicalItem) };
+    this.projection = projectFinancialDocument(this.doc);
+    this.warnings = findLiquidityWarnings(
+      this.projection,
+      this.doc.minimumCashReserve,
+    );
+    this.snap = {
+      items: this.doc.items,
+      initialCash: this.doc.initialCash,
+      minimumCashReserve: this.doc.minimumCashReserve,
+      reality: this.reality,
+    };
+    this.rebuildIndex();
+    // (The host calls core.relayoutLanes() once this bridge is wired as its
+    // clipMinWidthPx: the first lanes were laid out without drawn widths.)
+    const state = core.getState();
+    this.observe(state);
+    this.snapshots.set(state, this.snap);
+    this.subscription = core.subscribe((next) => this.handleState(next));
+    // Pin derived clip ends (debts end where they're paid off) right away.
+    this.sweepInvariants(state);
+  }
+
+  // --- subscription (arrow properties: passed by reference to useSyncExternalStore)
+
+  readonly getRevision = (): number => this.revision;
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  // --- reads
+
+  getDocument(): FinancialDocument {
+    return this.doc;
+  }
+
+  getProjection(): FinancialProjection {
+    return this.projection;
+  }
+
+  getItem(id: string): FinancialItem | null {
+    return this.itemIndex.get(id) ?? null;
+  }
+
+  isItemLocked(id: string): boolean {
+    const clip = this.findClip(id);
+    return clip ? this.isClipLocked(clip) : false;
+  }
+
+  dateAtBeat(beat: number): ISODate {
+    return dateOf(this.doc, beat);
+  }
+
+  beatAtDate(date: ISODate): number {
+    return beatOf(this.doc, date);
+  }
+
+  snapshotAt(date: ISODate): FinancialSnapshot {
+    return snapshotAt(this.projection, date);
+  }
+
+  nextPaymentAfter(date: ISODate): UpcomingPayment | null {
+    return nextPayment(this.projection, date);
+  }
+
+  getWarnings(): LiquidityWarning[] {
+    return this.warnings;
+  }
+
+  // Follows the playhead day (debt left, interest share, MSI n/12): the
+  // cache is per (revision, day), so it changes at most once per day.
+  /**
+   * A one-time event (one date: no range, not open-ended) is a tag as wide
+   * as its name, amount, lock and date at any zoom — never "+$…" — laid out
+   * as a card of `height` draws it (clipCardWidthPx); 0 for everything else
+   * (their span is their dates). The core's clipMinWidthPx: O(1), cached
+   * per revision and card height.
+   */
+  clipMinWidth(clipId: string, height: number, titleHeight: number): number {
+    if (this.minWidthRevision !== this.revision) {
+      this.minWidthCache.clear();
+      this.minWidthRevision = this.revision;
+    }
+    // The item being added / edited right now (its clip is laid out before
+    // the document has it): its own width, never a cached one.
+    const pending = this.pendingItem !== null && this.pendingItem.id === clipId ? this.pendingItem : null;
+    const cached = pending ? undefined : this.minWidthCache.get(clipId);
+    if (cached !== undefined && cached.height === height && cached.titleHeight === titleHeight) {
+      return cached.width;
+    }
+    const item = pending ?? this.itemIndex.get(clipId);
+    const period = pending ? describePeriod(pending, this.payoffs().get(pending.id)) : this.getClipPeriod(clipId);
+    const width =
+      item && isPointItem(item)
+        ? clipCardWidthPx(
+            item.name,
+            describeItem(item, this.doc),
+            period,
+            height,
+            titleHeight,
+            iconGlyph(item.icon) !== null,
+          )
+        : 0;
+    if (!pending) this.minWidthCache.set(clipId, { height, titleHeight, width });
+    return width;
+  }
+
+  /** The dates a card shows next to its lock (describePeriod). O(1), cached per revision. */
+  getClipPeriod(clipId: string): string | null {
+    if (this.periodRevision !== this.revision) {
+      this.periodCache.clear();
+      this.periodRevision = this.revision;
+    }
+    const cached = this.periodCache.get(clipId);
+    if (cached !== undefined) return cached;
+    const item = this.itemIndex.get(clipId);
+    const text = item ? describePeriod(item, this.payoffs().get(item.id)) : null;
+    this.periodCache.set(clipId, text);
+    return text;
+  }
+
+  /**
+   * The icon the card shows first in its pill: the catalog's glyph (the
+   * SAME array for an icon: the renderer compares references), or null.
+   * The item being added / edited shows its own. O(1): two map lookups.
+   */
+  getClipIcon(clipId: string): PlaylistClipIcon | null {
+    const pending = this.pendingItem !== null && this.pendingItem.id === clipId ? this.pendingItem : null;
+    return iconGlyph((pending ?? this.itemIndex.get(clipId))?.icon);
+  }
+
+  getClipDetail(clipId: string): string | null {
+    const day = this.playheadDay();
+    if (day !== this.detailDay) {
+      this.detailCache.clear();
+      this.detailDay = day;
+    }
+    const cached = this.detailCache.get(clipId);
+    if (cached !== undefined) return cached;
+    const item = this.itemIndex.get(clipId);
+    const text = item
+      ? describeItemAt(item, this.doc, this.projection, dateOf(this.doc, day), this.debtAt(day))
+      : null;
+    this.detailCache.set(clipId, text);
+    return text;
+  }
+
+  getClipContent(clipId: string): PlaylistClipContent | null {
+    if (!this.contentIndex) {
+      this.contentIndex = buildClipContents(this.doc, this.projection, this.previousContent);
+    }
+    return this.contentIndex.get(clipId) ?? null;
+  }
+
+  getOverviewData(): PlaylistOverviewData {
+    const settled = this.settledOverview();
+    return this.transitionFrame(settled) ?? settled;
+  }
+
+  // The lane without the switch animation: the gesture's "before" ghost,
+  // else a preview (what-if) over the current curve, else the compared
+  // future, else just the current curve. Cached per (revision, mode key).
+  private settledOverview(): PlaylistOverviewData {
+    const view = this.overviewView;
+    const baseline = this.gestureBaseline();
+    const preview = baseline ? null : this.preview;
+    // The compared future's ghost only with "Plan alterno" on (the gesture's
+    // "before" and a what-if are the feedback of what you are doing: always).
+    const comparison = baseline || preview || !view.alternate ? null : this.comparison;
+    const key: object | null = baseline ?? preview ?? comparison;
+    const cached = this.overviewCache;
+    if (cached && cached.revision === this.revision && cached.baseline === key) {
+      return cached.data;
+    }
+    let data: PlaylistOverviewData;
+    const domain = this.overviewDomain;
+    if (baseline) {
+      data = buildOverview(
+        this.doc,
+        this.projection,
+        this.warnings,
+        cashSeries(this.doc, this.projectionOf(baseline)),
+        domain,
+        view,
+      );
+    } else if (preview) {
+      const view = this.previewData(preview);
+      data = buildOverview(
+        view.doc,
+        view.projection,
+        view.warnings,
+        cashSeries(this.doc, this.projection),
+        domain,
+        this.overviewView,
+      );
+    } else if (comparison) {
+      data = buildOverview(
+        this.doc,
+        this.projection,
+        this.warnings,
+        this.comparisonSeries(comparison),
+        domain,
+        view,
+      );
+    } else {
+      data = buildOverview(this.doc, this.projection, this.warnings, null, domain, view);
+    }
+    // The lane keeps its bounds until the data leaves their round step.
+    this.overviewDomain = data.domain ?? null;
+    this.overviewCache = { revision: this.revision, baseline: key, data };
+    return data;
+  }
+
+  getDragAnnotation(): PlaylistDragAnnotation | null {
+    const baseline = this.gestureBaseline();
+    if (!baseline) return null;
+    const cached = this.dragCache;
+    if (
+      cached &&
+      cached.revision === this.revision &&
+      cached.baseline === baseline &&
+      cached.note === this.gestureNote
+    ) {
+      return cached.data;
+    }
+    const baseProjection = this.projectionOf(baseline);
+    const changed = this.changedItems(baseline);
+    const debt = changed.some((item) => isDebtItem(item));
+    const effect = dragAnnotation(this.doc, baseProjection, this.projection, {
+      debt,
+      interestDelta: debt ? this.interestDelta(baseline) : 0,
+    });
+    const note = this.gestureNote ?? this.statementNote(baseline) ?? this.paymentsNote(baseline, changed, baseProjection);
+    const data: PlaylistDragAnnotation = note
+      ? { text: `${note.text} · ${effect.text}`, tone: note.tone === "negative" ? "negative" : effect.tone }
+      : effect;
+    this.dragCache = { revision: this.revision, baseline, note: this.gestureNote, data };
+    return data;
+  }
+
+  // Items of the document that differ from `baseline` (by reference).
+  private changedItems(baseline: DocSnapshot): FinancialItem[] {
+    const before = new Set<FinancialItem>(baseline.items);
+    return this.doc.items.filter((item) => !before.has(item));
+  }
+
+  // Interest of every debt (payoff estimates) now minus at the baseline.
+  private interestDelta(baseline: DocSnapshot): number {
+    const total = (payoffs: Map<string, DebtPayoffEstimate>) => {
+      let sum = 0;
+      for (const estimate of payoffs.values()) sum += estimate.totalInterest;
+      return sum;
+    };
+    return total(this.payoffs()) - total(this.payoffsOf(baseline));
+  }
+
+  private payoffsOf(snapshot: DocSnapshot): Map<string, DebtPayoffEstimate> {
+    if (snapshot === this.snap) return this.payoffs();
+    const cached = this.basePayoffs;
+    if (cached && cached.snapshot === snapshot) return cached.value;
+    const value = estimateDebtPayoffs({
+      ...this.doc,
+      items: snapshot.items,
+      initialCash: snapshot.initialCash,
+      minimumCashReserve: snapshot.minimumCashReserve,
+    });
+    this.basePayoffs = { snapshot, value };
+    return value;
+  }
+
+  // A recurring item cut shorter / made longer: how many payments it keeps.
+  private paymentsNote(
+    baseline: DocSnapshot,
+    changed: readonly FinancialItem[],
+    baseProjection: FinancialProjection,
+  ): { text: string; tone: PlaylistDragAnnotation["tone"] } | null {
+    if (changed.length !== 1) return null;
+    const item = changed[0]!;
+    if (isDebtItem(item) || item.recurrence.frequency === "once") return null;
+    const old = baseline.items.find((candidate) => candidate.id === item.id);
+    if (!old || old.recurrence.endDate === item.recurrence.endDate) return null;
+    if (old.recurrence.startDate !== item.recurrence.startDate) return null;
+    const count = (projection: FinancialProjection) => {
+      let n = 0;
+      for (const point of projection.points) {
+        if (point.itemId === item.id && point.cashDelta !== 0) n += 1;
+      }
+      return n;
+    };
+    const now = count(this.projection);
+    const was = count(baseProjection);
+    if (now === was) return null;
+    return { text: `${now} ${now === 1 ? "pago" : "pagos"} (antes ${was})`, tone: "neutral" };
+  }
+
+  // A purchase on a "totalero" card dragged across a cut: when it is paid.
+  private statementNote(
+    baseline: DocSnapshot,
+  ): { text: string; tone: PlaylistDragAnnotation["tone"] } | null {
+    const before = new Map<string, FinancialItem>();
+    for (const item of baseline.items) before.set(item.id, item);
+    for (const item of this.doc.items) {
+      if (item.kind !== "card-purchase") continue;
+      const old = before.get(item.id);
+      if (!old || old.kind !== "card-purchase") continue;
+      if (old.recurrence.startDate === item.recurrence.startDate) continue;
+      const card = this.itemIndex.get(item.cardId);
+      if (!card || card.kind !== "credit-card" || card.paymentMode !== "statement") continue;
+      const was = statementDueDate(card, old.recurrence.startDate);
+      const will = statementDueDate(card, item.recurrence.startDate);
+      if (was === will) {
+        return { text: `Se paga el ${formatDateShort(will)}`, tone: "neutral" };
+      }
+      return {
+        text: `Pasa de corte: se paga el ${formatDateShort(will)} (antes ${formatDateShort(was)})`,
+        tone: will > was ? "positive" : "negative",
+      };
+    }
+    return null;
+  }
+
+  getTrackMeta(trackId: string): PlaylistTrackMeta | null {
+    if (!this.trackMetaIndex) {
+      const trackOfItem = new Map<string, string>();
+      for (const [id, observed] of this.observed) trackOfItem.set(id, observed.trackId);
+      const autoRows = new Set<string>();
+      for (const track of this.core.getState().tracks) {
+        if (isAutoRowLabel(track.label)) autoRows.add(track.id);
+      }
+      this.trackMetaIndex = buildTrackMeta(
+        this.doc,
+        this.projection,
+        trackOfItem,
+        this.payoffs(),
+        this.previousTrackMeta,
+        autoRows,
+      );
+    }
+    return this.trackMetaIndex.get(trackId) ?? null;
+  }
+
+  // Called by the renderer every frame for visible clips: O(1) after the
+  // first call of a revision, and the SAME array while the bars are equal.
+  getClipSparkline(clipId: string): number[] | null {
+    if (!this.itemIndex.has(clipId)) return null;
+    if (!this.sparkIndex) this.sparkIndex = this.buildSparkIndex();
+    return this.sparkIndex.get(clipId) ?? EMPTY_BARS;
+  }
+
+  // --- wave 2: amount by hand
+
+  // Vertical drag on a clip's top edge (the interaction controller opened a
+  // gesture: every touch() below lands in ONE undo entry, and the gesture
+  // baseline gives the lane its ghost and the pill its effect).
+  levelDrag(
+    clipId: string,
+    phase: "start" | "move" | "end",
+    deltaY: number,
+    fine = false,
+  ): string | null {
+    if (phase === "start") {
+      const item = this.itemIndex.get(clipId);
+      const clip = this.findClip(clipId);
+      const value = item ? levelValue(item) : null;
+      if (!item || !clip || this.isClipLocked(clip) || value === null) {
+        this.level = null;
+        return item && item.kind === "credit-card" && item.paymentMode === "statement"
+          ? "Pagas el total de cada estado de cuenta"
+          : null;
+      }
+      this.level = { itemId: clipId, value };
+      return levelText(item, value, this.doc);
+    }
+    const level = this.level;
+    if (!level) return null;
+    if (phase === "end") {
+      this.level = null;
+      return null;
+    }
+    const current = this.itemIndex.get(level.itemId);
+    if (!current) return null;
+    const value = fine
+      ? Math.max(1, Math.round(level.value * Math.exp(deltaY / (LEVEL_PX_PER_E * LEVEL_FINE_FACTOR))))
+      : niceAmount(level.value * Math.exp(deltaY / LEVEL_PX_PER_E));
+    if (levelValue(current) !== value) {
+      const next = withLevel(current, value);
+      this.doc = {
+        ...this.doc,
+        items: this.doc.items.map((item) => (item.id === next.id ? next : item)),
+      };
+      this.commitTouch();
+    }
+    return levelText(this.itemIndex.get(level.itemId) ?? current, value, this.doc, level.value);
+  }
+
+  // --- wave 2: valleys that explain and fix themselves
+
+  valleyAt(day: number): ValleyInsight | null {
+    if (this.warnings.length === 0) return null;
+    const date = dateOf(this.doc, Math.max(0, Math.floor(day)));
+    const reserve = this.doc.minimumCashReserve;
+    if (snapshotAt(this.projection, date).cash >= reserve) return null;
+    // The episode the day belongs to: the latest one that started by then.
+    let warning: LiquidityWarning | null = null;
+    for (const candidate of this.warnings) {
+      if (candidate.startDate <= date) warning = candidate;
+    }
+    if (!warning) return null;
+    if (this.valleyCache.revision !== this.revision) {
+      this.valleyCache = { revision: this.revision, byKey: new Map() };
+    }
+    const key = `${warning.startDate}:${warning.eventId}`;
+    let insight = this.valleyCache.byKey.get(key);
+    if (!insight) {
+      insight = {
+        warning,
+        explanation: explainValley(this.doc, this.projection, warning),
+        fixes: suggestValleyFixes(this.doc, warning, { limit: 3 }),
+      };
+      this.valleyCache.byKey.set(key, insight);
+    }
+    return insight;
+  }
+
+  applyValleyFix(fix: ValleyFix): boolean {
+    return this.replaceItem(fix.patch);
+  }
+
+  setHighlight(itemIds: readonly string[] | null): void {
+    const next = new Set(itemIds ?? []);
+    if (next.size === this.highlight.size && [...next].every((id) => this.highlight.has(id))) {
+      return;
+    }
+    this.highlight = next;
+    this.notifyVisual();
+  }
+
+  isHighlighted(clipId: string): boolean {
+    return this.highlight.has(clipId);
+  }
+
+  // Render-loop provider (time tooltip): O(1) while the day and the
+  // projection are the same; the per-date index is built once per projection.
+  private dayDetailCache: { projection: unknown; day: number; text: string | null } | null = null;
+  private pointsByDate: { projection: unknown; map: Map<string, FinancialProjectionPoint[]> } | null =
+    null;
+
+  getDayDetail(beat: number): string | null {
+    const day = Math.floor(beat);
+    const cache = this.dayDetailCache;
+    if (cache && cache.projection === this.projection && cache.day === day) return cache.text;
+    let text: string | null = null;
+    if (Number.isFinite(day) && day >= 0 && day <= horizonBeat(this.doc)) {
+      const date = dateOf(this.doc, day);
+      const snapshot = this.snapshotAt(date);
+      const lines = [`Caja ${formatMoneyWhole(snapshot.cash)}`];
+      // That day's cash movements, one line per item: what comes in first,
+      // then what goes out (each group in event order; sort is stable).
+      const totals = new Map<string, { name: string; delta: number }>();
+      for (const point of this.pointsOn(date)) {
+        if (point.cashDelta === 0) continue;
+        const entry = totals.get(point.itemId);
+        if (entry) entry.delta += point.cashDelta;
+        else totals.set(point.itemId, { name: point.name, delta: point.cashDelta });
+      }
+      const moves = [...totals.values()]
+        .filter((entry) => Math.round(entry.delta) !== 0)
+        .sort((a, b) => (b.delta > 0 ? 1 : 0) - (a.delta > 0 ? 1 : 0));
+      const shown = moves.length > DAY_DETAIL_MAX ? DAY_DETAIL_MAX - 1 : moves.length;
+      for (let i = 0; i < shown; i += 1) {
+        const { name, delta } = moves[i]!;
+        lines.push(`${delta > 0 ? "+" : "−"}${formatMoneyWhole(Math.abs(delta))} ${name}`);
+      }
+      if (shown < moves.length) lines.push(`y ${moves.length - shown} más`);
+      // The grey line of the lane, named (it has no hover of its own): last,
+      // after what came in and what went out.
+      if (snapshot.debt > 0.5) lines.push(`Deuda ${formatMoneyWhole(snapshot.debt)}`);
+      text = lines.join("\n");
+    }
+    this.dayDetailCache = { projection: this.projection, day, text };
+    return text;
+  }
+
+  private pointsOn(date: string): readonly FinancialProjectionPoint[] {
+    if (!this.pointsByDate || this.pointsByDate.projection !== this.projection) {
+      const map = new Map<string, FinancialProjectionPoint[]>();
+      for (const point of this.projection.points) {
+        const list = map.get(point.date);
+        if (list) list.push(point);
+        else map.set(point.date, [point]);
+      }
+      this.pointsByDate = { projection: this.projection, map };
+    }
+    return this.pointsByDate.map.get(date) ?? NO_POINTS;
+  }
+
+  /**
+   * Info card of a clip (hover / tap): the full name is the card's title
+   * (the clip label); these are its lines — kind and amount with its
+   * cadence, the next payment, how it ends. Cached per revision and clip:
+   * O(1) per frame while it shows.
+   */
+  getClipInfo(clipId: string): string | null {
+    // Its lines follow the playhead day (next payment, debt): per day too.
+    const day = this.playheadDay();
+    if (day !== this.infoDay) {
+      this.infoCache.clear();
+      this.infoDay = day;
+    }
+    const cached = this.infoCache.get(clipId);
+    if (cached !== undefined) return cached;
+    const item = this.itemIndex.get(clipId);
+    const text = item ? this.describeClipInfo(item) : null;
+    this.infoCache.set(clipId, text);
+    return text;
+  }
+
+  private describeClipInfo(item: FinancialItem): string {
+    const lines: string[] = [];
+    const cadence = cadenceText(item.recurrence);
+    const once = item.recurrence.frequency === "once";
+    const kind = KIND_LABELS[item.kind];
+    switch (item.kind) {
+      case "income":
+        lines.push(`${kind} · +${formatMoney(item.amount)}${once ? "" : ` ${cadence}`}`);
+        break;
+      case "expense":
+        lines.push(`${kind} · −${formatMoney(item.amount)}${once ? "" : ` ${cadence}`}`);
+        break;
+      case "card-purchase": {
+        const card = this.itemIndex.get(item.cardId);
+        lines.push(`${kind} · −${formatMoney(item.amount)}${card ? ` con ${card.name}` : ""}`);
+        break;
+      }
+      case "loan":
+        lines.push(`${kind} · −${formatMoney(item.paymentAmount)} ${cadence}`);
+        break;
+      case "credit-card":
+        lines.push(
+          item.paymentMode === "statement"
+            ? `${kind} · pagas el total de cada mes`
+            : `${kind} · pagas ${formatMoney(item.paymentAmount ?? item.minimumPayment)} al mes · tasa ${item.annualRate}%`,
+        );
+        break;
+      case "installment-plan": {
+        const monthly =
+          item.installmentsTotal > 0 ? item.originalAmount / item.installmentsTotal : 0;
+        lines.push(`${kind} · −${formatMoney(monthly)}/mes · ${item.installmentsTotal} pagos`);
+        break;
+      }
+    }
+    if (item.enabled === false) lines.push("Excluido de tus cifras");
+    // Next movement of this item from the playhead day on.
+    const from = dateOf(this.doc, this.playheadDay());
+    for (const point of this.projection.points) {
+      if (point.itemId !== item.id || point.date < from) continue;
+      if (point.cashDelta === 0) continue;
+      lines.push(`Próximo: ${formatDateShort(point.date)} · ${formatSignedMoneyWhole(point.cashDelta)}`);
+      break;
+    }
+    if (isDebtItem(item)) {
+      const debt = this.debtAt(this.playheadDay()).get(item.id);
+      if (debt !== undefined && debt > 0.5) lines.push(`Debes ${formatMoneyWhole(debt)}`);
+      const payoff = this.payoffs().get(item.id);
+      if (payoff) {
+        lines.push(
+          payoff.payoffDate === null
+            ? "No se liquida con este pago"
+            : `Libre en ${formatMonthYear(payoff.payoffDate)}`,
+        );
+      }
+    } else if (!once) {
+      lines.push(
+        item.recurrence.endDate
+          ? `Hasta el ${formatDateLong(item.recurrence.endDate)}`
+          : "Sin fecha de fin",
+      );
+    } else {
+      lines.push(`El ${formatDateLong(item.recurrence.startDate)}`);
+    }
+    return lines.join("\n");
+  }
+
+  getTrackLayout(): FinancialTrackLayout {
+    return trackLayoutOf(this.core.getState(), (clipId) => this.itemIndex.has(clipId));
+  }
+
+  canExtend(clipId: string): boolean {
+    const item = this.itemIndex.get(clipId);
+    return item !== undefined && !isPointItem(item);
+  }
+
+  // --- wave 3: futures
+
+  setPreview(preview: FinancialPreview | null): void {
+    if (preview === this.preview) return;
+    this.preview = preview;
+    this.previewCache = null;
+    this.notifyVisual();
+  }
+
+  getPreview(): FinancialPreview | null {
+    return this.preview;
+  }
+
+  /** Effect of the active preview vs the current plan (null without one). */
+  getPreviewEffect(): PreviewEffect | null {
+    const preview = this.preview;
+    if (!preview) return null;
+    const view = this.previewData(preview);
+    const annotation = dragAnnotation(this.doc, this.projection, view.projection);
+    return {
+      text: annotation.text,
+      tone: annotation.tone,
+      minBefore: this.projection.minimumCash.cash,
+      minAfter: view.projection.minimumCash.cash,
+      minAfterDate: view.projection.minimumCash.date,
+      finalBefore: this.projection.finalCash,
+      finalAfter: view.projection.finalCash,
+    };
+  }
+
+  setComparison(doc: FinancialDocument | null): void {
+    if (doc === this.comparison) return;
+    this.comparison = doc;
+    this.notifyVisual();
+  }
+
+  /**
+   * "Ordenar por tipo": every item on its own event line, incomes first,
+   * then expenses, then the debts, from the first line down
+   * (arrangementByKind). One undo step. false when already so.
+   */
+  arrangeByKind(): boolean {
+    const plan = arrangementByKind(this.doc, this.core.getState());
+    if (!plan) return false;
+    this.core.arrangeTracks(plan.tracks, plan.placement);
+    return true;
+  }
+
+  // Read on every core notify (a hover too): cached per rows / clips /
+  // items, O(1) until one of them changes.
+  private arrangedCache: {
+    tracks: PlaylistState["tracks"];
+    clips: PlaylistState["clips"];
+    items: FinancialDocument["items"];
+    value: boolean;
+  } | null = null;
+
+  isArrangedByKind(): boolean {
+    const state = this.core.getState();
+    const cached = this.arrangedCache;
+    if (cached && cached.tracks === state.tracks && cached.clips === state.clips && cached.items === this.doc.items) {
+      return cached.value;
+    }
+    const value = arrangementByKind(this.doc, state) === null;
+    this.arrangedCache = { tracks: state.tracks, clips: state.clips, items: this.doc.items, value };
+    return value;
+  }
+
+  setOverviewView(view: OverviewView): void {
+    if (view === this.overviewView) return;
+    this.overviewView = view;
+    this.overviewCache = null;
+    this.notifyVisual();
+  }
+
+  getComparison(): FinancialDocument | null {
+    return this.comparison;
+  }
+
+  /** Morph the lane from `series` (the curve shown before) to the current one. */
+  animateFrom(series: PlaylistStepSeries | null): void {
+    // Reduced motion: the lane switches at once (same rule as the
+    // navigator's glides).
+    if (!series || prefersReducedMotion()) {
+      this.transition = null;
+      if (series) this.notifyVisual();
+      return;
+    }
+    const days = Math.max(1, horizonBeat(this.doc));
+    const beats: number[] = [];
+    for (let day = 1; day < days; day += 1) beats.push(day);
+    this.transition = { from: series, t0: now(), beats };
+    this.notifyVisual();
+  }
+
+  isAnimating(): boolean {
+    return this.transition !== null && now() - this.transition.t0 < TRANSITION_MS;
+  }
+
+  exportSession(): FinancialSession {
+    return { session: this.core.saveSession(), doc: this.doc };
+  }
+
+  // Back to a document saved with exportSession, with its undo history.
+  importSession(session: FinancialSession): void {
+    this.resetTransient();
+    this.doc = session.doc;
+    this.applying += 1;
+    try {
+      this.core.loadSession(session.session);
+    } finally {
+      this.applying -= 1;
+    }
+    const state = this.core.getState();
+    const stored = this.snapshots.get(state);
+    if (stored) {
+      // A parked future comes back with the reality booked while it was parked.
+      const snapshot = this.withRealitySince(stored);
+      this.doc = {
+        ...this.doc,
+        items: snapshot.items,
+        initialCash: snapshot.initialCash,
+        minimumCashReserve: snapshot.minimumCashReserve,
+      };
+      this.snap = snapshot;
+    }
+    this.observe(state);
+    this.recompute();
+    this.snapshots.set(state, this.snap);
+    this.sweepInvariants(state);
+  }
+
+  // A brand-new document (onboarding, a restored save, a rolled-forward
+  // plan): fresh playlist + fresh undo history, same zoom. With a layout,
+  // its rows (empty ones too) and placements come back.
+  loadDocument(doc: FinancialDocument, layout: FinancialTrackLayout | null = null): void {
+    this.resetTransient();
+    const viewport = this.core.getState().viewport;
+    const canonical: FinancialDocument = { ...doc, items: doc.items.map(canonicalItem) };
+    const base = createFinancialPlaylistState(canonical, layout);
+    const state: PlaylistState = {
+      ...base,
+      viewport: {
+        ...base.viewport,
+        width: viewport.width,
+        height: viewport.height,
+        pxPerBeat: viewport.pxPerBeat,
+      },
+    };
+    this.doc = canonical;
+    this.snap = {
+      items: canonical.items,
+      initialCash: canonical.initialCash,
+      minimumCashReserve: canonical.minimumCashReserve,
+      reality: this.reality,
+    };
+    this.archiveBySource.clear();
+    this.applying += 1;
+    try {
+      this.core.loadSession(state);
+    } finally {
+      this.applying -= 1;
+    }
+    const present = this.core.getState();
+    this.observe(present);
+    this.recompute();
+    this.snapshots.set(present, this.snap);
+    this.sweepInvariants(present);
+  }
+
+  // --- writes
+
+  createDraftItem(kind: FinancialItemKind, atDay?: number): FinancialItem {
+    // Past the horizon nothing would be projected: start at its last day.
+    const day = Math.min(
+      Math.max(0, Math.floor(atDay ?? this.core.getState().playPosition.time)),
+      horizonBeat(this.doc) - 1,
+    );
+    const item = createDefaultFinancialItem(
+      kind,
+      this.makeItemId(kind),
+      dateOf(this.doc, day),
+      this.doc,
+    );
+    if (!item.name) item.name = KIND_LABELS[kind];
+    return canonicalItem(item);
+  }
+
+  addItem(draft: FinancialItem, placement?: FinancialPlacement): string {
+    const state = this.core.getState();
+    const taken = (id: string) =>
+      !id || this.itemIndex.has(id) || state.clips.some((clip) => clip.id === id);
+    const id = taken(draft.id) ? this.makeItemId(draft.kind) : draft.id;
+    const item = canonicalItem({ ...draft, id } as FinancialItem);
+    delete item.enabled;
+    const geometry = itemClipGeometry(this.doc, item);
+    const excluded = this.excludedTracks(state);
+
+    // Overlaps are fine: clips that meet in time stack in lanes of their row
+    // (the engine's lane layout). One-time events go to the first shared row
+    // of their kind that is writable and audible; anything else gets a new
+    // row at the bottom.
+    let trackIndex = -1;
+    // A row the person picked (e.g. right-click on it, or the pencil): used
+    // when writable — busy at those dates it just gains a lane.
+    let picked = false;
+    if (placement) {
+      const wanted = Math.max(0, Math.floor(placement.trackIndex));
+      const track = state.tracks[wanted];
+      if (!track || !track.locked) {
+        trackIndex = wanted;
+        picked = true;
+      }
+    }
+    if (!picked && isPointItem(item)) {
+      trackIndex = state.tracks.findIndex(
+        (track) =>
+          !track.locked && !excluded.has(track.id) && isPointTrackOf(track.id, item.kind),
+      );
+    }
+    const newTrack = trackIndex < 0;
+    if (newTrack) trackIndex = state.tracks.length;
+    // Rows keep their automatic name ("Línea de evento" / "… de eventos",
+    // labels.ts) — they are never named after an item: a second item on the
+    // row would make that name a lie. A new row, an endless row materialised
+    // now or an empty unnamed one only takes the item's colour.
+    const target = state.tracks[trackIndex];
+    const colourRow =
+      newTrack ||
+      !target ||
+      (isAutoRowLabel(target.label) && !state.clips.some((clip) => clip.trackId === target.id));
+
+    this.pendingItem = item;
+    try {
+    this.apply(() => {
+      // A new lane goes right under the last track (createClip on a row
+      // past the end would materialise every empty row in between).
+      if (newTrack) this.core.insertTrackBelow(state.tracks.length - 1);
+      this.core.createClip({
+        trackIndex,
+        id,
+        start: geometry.start,
+        duration: geometry.duration,
+        type: "pattern",
+        label: item.name,
+        color: itemColor(item),
+        sourceId: id,
+        noSlice: !isSliceable(item),
+        timeLocked: isDatesLocked(item),
+      });
+      if (geometry.contentOffset !== 0) {
+        this.core.setClipContentOffset(id, geometry.contentOffset);
+      }
+      if (colourRow) this.core.recolorTrack(trackIndex, KIND_COLORS[item.kind]);
+      this.core.setClipSelection([id]);
+    });
+    } finally {
+      this.pendingItem = null;
+    }
+
+    const after = this.core.getState();
+    const clip = after.clips.find((candidate) => candidate.id === id);
+    if (!clip) return id;
+    if (this.excludedTracks(after).has(clip.trackId)) item.enabled = false;
+    this.doc = { ...this.doc, items: [...this.doc.items, item] };
+    this.commit(after);
+    return id;
+  }
+
+  replaceItem(draft: FinancialItem): boolean {
+    const current = this.itemIndex.get(draft.id);
+    const clip = this.findClip(draft.id);
+    if (!current || !clip || this.isClipLocked(clip)) return false;
+
+    const next = canonicalItem(draft);
+    const geometry = itemClipGeometry(this.doc, next);
+    // A one-time event keeps the visual width the user gave it.
+    const duration =
+      isPointItem(next) && isPointItem(current) ? clip.duration : geometry.duration;
+    const ratio = clip.stretchRatio && clip.stretchRatio > 0 ? clip.stretchRatio : 1;
+    const offset = geometry.contentOffset * ratio;
+    const noSlice = !isSliceable(next);
+    const timeLocked = isDatesLocked(next);
+
+    // The edited item becomes the base the sync derives the target from;
+    // siblings (e.g. group members dragged along by the move) are derived
+    // from their own geometry like any other playlist edit.
+    this.doc = {
+      ...this.doc,
+      items: this.doc.items.map((item) => (item.id === next.id ? next : item)),
+    };
+
+    const before = this.core.getState();
+    this.pendingItem = next;
+    try {
+    this.apply(() => {
+      const state = this.core.getState();
+      if (Math.abs(clip.start - geometry.start) > 1e-9) {
+        const trackIndex = state.tracks.findIndex((t) => t.id === clip.trackId);
+        this.core.moveClips([{ id: clip.id, start: geometry.start, trackIndex }]);
+      }
+      const moved = this.findClip(clip.id);
+      if (moved && Math.abs(moved.duration - duration) > 1e-9) {
+        this.core.resizeClip(clip.id, "right", moved.start + duration);
+      }
+      const resized = this.findClip(clip.id);
+      if (resized && Math.abs((resized.contentOffset ?? 0) - offset) > 1e-9) {
+        this.core.setClipContentOffset(clip.id, offset);
+      }
+      if (clip.label !== next.name) this.core.setClipLabel(clip.id, next.name);
+      const color = itemColor(next);
+      if (clip.color !== color) this.core.setClipColor(clip.id, color);
+      if ((clip.noSlice === true) !== noSlice) this.core.setClipNoSlice(clip.id, noSlice);
+      if ((clip.timeLocked === true) !== timeLocked) {
+        this.core.setClipTimeLocked(clip.id, timeLocked);
+      }
+      // Amount-only edits don't change the playlist; give them their own
+      // undo step anyway so undo/redo stays aligned with the document.
+      if (this.core.getState() === before) this.core.touch();
+      // A new name / amount / date can draw a one-time card wider: its row
+      // keeps the cards apart (in this same undo step).
+      this.core.relayoutLanes();
+    });
+    } finally {
+      this.pendingItem = null;
+    }
+
+    this.commit(this.core.getState());
+    return true;
+  }
+
+  deleteItem(id: string): boolean {
+    const clip = this.findClip(id);
+    if (!clip || !this.itemIndex.has(id) || this.isClipLocked(clip)) return false;
+    // The sync archives the item when the clip disappears (undoable).
+    this.core.deleteClip(id);
+    return !this.itemIndex.has(id);
+  }
+
+  // Both are undo steps: the playlist is touched so the history gets an
+  // entry the snapshot can be attached to.
+  setInitialCash(amount: number): void {
+    if (!Number.isFinite(amount) || amount === this.doc.initialCash) return;
+    this.doc = { ...this.doc, initialCash: amount };
+    this.commitTouch();
+  }
+
+  setMinimumCashReserve(amount: number): void {
+    if (!Number.isFinite(amount) || amount === this.doc.minimumCashReserve) return;
+    this.doc = { ...this.doc, minimumCashReserve: amount };
+    this.commitTouch();
+  }
+
+  // Reality is booked outside the plan's undo history (see RealityStamp):
+  // no playlist touch, so Ctrl+Z of a plan edit never takes it back. Locked
+  // rows don't stop it either — a lock guards the plan, not what happened.
+  applyReality(effect: MovementEffect): void {
+    if (this.destroyed || isEmptyMovementEffect(effect)) return;
+    let debts = this.reality.debts;
+    if (effect.debts.length > 0) {
+      const next = new Map(debts);
+      for (const debt of effect.debts) next.set(debt.accountId, cents((next.get(debt.accountId) ?? 0) + debt.amount));
+      debts = next;
+    }
+    this.reality = { cash: cents(this.reality.cash + effect.cash), debts };
+    this.doc = applyMovementEffect(this.doc, effect);
+    this.recompute();
+    const state = this.core.getState();
+    this.snapshots.set(state, this.snap);
+    // A card's payoff-pinned end follows its debt.
+    if (effect.debts.length > 0) this.sweepInvariants(state);
+  }
+
+  // `snapshot` plus the reality booked since it was taken (the same object
+  // when nothing was). The result carries the current stamp.
+  private withRealitySince(snapshot: DocSnapshot): DocSnapshot {
+    const now = this.reality;
+    const then = snapshot.reality;
+    if (then === now) return snapshot;
+    let items = snapshot.items;
+    if (now.debts !== then.debts) {
+      let changed = false;
+      const next = items.map((item) => {
+        if (item.kind !== "credit-card") return item;
+        const delta = cents((now.debts.get(item.id) ?? 0) - (then.debts.get(item.id) ?? 0));
+        const updated = withCardDebtDelta(item, delta);
+        if (updated !== item) changed = true;
+        return updated;
+      });
+      if (changed) items = next;
+    }
+    return {
+      items,
+      initialCash: cents(snapshot.initialCash + now.cash - then.cash),
+      minimumCashReserve: snapshot.minimumCashReserve,
+      reality: now,
+    };
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    this.subscription.unsubscribe();
+    this.listeners.clear();
+    this.clearPending();
+  }
+
+  // --- playlist → document
+
+  private handleState(state: PlaylistState): void {
+    if (this.applying > 0 || this.destroyed) return;
+    const open = this.core.getGestureBase() !== null;
+    const closed = this.gestureOpen && !open;
+    this.gestureOpen = open;
+    if (!open) this.gestureNote = null;
+    this.handlePlaylistState(state);
+    // A gesture just ended: pin derived ends that were left free while it
+    // was open (a goal-seek drag lands on the real payoff day).
+    if (closed) this.sweepInvariants(this.core.getState());
+  }
+
+  private handlePlaylistState(state: PlaylistState): void {
+    const stored = this.snapshots.get(state);
+    if (stored) {
+      // Undo / redo (or a re-notify of a known state). The plan goes back;
+      // the reality booked since that state stays (withRealitySince: the
+      // same object, no allocation, when nothing was booked since).
+      const snapshot = this.withRealitySince(stored);
+      if (snapshot !== stored) this.snapshots.set(state, snapshot);
+      const changed = snapshot !== this.snap;
+      if (changed) {
+        this.doc = {
+          ...this.doc,
+          items: snapshot.items,
+          initialCash: snapshot.initialCash,
+          minimumCashReserve: snapshot.minimumCashReserve,
+        };
+        this.snap = snapshot;
+      }
+      const clipsChanged =
+        state.clips !== this.lastClips || state.tracks !== this.lastTracks;
+      if (clipsChanged) this.observe(state);
+      if (changed) this.recompute();
+      // A card debt moved by reality may move its payoff-pinned end.
+      if (clipsChanged || snapshot !== stored) this.sweepInvariants(state);
+      return;
+    }
+    if (state.clips === this.lastClips && state.tracks === this.lastTracks) {
+      // Hover / playhead / viewport: nothing financial changed, but this
+      // state may later become an undo target.
+      this.snapshots.set(state, this.snap);
+      return;
+    }
+    this.syncFromPlaylist(state);
+  }
+
+  /** Derives the document from `state`; returns whether it recomputed. */
+  private syncFromPlaylist(state: PlaylistState): boolean {
+    const clipById = new Map<string, PlaylistClip>();
+    for (const clip of state.clips) clipById.set(clip.id, clip);
+    const excludedTracks = this.excludedTracks(state);
+    const previousItems = this.itemIndex;
+    // Open-endedness is judged against the item as it was when the current
+    // pointer gesture started, so dragging an edge in and back out in one
+    // gesture doesn't leave it finite.
+    const gestureBase = this.core.getGestureBase();
+    const baseSnapshot = gestureBase ? this.snapshots.get(gestureBase) : undefined;
+    const openAtBase = baseSnapshot ? this.openEndedIds(baseSnapshot) : null;
+
+    let changed = false;
+    const nextItems: FinancialItem[] = [];
+    const known = new Set<string>();
+
+    for (const item of this.doc.items) {
+      const clip = clipById.get(item.id);
+      if (!clip) {
+        this.archiveItem(item);
+        changed = true;
+        continue;
+      }
+      known.add(item.id);
+      const next = this.deriveItem(
+        item,
+        clip,
+        this.observed.get(item.id) ?? null,
+        item.recurrence.endDate === undefined || (openAtBase?.has(item.id) ?? false),
+        excludedTracks,
+      );
+      if (next !== item) changed = true;
+      nextItems.push(next);
+    }
+
+    for (const clip of state.clips) {
+      if (known.has(clip.id)) continue;
+      nextItems.push(this.materialize(clip, state, previousItems, excludedTracks));
+      changed = true;
+    }
+
+    this.observe(state);
+    if (changed) {
+      this.doc = { ...this.doc, items: nextItems };
+      this.recompute();
+    }
+    this.snapshots.set(state, this.snap);
+    this.sweepInvariants(state);
+    return changed;
+  }
+
+  private deriveItem(
+    item: FinancialItem,
+    clip: PlaylistClip,
+    previous: Observed | null,
+    wasIndefinite: boolean,
+    excludedTracks: Set<string>,
+  ): FinancialItem {
+    let recurrence = deriveRecurrence(this.doc, item, clip, previous, wasIndefinite);
+    const sought = this.goalSeek(item, clip, previous);
+    if (sought && sought.endDate !== undefined && recurrence.endDate !== sought.endDate) {
+      recurrence = { ...recurrence, endDate: sought.endDate };
+    }
+    const payment =
+      sought && "paymentAmount" in item && item.paymentAmount !== sought.paymentAmount
+        ? sought.paymentAmount
+        : undefined;
+
+    let name = item.name;
+    if (previous && clip.label !== previous.label) {
+      const trimmed = clip.label.trim();
+      if (trimmed) name = trimmed;
+    }
+    let color = item.color;
+    if (previous && clip.color !== previous.color) {
+      color = clip.color === KIND_COLORS[item.kind] ? undefined : clip.color;
+    }
+    const enabled =
+      clip.muted === true || excludedTracks.has(clip.trackId) ? false : undefined;
+    // A free item moved by hand to have an end stays free (lockDates false);
+    // the lock button flips it; back to the default leaves no flag.
+    const locked = clip.timeLocked === true;
+    const lockDefault = datesLockedByDefault(
+      recurrence === item.recurrence ? item : ({ ...item, recurrence } as FinancialItem),
+    );
+    const lockDates = locked === lockDefault ? undefined : locked;
+
+    if (
+      recurrence === item.recurrence &&
+      name === item.name &&
+      color === item.color &&
+      enabled === item.enabled &&
+      lockDates === item.lockDates &&
+      payment === undefined
+    ) {
+      return item;
+    }
+    const next = { ...item, recurrence, name } as FinancialItem;
+    if (lockDates === undefined) delete next.lockDates;
+    else next.lockDates = lockDates;
+    if (payment !== undefined) (next as { paymentAmount?: number }).paymentAmount = payment;
+    if (color === undefined) delete next.color;
+    else next.color = color;
+    if (enabled === undefined) delete next.enabled;
+    else next.enabled = enabled;
+    return next;
+  }
+
+  // Goal-seek: the right edge of a debt dragged by the user = "free on that
+  // date". Cards / balance loans get the payment that pays them off by then
+  // (their end is re-pinned to the real payoff when the gesture ends);
+  // window loans keep their total and spread it over the new window. Only
+  // inside a user pointer gesture (never for editor saves / undo).
+  private goalSeek(
+    item: FinancialItem,
+    clip: PlaylistClip,
+    previous: Observed | null,
+  ): { paymentAmount: number; endDate?: ISODate } | null {
+    if (!previous || this.applying > 0 || this.core.getGestureBase() === null) return null;
+    if (item.kind !== "credit-card" && item.kind !== "loan") return null;
+    const resizedRight =
+      Math.abs(clip.start - previous.start) <= EPS &&
+      Math.abs(clip.duration - previous.duration) > EPS;
+    if (!resizedRight) return null;
+    const base = this.gestureBaseItem(item.id) ?? item;
+    const windowLoan =
+      base.kind === "loan" && base.balance === undefined && base.recurrence.endDate !== undefined;
+    if (!isPayoffPinned(base) && !windowLoan) return null;
+    if (base.kind === "credit-card" && base.paymentMode === "statement") {
+      this.gestureNote = {
+        text: "Pagas el total cada mes: queda libre cuando dejas de usarla",
+        tone: "neutral",
+      };
+      return null;
+    }
+    const endBeat = Math.max(Math.round(clip.start) + 1, Math.round(clip.start + clip.duration));
+    const target = dateOf(this.doc, endBeat - 1);
+    const doc = {
+      ...this.doc,
+      items: this.doc.items.map((candidate) => (candidate.id === base.id ? base : candidate)),
+    };
+    const solution = solveDebtPayment(doc, base.id, target);
+    if (!solution) return null;
+    const per = base.kind === "credit-card" ? "/mes" : frequencyShort(base.recurrence);
+    const payment = formatMoneyWhole(solution.paymentAmount);
+    const when = solution.payoffDate ? formatMonthYear(solution.payoffDate) : "";
+    // The goal (where the edge is), the result and the date before the
+    // gesture: "Meta: 23 sep → Libre en ago 2027 (antes jul 2028)".
+    const baseline = this.gestureBaseline();
+    const before = baseline ? this.payoffsOf(baseline).get(base.id) : this.payoffs().get(base.id);
+    const was =
+      before === undefined
+        ? ""
+        : before.payoffDate === null
+          ? " (antes no se liquidaba)"
+          : formatMonthYear(before.payoffDate) !== when
+            ? ` (antes ${formatMonthYear(before.payoffDate)})`
+            : "";
+    const goal = `Meta: ${formatDateShort(target)}`;
+    if (!solution.feasible) {
+      this.gestureNote = {
+        text: when
+          ? `${goal} → lo antes posible: ${when}${was} pagando ${payment}${per}`
+          : `${goal} → pagando ${payment}${per}`,
+        tone: "negative",
+      };
+    } else {
+      this.gestureNote = {
+        text: `${goal} → Libre en ${when}${was} · pagas ${payment}${per}`,
+        tone: "positive",
+      };
+    }
+    return { paymentAmount: solution.paymentAmount, endDate: solution.endDate };
+  }
+
+  // The item as it was when the open gesture started.
+  private gestureBaseItem(id: string): FinancialItem | null {
+    const base = this.core.getGestureBase();
+    const snapshot = base ? this.snapshots.get(base) : undefined;
+    if (!snapshot) return null;
+    for (const item of snapshot.items) if (item.id === id) return item;
+    return null;
+  }
+
+  // Where a payoff-pinned debt's clip ends: the day after its payoff (or
+  // the open end when it never pays off / owes nothing). A card's MSI
+  // plans keep it open until their last installment.
+  private pinnedEnd(item: FinancialItem, clip: PlaylistClip): number {
+    const openEnd = openEndBeat(this.doc);
+    const payoffs = this.payoffs();
+    const endOf = (id: string): number | null => {
+      const estimate = payoffs.get(id);
+      if (!estimate || estimate.payoffDate === null) return null;
+      if (estimate.payoffDate <= this.doc.startDate) return null;
+      return Math.min(openEnd, beatOf(this.doc, estimate.payoffDate) + 1);
+    };
+    let end = endOf(item.id) ?? openEnd;
+    if (item.kind === "credit-card") {
+      for (const other of this.doc.items) {
+        if (other.kind !== "installment-plan" || other.cardId !== item.id) continue;
+        if (other.enabled === false) continue;
+        const planEnd = endOf(other.id);
+        if (planEnd !== null && planEnd > end) end = planEnd;
+      }
+    }
+    return Math.max(end, Math.round(clip.start) + 1);
+  }
+
+  // The end a clip must have, or null when it is free (finite windows).
+  private expectedEnd(item: FinancialItem, clip: PlaylistClip, openEnd: number): number | null {
+    if (isPointItem(item)) return null;
+    if (isPayoffPinned(item)) {
+      // Never fight a drag in progress; the sweep at gesture end pins it.
+      if (this.core.getGestureBase() !== null) return null;
+      return this.pinnedEnd(item, clip);
+    }
+    return item.recurrence.endDate === undefined ? openEnd : null;
+  }
+
+  private resetTransient(): void {
+    this.clearPending();
+    this.level = null;
+    this.preview = null;
+    this.previewCache = null;
+    this.highlight = new Set();
+    this.gestureNote = null;
+    this.transition = null;
+    this.overviewCache = null;
+    this.dragCache = null;
+  }
+
+  // Listeners without a revision bump: React (keyed on the revision) does
+  // nothing, the renderer repaints (preview / highlight / animation).
+  private notifyVisual(): void {
+    for (const listener of Array.from(this.listeners)) listener();
+  }
+
+  private previewData(preview: FinancialPreview): {
+    doc: FinancialDocument;
+    projection: FinancialProjection;
+    warnings: LiquidityWarning[];
+  } {
+    const cached = this.previewCache;
+    if (cached && cached.revision === this.revision && cached.preview === preview) return cached;
+    let doc: FinancialDocument;
+    if (preview.kind === "document") {
+      doc = preview.doc;
+    } else {
+      const items =
+        preview.kind === "exclude"
+          ? this.doc.items.map((item) =>
+              item.id === preview.itemId ? ({ ...item, enabled: false } as FinancialItem) : item,
+            )
+          : [
+              ...this.doc.items,
+              canonicalItem({ ...preview.item, id: "preview-draft" } as FinancialItem),
+            ];
+      doc = { ...this.doc, items };
+    }
+    const projection = projectFinancialDocument(doc);
+    const warnings = findLiquidityWarnings(projection, doc.minimumCashReserve);
+    this.previewCache = { revision: this.revision, preview, doc, projection, warnings };
+    return this.previewCache;
+  }
+
+  private comparisonSeries(doc: FinancialDocument): PlaylistStepSeries {
+    const cached = this.comparisonCache;
+    if (cached && cached.doc === doc) return cached.series;
+    const series = cashSeries(this.doc, projectFinancialDocument(doc));
+    this.comparisonCache = { doc, series };
+    return series;
+  }
+
+  // One frame of the branch-switch morph, or null when none is running.
+  // Allocates per frame only while the ~320 ms animation runs.
+  private transitionFrame(settled: PlaylistOverviewData): PlaylistOverviewData | null {
+    const transition = this.transition;
+    if (!transition) return null;
+    const elapsed = now() - transition.t0;
+    if (elapsed >= TRANSITION_MS) {
+      this.transition = null;
+      return null;
+    }
+    const k = easeInOut(Math.max(0, elapsed / TRANSITION_MS));
+    const from = transition.from;
+    const to = settled.primary;
+    const lerp = (beat: number) =>
+      stepSeriesValueAt(from, beat) * (1 - k) + stepSeriesValueAt(to, beat) * k;
+    const values = transition.beats.map((beat) => lerp(beat));
+    return {
+      ...settled,
+      primary: { initial: lerp(0), beats: transition.beats, values },
+      annotations: [],
+    };
+  }
+
+  private materialize(
+    clip: PlaylistClip,
+    state: PlaylistState,
+    previousItems: Map<string, FinancialItem>,
+    excludedTracks: Set<string>,
+  ): FinancialItem {
+    let base: FinancialItem;
+    let geometry: ObservedGeometry | null = null;
+    let generic = false;
+
+    const template = this.templateFromSource(clip, previousItems);
+    if (template) {
+      base = cloneItem(template.item, clip.id);
+      geometry = template.geometry;
+      // A paste copies the clip as it was when copied, which may differ
+      // from the source's length now: compare against the clipboard copy.
+      if (base.recurrence.endDate === undefined && state.clipboard) {
+        for (const entry of state.clipboard.entries) {
+          if (
+            entry.clip.sourceId === clip.sourceId &&
+            Math.abs(entry.clip.duration - clip.duration) <= EPS
+          ) {
+            geometry = { start: entry.clip.start, duration: entry.clip.duration };
+            break;
+          }
+        }
+      }
+    } else {
+      const sameTrack = this.templateFromTrack(clip, previousItems);
+      if (sameTrack) {
+        base = cloneItem(sameTrack, clip.id);
+      } else {
+        generic = true;
+        base = createDefaultFinancialItem(
+          "expense",
+          clip.id,
+          dateOf(this.doc, Math.round(clip.start)),
+          this.doc,
+        );
+        base.name = KIND_LABELS.expense;
+      }
+    }
+
+    // A clip stamped from the playlist's built-in template ("Clip", default
+    // colour) carries no user intent: keep the item's name and colour.
+    const label = clip.label.trim();
+    const genericClip = label === "" || label === GENERIC_CLIP_LABEL;
+    const item = { ...base, name: genericClip ? base.name : label } as FinancialItem;
+    if (!generic && !genericClip && clip.color !== itemColor(base)) {
+      if (clip.color === KIND_COLORS[item.kind]) delete item.color;
+      else item.color = clip.color;
+    }
+    item.recurrence = deriveRecurrence(
+      this.doc,
+      base,
+      clip,
+      geometry,
+      base.recurrence.endDate === undefined,
+    );
+    if (clip.muted === true || excludedTracks.has(clip.trackId)) item.enabled = false;
+    else delete item.enabled;
+    // A copy keeps its clip's lock; a generic stamp takes the default of
+    // what it became (sweepInvariants sets its clip).
+    delete item.lockDates;
+    if (!generic && (clip.timeLocked === true) !== datesLockedByDefault(item)) {
+      item.lockDates = clip.timeLocked === true;
+    }
+
+    const result = canonicalItem(item);
+    if (clip.label !== result.name || clip.color !== itemColor(result)) {
+      this.pendingLabel.add(clip.id);
+    }
+    return result;
+  }
+
+  private templateFromSource(
+    clip: PlaylistClip,
+    previousItems: Map<string, FinancialItem>,
+  ): Template | null {
+    const sourceId = clip.sourceId;
+    if (!sourceId || sourceId === clip.id) return null;
+    // Financial clips have unique sourceIds, so this is the copied clip.
+    for (const [id, observed] of this.observed) {
+      if (observed.sourceId !== sourceId) continue;
+      const item = previousItems.get(id);
+      if (item) return { item, geometry: observed };
+    }
+    const archived = this.archiveBySource.get(sourceId);
+    if (archived) return archived;
+    const direct = previousItems.get(sourceId);
+    return direct ? { item: direct, geometry: this.observed.get(sourceId) ?? null } : null;
+  }
+
+  private templateFromTrack(
+    clip: PlaylistClip,
+    previousItems: Map<string, FinancialItem>,
+  ): FinancialItem | null {
+    for (const [id, observed] of this.observed) {
+      if (observed.trackId !== clip.trackId) continue;
+      const item = previousItems.get(id);
+      if (item) return item;
+    }
+    return null;
+  }
+
+  private archiveItem(item: FinancialItem): void {
+    const observed = this.observed.get(item.id);
+    const geometry = observed
+      ? { start: observed.start, duration: observed.duration }
+      : null;
+    this.archiveBySource.set(observed?.sourceId ?? item.id, { item, geometry });
+  }
+
+  private openEndedIds(snapshot: DocSnapshot): Set<string> {
+    const ids = new Set<string>();
+    for (const item of snapshot.items) {
+      if (!isPointItem(item) && item.recurrence.endDate === undefined) ids.add(item.id);
+    }
+    return ids;
+  }
+
+  // Invariants every financial clip should satisfy; violations are queued
+  // for the correction microtask. O(N), runs only when clips/tracks changed.
+  //  - a sourceId of its own (copies must template from the exact clip),
+  //  - noSlice === !isSliceable(item),
+  //  - a one-time event away from beat 0 has no content offset,
+  //  - an open-ended window ends on the open-end sentinel (unless it was
+  //    parked past it, where a resize could only collapse it).
+  private sweepInvariants(state: PlaylistState): void {
+    const openEnd = openEndBeat(this.doc);
+    const owners = new Map<string, string>();
+    for (const clip of state.clips) {
+      const item = this.itemIndex.get(clip.id);
+      if (!item) continue;
+      const sourceId = clip.sourceId;
+      if (sourceId !== undefined) {
+        const owner = owners.get(sourceId);
+        if (owner === undefined) {
+          owners.set(sourceId, clip.id);
+        } else if (clip.id === sourceId) {
+          this.pendingUnique.add(owner);
+          owners.set(sourceId, clip.id);
+        } else {
+          this.pendingUnique.add(clip.id);
+        }
+      }
+      if ((clip.noSlice === true) !== !isSliceable(item)) this.pendingNoSlice.add(clip.id);
+      if ((clip.timeLocked === true) !== isDatesLocked(item)) this.pendingTimeLock.add(clip.id);
+      if (isPointItem(item)) {
+        if (clip.start > EPS && Math.abs(clip.contentOffset ?? 0) > EPS) {
+          this.pendingOffset.add(clip.id);
+        }
+      } else {
+        const expected = this.expectedEnd(item, clip, openEnd);
+        if (
+          expected !== null &&
+          Math.abs(clip.start + clip.duration - expected) > EPS &&
+          clip.start < openEnd - 1
+        ) {
+          this.pendingRepin.add(clip.id);
+        }
+      }
+    }
+    this.queueCorrections();
+  }
+
+  private clearPending(): void {
+    this.pendingLabel.clear();
+    this.pendingUnique.clear();
+    this.pendingNoSlice.clear();
+    this.pendingTimeLock.clear();
+    this.pendingOffset.clear();
+    this.pendingRepin.clear();
+  }
+
+  // Follow-up corrections: label / colour of clips materialised from a
+  // generic stamp, unique sourceIds, noSlice flags, point offsets, the
+  // open-end pin. Runs in a microtask (never re-entrantly inside a notify)
+  // through core.amend, so it joins the undo entry of the edit that caused
+  // it. Lookups use one Map; sourceIds are fixed in ONE dispatch.
+  private queueCorrections(): void {
+    if (this.correctionQueued) return;
+    if (
+      this.pendingLabel.size === 0 &&
+      this.pendingUnique.size === 0 &&
+      this.pendingNoSlice.size === 0 &&
+      this.pendingTimeLock.size === 0 &&
+      this.pendingOffset.size === 0 &&
+      this.pendingRepin.size === 0
+    ) {
+      return;
+    }
+    this.correctionQueued = true;
+    queueMicrotask(() => {
+      this.correctionQueued = false;
+      if (this.destroyed) return;
+      const labels = Array.from(this.pendingLabel);
+      const unique = Array.from(this.pendingUnique);
+      const noSlice = Array.from(this.pendingNoSlice);
+      const timeLocks = Array.from(this.pendingTimeLock);
+      const offsets = Array.from(this.pendingOffset);
+      const repin = Array.from(this.pendingRepin);
+      this.clearPending();
+
+      const state = this.core.getState();
+      const clipById = new Map<string, PlaylistClip>();
+      for (const clip of state.clips) clipById.set(clip.id, clip);
+      const locked = new Set<string>();
+      for (const track of state.tracks) if (track.locked === true) locked.add(track.id);
+      const target = (id: string) => {
+        const clip = clipById.get(id);
+        const item = this.itemIndex.get(id);
+        return clip && item && !locked.has(clip.trackId) ? { clip, item } : null;
+      };
+      const openEnd = openEndBeat(this.doc);
+
+      this.applying += 1;
+      try {
+        this.core.amend(() => {
+          for (const id of labels) {
+            const hit = target(id);
+            if (!hit) continue;
+            if (hit.clip.label !== hit.item.name) this.core.setClipLabel(id, hit.item.name);
+            const color = itemColor(hit.item);
+            if (hit.clip.color !== color) this.core.setClipColor(id, color);
+          }
+          for (const id of noSlice) {
+            const hit = target(id);
+            if (!hit) continue;
+            const want = !isSliceable(hit.item);
+            if ((hit.clip.noSlice === true) !== want) this.core.setClipNoSlice(id, want);
+          }
+          for (const id of timeLocks) {
+            const hit = target(id);
+            if (!hit) continue;
+            const want = isDatesLocked(hit.item);
+            if ((hit.clip.timeLocked === true) !== want) this.core.setClipTimeLocked(id, want);
+          }
+          for (const id of offsets) {
+            const hit = target(id);
+            if (!hit || !isPointItem(hit.item)) continue;
+            if (hit.clip.start > EPS && Math.abs(hit.clip.contentOffset ?? 0) > EPS) {
+              this.core.setClipContentOffset(id, 0);
+            }
+          }
+          for (const id of repin) {
+            const hit = target(id);
+            if (!hit) continue;
+            const want = this.expectedEnd(hit.item, hit.clip, openEnd);
+            if (want === null) continue;
+            const end = hit.clip.start + hit.clip.duration;
+            if (Math.abs(end - want) > EPS && hit.clip.start < openEnd - 1) {
+              this.core.resizeClip(id, "right", want);
+            }
+          }
+          const uniqueIds = unique.filter((id) => target(id) !== null);
+          if (uniqueIds.length > 0) {
+            this.core.dispatch({ type: "MAKE_CLIPS_UNIQUE", clipIds: uniqueIds });
+          }
+        });
+      } finally {
+        this.applying -= 1;
+      }
+      const after = this.core.getState();
+      if (after.clips !== this.lastClips || after.tracks !== this.lastTracks) {
+        this.observe(after);
+      }
+      this.snapshots.set(after, this.snap);
+    });
+  }
+
+  // --- helpers
+
+  private apply(mutate: () => void): void {
+    this.applying += 1;
+    this.core.beginGesture();
+    try {
+      mutate();
+    } finally {
+      this.core.endGesture();
+      this.applying -= 1;
+    }
+  }
+
+  // After a bridge-initiated playlist change: derive siblings, record the
+  // snapshot, and recompute even when no geometry changed (amount edits).
+  private commit(state: PlaylistState): void {
+    if (!this.syncFromPlaylist(state)) this.recompute();
+    this.snapshots.set(state, this.snap);
+  }
+
+  // A document-level edit with no playlist change of its own.
+  private commitTouch(): void {
+    this.apply(() => this.core.touch());
+    this.recompute();
+    this.snapshots.set(this.core.getState(), this.snap);
+  }
+
+  private recompute(): void {
+    const doc = this.doc;
+    if (
+      this.snap.items !== doc.items ||
+      this.snap.initialCash !== doc.initialCash ||
+      this.snap.minimumCashReserve !== doc.minimumCashReserve ||
+      this.snap.reality !== this.reality
+    ) {
+      this.snap = {
+        items: doc.items,
+        initialCash: doc.initialCash,
+        minimumCashReserve: doc.minimumCashReserve,
+        reality: this.reality,
+      };
+    }
+    this.projection = projectFinancialDocument(this.doc);
+    this.warnings = findLiquidityWarnings(
+      this.projection,
+      this.doc.minimumCashReserve,
+    );
+    this.rebuildIndex();
+    this.revision += 1;
+    for (const listener of Array.from(this.listeners)) listener();
+  }
+
+  private rebuildIndex(): void {
+    const index = new Map<string, FinancialItem>();
+    for (const item of this.doc.items) index.set(item.id, item);
+    this.itemIndex = index;
+    this.detailCache.clear();
+    this.infoCache.clear();
+    this.detailDay = Number.NaN;
+    if (this.contentIndex) this.previousContent = this.contentIndex;
+    this.contentIndex = null;
+    if (this.trackMetaIndex) this.previousTrackMeta = this.trackMetaIndex;
+    this.trackMetaIndex = null;
+    if (this.sparkIndex) this.previousSpark = this.sparkIndex;
+    this.sparkIndex = null;
+  }
+
+  private buildSparkIndex(): Map<string, number[]> {
+    const magnitudes = new Map<string, number[]>();
+    for (const point of this.projection.points) {
+      // Interest and an MSI's debt opening move no cash: not "payments".
+      if (point.type === "credit-card-interest" || point.type === "debt-opening") continue;
+      const value = Math.abs(point.cashDelta) || Math.abs(point.debtDelta);
+      if (value <= 0) continue;
+      let list = magnitudes.get(point.itemId);
+      if (!list) {
+        list = [];
+        magnitudes.set(point.itemId, list);
+      }
+      list.push(value);
+    }
+    const bars = new Map<string, number[]>();
+    for (const [itemId, values] of magnitudes) {
+      const step = values.length > MAX_SPARK_BARS ? values.length / MAX_SPARK_BARS : 1;
+      const sampled: number[] = [];
+      for (let i = 0; i < values.length && sampled.length < MAX_SPARK_BARS; i += step) {
+        sampled.push(values[Math.floor(i)]!);
+      }
+      let max = 0;
+      for (const v of sampled) if (v > max) max = v;
+      const series = sampled.map((v) => (max > 0 ? 0.25 + 0.6 * (v / max) : 0.5));
+      // Keep the previous array when equal: the renderer redraws a clip
+      // body only when the reference changes.
+      const previous = this.previousSpark.get(itemId);
+      bars.set(itemId, previous && sameBars(previous, series) ? previous : series);
+    }
+    return bars;
+  }
+
+  private excludedTracks(state: PlaylistState): Set<string> {
+    const anySolo = state.tracks.some((track) => track.soloed === true);
+    const excluded = new Set<string>();
+    for (const track of state.tracks) {
+      if (track.muted === true || (anySolo && track.soloed !== true)) {
+        excluded.add(track.id);
+      }
+    }
+    return excluded;
+  }
+
+  private observe(state: PlaylistState): void {
+    const observed = new Map<string, Observed>();
+    for (const clip of state.clips) {
+      observed.set(clip.id, {
+        start: clip.start,
+        duration: clip.duration,
+        label: clip.label,
+        color: clip.color,
+        sourceId: clip.sourceId,
+        trackId: clip.trackId,
+      });
+    }
+    this.observed = observed;
+    this.lastClips = state.clips;
+    this.lastTracks = state.tracks;
+    if (this.trackMetaIndex) this.previousTrackMeta = this.trackMetaIndex;
+    this.trackMetaIndex = null;
+  }
+
+  private isClipLocked(clip: PlaylistClip): boolean {
+    const state = this.core.getState();
+    return state.tracks.some((track) => track.id === clip.trackId && track.locked === true);
+  }
+
+  private playheadDay(): number {
+    return Math.max(0, Math.floor(this.core.getState().playPosition.time));
+  }
+
+  private debtAt(day: number): Map<string, number> {
+    const cached = this.debtAtDay;
+    if (cached && cached.revision === this.revision && cached.day === day) return cached.value;
+    const value = debtByAccountAt(this.projection, dateOf(this.doc, day));
+    this.debtAtDay = { revision: this.revision, day, value };
+    return value;
+  }
+
+  // The document as it was when the open pointer gesture started, when it
+  // differs from now (null otherwise): the "before" of the gesture.
+  private gestureBaseline(): DocSnapshot | null {
+    const base = this.core.getGestureBase();
+    if (!base) return null;
+    const snapshot = this.snapshots.get(base);
+    return snapshot && snapshot !== this.snap ? snapshot : null;
+  }
+
+  private projectionOf(snapshot: DocSnapshot): FinancialProjection {
+    if (snapshot === this.snap) return this.projection;
+    let projection = this.snapshotProjections.get(snapshot);
+    if (!projection) {
+      projection = projectFinancialDocument({
+        ...this.doc,
+        items: snapshot.items,
+        initialCash: snapshot.initialCash,
+        minimumCashReserve: snapshot.minimumCashReserve,
+      });
+      this.snapshotProjections.set(snapshot, projection);
+    }
+    return projection;
+  }
+
+  // Payoff estimates only depend on debt-related items: reuse them while
+  // those item objects are unchanged (dragging income doesn't recompute).
+  private payoffs(): Map<string, DebtPayoffEstimate> {
+    const key = this.doc.items.filter(
+      (item) =>
+        item.kind === "credit-card" ||
+        item.kind === "loan" ||
+        item.kind === "installment-plan" ||
+        item.kind === "card-purchase",
+    );
+    const cached = this.payoffCache;
+    if (
+      cached &&
+      cached.key.length === key.length &&
+      cached.key.every((item, index) => item === key[index])
+    ) {
+      return cached.value;
+    }
+    const value = estimateDebtPayoffs(this.doc);
+    this.payoffCache = { key, value };
+    return value;
+  }
+
+  private findClip(id: string): PlaylistClip | undefined {
+    return this.core.getState().clips.find((clip) => clip.id === id);
+  }
+
+  private makeItemId(kind: FinancialItemKind): string {
+    const clips = this.core.getState().clips;
+    let id: string;
+    do {
+      this.idCounter += 1;
+      id = `fin-${kind}-${this.idCounter}`;
+    } while (this.itemIndex.has(id) || clips.some((clip) => clip.id === id));
+    return id;
+  }
+}

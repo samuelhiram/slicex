@@ -12,7 +12,7 @@
 // (besides renderer-impl.ts + clip-node-registry.ts): check-perf-patterns
 // whitelists this file explicitly. See scripts/check-perf-patterns.mjs.
 import { Container, Text } from "pixi.js";
-import { COLORS } from "./palette";
+import { CANVAS_FONT_FAMILY, COLORS } from "./palette";
 
 const TEXT_POOL_CURSOR = new WeakMap<Container, number>();
 
@@ -20,6 +20,10 @@ export interface TextStyleOptions {
   size?: number;
   color?: number;
   weight?: string;
+  // Horizontal anchor: 0 = x is the left edge (default), 0.5 = centre,
+  // 1 = right edge. Pooled Text is shared across calls, so it is re-applied
+  // (only when it differs) on every addText.
+  anchorX?: number;
 }
 
 function applyTextStyle(label: Text, text: string, opts: TextStyleOptions): void {
@@ -33,6 +37,8 @@ function applyTextStyle(label: Text, text: string, opts: TextStyleOptions): void
   if (style.fill !== color) style.fill = color;
   if (style.fontSize !== size) style.fontSize = size;
   if (style.fontWeight !== weight) style.fontWeight = weight;
+  const anchorX = opts.anchorX ?? 0;
+  if (label.anchor.x !== anchorX) label.anchor.x = anchorX;
 }
 
 export function addText(
@@ -52,13 +58,14 @@ export function addText(
       text,
       style: {
         fill: options.color ?? COLORS.text,
-        fontFamily: "Segoe UI, Arial, sans-serif",
+        fontFamily: CANVAS_FONT_FAMILY,
         fontSize: options.size ?? 12,
         fontWeight: (options.weight ?? "500") as any,
         letterSpacing: 0,
       },
     });
     label.eventMode = "none";
+    if (options.anchorX) label.anchor.x = options.anchorX;
     layer.addChild(label);
   }
   label.x = Math.round(x);

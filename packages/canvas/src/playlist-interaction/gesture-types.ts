@@ -5,6 +5,20 @@ export interface ClipDragOriginal {
   id: string;
   start: number;
   trackIndex: number;
+  // Lane inside its track at drag start (stacked lanes, lanes.ts).
+  lane: number;
+  // Its time span is fixed (PlaylistClip.timeLocked): the drag only moves
+  // the set between rows.
+  timeLocked?: boolean;
+}
+
+// Per destination track, filled the first time the drag hovers it: whether
+// other (not dragged) clips live there — then the row opens a free lane —
+// and how many lanes it had when the gesture started (the free lane's
+// index). Clips outside the drag don't change during it, so it stays valid.
+export interface ClipDragTrackInfo {
+  hasOthers: boolean;
+  baseLanes: number;
 }
 
 export type ActiveGesture =
@@ -19,7 +33,15 @@ export type ActiveGesture =
       kind: "marquee";
       pointerId: number;
       startPoint: PlaylistPoint;
+      // Where it was born, in the CONTENT (not the screen): the time and the
+      // rows' y (screen y + scrollY) under the press. A scroll or a zoom
+      // during the drag keeps that corner on its spot of the timeline.
+      startTime: number;
+      startContentY: number;
       additive: boolean;
+      // Track id → index, built the first time a clip out of view is
+      // tested (tracks don't change during a marquee).
+      trackIndexById?: Map<string, number>;
     }
   | {
       kind: "clip-drag";
@@ -28,6 +50,8 @@ export type ActiveGesture =
       startPointerTime: number;
       startTrackIndex: number;
       originals: ClipDragOriginal[];
+      // Filled lazily by the controller (see ClipDragTrackInfo).
+      trackInfo?: Map<string, ClipDragTrackInfo>;
     }
   | {
       kind: "clip-resize";
@@ -46,6 +70,43 @@ export type ActiveGesture =
   | {
       kind: "play-position-drag";
       pointerId: number;
+    }
+  | {
+      // Dragging an edge of the horizontal scrollbar's thumb: zoom so the
+      // visible range keeps the opposite edge and follows the pointer.
+      kind: "scrollbar-zoom";
+      pointerId: number;
+      edge: "start" | "end";
+      // Beat of the edge that stays put.
+      fixedBeat: number;
+      // Track x of beat 0 and beats per track px, frozen at gesture start.
+      trackX: number;
+      beatsPerPx: number;
+    }
+  | {
+      kind: "clip-level";
+      pointerId: number;
+      clipId: string;
+      startY: number;
+      // Axis lock: the press point, and whether the drag already proved
+      // vertical (the host's level drag started). A mostly-horizontal start
+      // turns the gesture into a plain move of the clip instead.
+      startX: number;
+      vertical: boolean;
+    }
+  | {
+      // The selected clip's extend grabber: the right end moves by the
+      // time the pointer travels (relative: the end may be off-screen).
+      kind: "clip-extend";
+      pointerId: number;
+      clipId: string;
+      // Pointer time at the last move (beats), the clip's end at press and
+      // the end travel so far (beats, gain applied move by move).
+      startPointerTime: number;
+      originalEnd: number;
+      travelled: number;
+      // Grabber centre minus pointer x at press, so the pill never jumps.
+      grabOffsetX: number;
     }
   | {
       kind: "scrollbar-horizontal";
@@ -94,6 +155,9 @@ export type ActiveGesture =
       // automation clips are off-limits (RMB there means "add control point").
       // The Delete tool leaves it false and deletes everything.
       skipAutomation?: boolean;
+      // Host option deferDelete: the sweep only marks what it touches
+      // (onPendingChange) and deletes it all on release, in one step.
+      deferred?: boolean;
     }
   | {
       kind: "mute-drag";
@@ -101,6 +165,14 @@ export type ActiveGesture =
       lastPoint: PlaylistPoint;
       muted: boolean;
       touchedClipIds: Set<string>;
+      // The right-button silencer: a clip flips (muted ⇄ counted) each time
+      // the pointer ENTERS it, so passing over it again flips it back;
+      // `touchedClipIds` is then what is under the pointer. Otherwise every
+      // crossed clip takes `muted`, once per sweep.
+      toggle?: boolean;
+      // Every clip the sweep touched, with its state BEFORE it (the report
+      // lists those that differ on release).
+      changed: Map<string, boolean>;
     }
   | {
       kind: "track-resize";
@@ -128,6 +200,12 @@ export type ActiveGesture =
       pointerId: number;
       startPoint: PlaylistPoint;
       currentPoint: PlaylistPoint;
+      // Clip pressed on (null: empty space). With sliceScope "target" the
+      // cut is limited to it (or to the selection it belongs to).
+      targetClipId?: string | null;
+      // Last snapped time / Shift state the guide was described for.
+      lastTime?: number;
+      lastAll?: boolean;
     }
   | {
       kind: "marker-drag";
@@ -153,6 +231,15 @@ export type ActiveGesture =
         label: string;
         color: string;
         sourceId?: string;
+      };
+      // The host creates through its own flow (onCreateRequest): the drag
+      // only previews the range (dragPreview "clip-create"); on release
+      // the host gets the request. Nothing is created here.
+      hostCreate?: {
+        templateClipId: string | null;
+        // Snapped end of the previewed range; null until the drag passes
+        // minClipDuration (a plain click requests nothing).
+        end: number | null;
       };
     };
 

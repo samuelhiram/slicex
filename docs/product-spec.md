@@ -20,8 +20,20 @@ Aplicación web (con objetivo de escalar a Android e iOS) que actúa como **gest
 ## 3. Modelo del timeline
 
 - **Barra de tiempo infinita**, como editores de video o DAWs de música.
-- **Múltiples líneas o pistas (tracks)** dentro de un timeline.
-- En cada pista puede haber **N objetos financieros estirables**.
+- **Múltiples líneas de evento** dentro de un timeline (**slots** en inglés; nunca "tracks" ni
+  "pistas" en el producto — el código del motor `@slicex/canvas` todavía dice `track`).
+- En cada línea de evento puede haber **N objetos financieros estirables**.
+  - Los que se pisan en el tiempo **no se tapan**: se apilan en carriles de esa misma línea, que
+    crece un carril completo por cada uno (como los turnos de un día en el schedule de
+    postalhub-dashboard). Al arrastrar, la línea bajo el cursor abre un carril vacío punteado
+    para soltar ahí y apilar a la misma fecha.
+  - **Candado de fechas** en cada objeto (al inicio de su nombre, se queda a la vista como el
+    texto). Cerrado: sus fechas no cambian desde el timeline; arrastrarlo solo lo cambia de línea
+    y no se estira. Abierto: se arrastra a otro día y se estira. Viene **cerrado si el objeto
+    tiene inicio y fin** (un gasto "hasta junio", un préstamo con último pago, unos MSI) y
+    **abierto** si no tiene fin (recurrente indefinido, un evento de una sola fecha, una tarjeta
+    o un préstamo que termina al liquidarse). Un clic lo cambia (se puede deshacer). El
+    formulario siempre puede cambiar las fechas.
   - Por defecto **no son infinitos** en duración.
   - Se pueden marcar como **"dejar como indefinido"** y entonces se estiran en el timeline.
 - Pueden haber **infinitos timelines** y se pueden **clonar entre sí con todos sus elementos** para correr distintos casos sobre las mismas variables.

@@ -2,22 +2,28 @@ import {
   DEFAULT_PLAYLIST_METRICS,
   type PlaylistAutomationPoint,
   type PlaylistClip,
+  type PlaylistDragPreview,
   type PlaylistMarker,
   type PlaylistMetrics,
   type PlaylistPoint,
   type PlaylistRect,
   type PlaylistState,
+  type PlaylistTimeAxis,
   type PlaylistTrack,
 } from "./types";
 import {
   getActiveLoopRegion,
   getAutomationPointPosition,
   getClipTitleRect,
+  getHorizontalScrollbarHeight,
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
+  getOverviewLaneHeight,
   getTrackByIndex,
   getTrackHeight,
   getTrackIdByIndex,
+  getTrackLaneHeight,
+  getTracksTop,
   getVerticalScrollbarRect,
   getVerticalScrollbarThumbRect,
   isAutomationClip,
@@ -27,6 +33,7 @@ import {
   rectsIntersect,
   screenXToTime,
   timeToScreenX,
+  type PlaylistLayoutOptions,
 } from "./geometry";
 
 // Per-presentation caches that turn the inner loops from O(clips × tracks)
@@ -35,6 +42,8 @@ interface TrackLayoutCache {
   trackIndexById: Map<string, number>;
   trackTops: number[];
   trackHeights: number[];
+  // Height of one lane per track (rows are lanes x this; lanes.ts).
+  laneHeights: number[];
 }
 
 function buildTrackLayoutCache(
@@ -44,6 +53,7 @@ function buildTrackLayoutCache(
   const trackIndexById = new Map<string, number>();
   const trackTops: number[] = new Array(state.tracks.length);
   const trackHeights: number[] = new Array(state.tracks.length);
+  const laneHeights: number[] = new Array(state.tracks.length);
   let acc = 0;
   for (let i = 0; i < state.tracks.length; i += 1) {
     const track = state.tracks[i]!;
@@ -51,9 +61,10 @@ function buildTrackLayoutCache(
     const h = getTrackHeight(track, metrics);
     trackTops[i] = acc;
     trackHeights[i] = h;
+    laneHeights[i] = getTrackLaneHeight(track, metrics);
     acc += h;
   }
-  return { trackIndexById, trackTops, trackHeights };
+  return { trackIndexById, trackTops, trackHeights, laneHeights };
 }
 
 function trackTopAt(
@@ -107,9 +118,15 @@ export interface PlaylistLayoutPresentation {
   sceneRect: PlaylistRect;
   trackHeaderRect: PlaylistRect;
   rulerRect: PlaylistRect;
+  // Track area (below ruler + overview lane). The renderer masks clips,
+  // grid and timeline overlays to it.
   timelineRect: PlaylistRect;
   trackBodyRect: PlaylistRect;
   scrollbarCornerRect: PlaylistRect;
+  // Overview lane band between the ruler and the first track (timeline
+  // part) and its cell in the header column. Height 0 = no lane.
+  overviewRect: PlaylistRect;
+  overviewHeaderRect: PlaylistRect;
 }
 
 export interface PlaylistTrackHeaderButtons {
@@ -117,6 +134,21 @@ export interface PlaylistTrackHeaderButtons {
   solo: PlaylistRect;
   lock: PlaylistRect;
 }
+
+// How the row header arranges itself for the row's height (one source of
+// truth for the renderer and the hit-test, so what is drawn is what is hit):
+//   - "full" (>= 64 px): name, subtitle, and a bottom row with the toggles,
+//     a meter and the grip;
+//   - "compact" (44-63 px): toggles + grip move up to the name's line (right
+//     side), the subtitle keeps its own line, the meter goes under it when
+//     there is room;
+//   - "mini" (< 44 px): the name alone, centred, toggles on its line.
+// Before this the toggles always sat 22 px above the bottom and covered the
+// subtitle on any row under ~66 px (the default row on short windows is 60).
+export type PlaylistTrackHeaderLayout = "full" | "compact" | "mini";
+
+export const TRACK_HEADER_FULL_MIN_HEIGHT = 64;
+export const TRACK_HEADER_COMPACT_MIN_HEIGHT = 44;
 
 export interface PlaylistTrackRowPresentation {
   index: number;
@@ -130,6 +162,10 @@ export interface PlaylistTrackRowPresentation {
   isVirtual: boolean;
   hasClips: boolean;
   hasSelectedClips: boolean;
+  headerLayout: PlaylistTrackHeaderLayout;
+  // Offset of the name's top from the row's top (the dot and, in compact /
+  // mini rows, the toggles centre on that line).
+  titleY: number;
 }
 
 export interface PlaylistAutomationPointPresentation {
@@ -151,6 +187,8 @@ export interface PlaylistClipPresentation {
   isAutomation: boolean;
   selected: boolean;
   hovered: boolean;
+  // The pointer is over the clip's lock button (controller clipTimeLock).
+  lockHovered: boolean;
   // True when the clip OR its track should render as muted (clip.muted OR
   // track.muted OR another track is soloed).
   effectivelyMuted: boolean;
@@ -165,6 +203,21 @@ export interface PlaylistRulerTickPresentation {
   beat: number;
   x: number;
   isBar: boolean;
+  label: string | null;
+  // Screen x of the label anchor: the tick x, or the cell centre when the
+  // axis asked for a centred label (PlaylistTimeAxisTick.centered).
+  labelX: number;
+  centered: boolean;
+  emphasis: boolean;
+  dim: boolean;
+}
+
+// PlaylistTimeAxisBand projected to screen x (unclipped; the renderer clips
+// to the timeline area).
+export interface PlaylistRulerBandPresentation {
+  kind: "group" | "shade";
+  x0: number;
+  x1: number;
   label: string | null;
 }
 
@@ -209,12 +262,29 @@ export interface PlaylistMarqueePresentation {
 export interface PlaylistDragPreviewView {
   rects: PlaylistRect[];
   primaryRect: PlaylistRect | null;
+  // The empty lane the row under a dragged clip opens (drawn dashed: drop
+  // there to stack at the same time as another clip). null otherwise.
+  freeLaneRect: PlaylistRect | null;
+  // The rects are a clip about to be created (draw tool with a host
+  // create flow), not clips being moved.
+  creating: boolean;
 }
+
+const EMPTY_DRAG_PREVIEW_VIEW: PlaylistDragPreviewView = {
+  rects: [],
+  primaryRect: null,
+  freeLaneRect: null,
+  creating: false,
+};
 
 // Floating tooltip in screen coords. The renderer pill consumes this verbatim.
 export interface PlaylistTooltipView {
-  kind: "time" | "ratio" | "offset";
+  kind: "time" | "ratio" | "offset" | "clip" | "hint";
   text: string;
+  // Beat of a "time" tooltip (null when it has none).
+  time: number | null;
+  // Clip of a "clip" tooltip (null / absent otherwise).
+  clipId?: string | null;
   x: number;
   y: number;
 }
@@ -229,6 +299,9 @@ export interface PlaylistPresentation {
   visibleClipViews: PlaylistClipPresentation[];
   clipViewsById: Map<string, PlaylistClipPresentation>;
   rulerTicks: PlaylistRulerTickPresentation[];
+  // Axis bands (PlaylistTimeAxis.bands) in the visible range; [] without an
+  // axis or when it provides none. Any "group" band = two-tier ruler.
+  rulerBands: PlaylistRulerBandPresentation[];
   scrollbars: {
     horizontal: PlaylistScrollbarPresentation;
     vertical: PlaylistScrollbarPresentation;
@@ -292,29 +365,40 @@ function createLayout(
     width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth),
     height: metrics.rulerHeight,
   };
+  const tracksTop = getTracksTop(metrics);
+  const laneHeight = getOverviewLaneHeight(metrics);
   const timelineRect = {
     x: metrics.trackHeaderWidth,
-    y: metrics.rulerHeight,
+    y: tracksTop,
     width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth),
-    height: Math.max(0, state.viewport.height - metrics.rulerHeight),
+    height: Math.max(0, state.viewport.height - tracksTop),
   };
   const trackBodyRect = {
     x: metrics.trackHeaderWidth,
-    y: metrics.rulerHeight,
+    y: tracksTop,
     width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth),
-    height: Math.max(0, state.viewport.height - metrics.rulerHeight),
+    height: Math.max(0, state.viewport.height - tracksTop),
   };
   const scrollbarCornerRect = {
     x: Math.max(
       metrics.trackHeaderWidth,
       state.viewport.width - metrics.scrollbarSize,
     ),
-    y: Math.max(
-      metrics.rulerHeight,
-      state.viewport.height - metrics.scrollbarSize,
-    ),
+    y: Math.max(tracksTop, state.viewport.height - getHorizontalScrollbarHeight(metrics)),
     width: metrics.scrollbarSize,
-    height: metrics.scrollbarSize,
+    height: getHorizontalScrollbarHeight(metrics),
+  };
+  const overviewRect = {
+    x: metrics.trackHeaderWidth,
+    y: metrics.rulerHeight,
+    width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth),
+    height: laneHeight,
+  };
+  const overviewHeaderRect = {
+    x: 0,
+    y: metrics.rulerHeight,
+    width: metrics.trackHeaderWidth,
+    height: laneHeight,
   };
 
   return {
@@ -324,6 +408,8 @@ function createLayout(
     timelineRect,
     trackBodyRect,
     scrollbarCornerRect,
+    overviewRect,
+    overviewHeaderRect,
   };
 }
 
@@ -359,13 +445,14 @@ function createTrackRows(
   metrics: PlaylistMetrics,
   flagsByTrackId: Map<string, { hasClips: boolean; hasSelectedClips: boolean }>,
   cache: TrackLayoutCache,
+  virtualTracks: boolean,
 ): PlaylistTrackRowPresentation[] {
   const top =
     state.viewport.scrollY - metrics.trackOverscan * metrics.trackHeight;
   const bottom =
     state.viewport.scrollY +
     state.viewport.height -
-    metrics.rulerHeight +
+    getTracksTop(metrics) +
     metrics.trackOverscan * metrics.trackHeight;
   const rows: PlaylistTrackRowPresentation[] = [];
 
@@ -387,6 +474,11 @@ function createTrackRows(
         ),
       );
     }
+  }
+
+  // virtualTracks: false — nothing below the real tracks but background.
+  if (!virtualTracks) {
+    return rows;
   }
 
   // Virtual tracks past the materialised range, using the metric default
@@ -436,7 +528,7 @@ function buildTrackRow(
   height: number,
   flagsByTrackId: Map<string, { hasClips: boolean; hasSelectedClips: boolean }>,
 ): PlaylistTrackRowPresentation {
-  const rowTop = metrics.rulerHeight + topInScene - state.viewport.scrollY;
+  const rowTop = getTracksTop(metrics) + topInScene - state.viewport.scrollY;
   const rowRect = {
     x: metrics.trackHeaderWidth,
     y: rowTop,
@@ -457,8 +549,25 @@ function buildTrackRow(
   };
   const buttonSize = metrics.trackButtonSize;
   const buttonGap = 4;
-  const buttonRow = rowTop + Math.max(2, height - buttonSize - 6);
-  const buttonsLeft = headerRect.x + 16;
+  const headerLayout: PlaylistTrackHeaderLayout =
+    height >= TRACK_HEADER_FULL_MIN_HEIGHT
+      ? "full"
+      : height >= TRACK_HEADER_COMPACT_MIN_HEIGHT
+        ? "compact"
+        : "mini";
+  // The name's line: 9 px from the top, centred in a mini row.
+  const titleY = headerLayout === "mini" ? Math.max(2, Math.round((height - 16) / 2)) : 9;
+  const gripX = headerRect.x + headerRect.width - buttonSize - 6;
+  // Full: toggles bottom-left; else on the name's line, right-aligned
+  // before the grip (the name is truncated to make room when they show).
+  const buttonRow =
+    headerLayout === "full"
+      ? rowTop + Math.max(2, height - buttonSize - 6)
+      : rowTop + titleY + 8 - buttonSize / 2;
+  const buttonsLeft =
+    headerLayout === "full"
+      ? headerRect.x + 16
+      : gripX - buttonGap - 3 * buttonSize - 2 * buttonGap;
   const buttons: PlaylistTrackHeaderButtons = {
     mute: {
       x: buttonsLeft,
@@ -480,15 +589,18 @@ function buildTrackRow(
     },
   };
   const reorderHandleRect = {
-    x: headerRect.x + headerRect.width - buttonSize - 6,
+    x: gripX,
     y: buttonRow,
     width: buttonSize,
     height: buttonSize,
   };
+  // Only the header column's divisor resizes the row: the horizontal grid
+  // lines over the timeline are not handles (they would steal presses on the
+  // clips' bottom edge and the background).
   const resizeHandleRect = {
     x: 0,
     y: rowTop + height - metrics.trackResizeHandleSize,
-    width: state.viewport.width,
+    width: metrics.trackHeaderWidth,
     height: metrics.trackResizeHandleSize * 2,
   };
   const flags = flagsByTrackId.get(track.id) ?? {
@@ -508,6 +620,8 @@ function buildTrackRow(
     isVirtual: index >= state.tracks.length,
     hasClips: flags.hasClips,
     hasSelectedClips: flags.hasSelectedClips,
+    headerLayout,
+    titleY,
   };
 }
 
@@ -515,6 +629,7 @@ function createClipViews(
   state: PlaylistState,
   metrics: PlaylistMetrics,
   cache: TrackLayoutCache,
+  minWidthPx?: (clip: PlaylistClip, height: number, titleHeight: number) => number,
 ): PlaylistClipPresentation[] {
   const selectedClipIds = new Set(state.selection.clipIds);
   const hoveredClipId =
@@ -523,7 +638,7 @@ function createClipViews(
     x: Math.max(0, metrics.trackHeaderWidth - metrics.timelineOverscanPx),
     y: Math.max(
       0,
-      metrics.rulerHeight - metrics.trackOverscan * metrics.trackHeight,
+      getTracksTop(metrics) - metrics.trackOverscan * metrics.trackHeight,
     ),
     width: Math.max(
       0,
@@ -534,7 +649,7 @@ function createClipViews(
     height: Math.max(
       0,
       state.viewport.height -
-        metrics.rulerHeight +
+        getTracksTop(metrics) +
         metrics.trackOverscan * metrics.trackHeight * 2,
     ),
   });
@@ -553,21 +668,25 @@ function createClipViews(
     metrics,
   );
   const visibleStartLocalY =
-    clipVisibilityBounds.y - metrics.rulerHeight + state.viewport.scrollY;
+    clipVisibilityBounds.y - getTracksTop(metrics) + state.viewport.scrollY;
   const visibleEndLocalY =
     clipVisibilityBounds.y +
     clipVisibilityBounds.height -
-    metrics.rulerHeight +
+    getTracksTop(metrics) +
     state.viewport.scrollY;
 
   const views: PlaylistClipPresentation[] = [];
   const pxPerBeat = state.viewport.pxPerBeat;
   const headerOffset = metrics.trackHeaderWidth - state.viewport.scrollX;
-  const rulerOffset = metrics.rulerHeight - state.viewport.scrollY;
+  const rulerOffset = getTracksTop(metrics) - state.viewport.scrollY;
 
   for (const clip of state.clips) {
-    const clipEnd = clip.start + clip.duration;
-    if (clipEnd < visibleStartTime || clip.start > visibleEndTime) {
+    if (clip.start > visibleEndTime) {
+      continue;
+    }
+    // Without host minimum widths the span alone decides (the cheap cull
+    // first, before any lookup).
+    if (!minWidthPx && clip.start + clip.duration < visibleStartTime) {
       continue;
     }
     const trackIndex = cache.trackIndexById.get(clip.trackId);
@@ -578,12 +697,23 @@ function createClipViews(
     const trackHeight = cache.trackHeights[trackIndex]!;
     if (trackTop + trackHeight < visibleStartLocalY) continue;
     if (trackTop > visibleEndLocalY) continue;
+    // Stacked lanes: the clip takes one lane of the row (lanes.ts).
+    const laneHeight = cache.laneHeights[trackIndex]!;
+    // A host minimum width (a tag as wide as its text) also reaches right.
+    const cardHeight = laneHeight - metrics.clipPaddingY * 2;
+    const minWidth = minWidthPx
+      ? minWidthPx(clip, cardHeight, Math.min(metrics.clipTitleHeight, cardHeight))
+      : 0;
+    const clipEnd = Math.max(clip.start + clip.duration, clip.start + minWidth / pxPerBeat);
+    if (clipEnd < visibleStartTime) {
+      continue;
+    }
 
     const rect = {
       x: headerOffset + clip.start * pxPerBeat,
-      y: rulerOffset + trackTop + metrics.clipPaddingY,
-      width: clip.duration * pxPerBeat,
-      height: trackHeight - metrics.clipPaddingY * 2,
+      y: rulerOffset + trackTop + (clip.lane ?? 0) * laneHeight + metrics.clipPaddingY,
+      width: Math.max(clip.duration * pxPerBeat, minWidth),
+      height: cardHeight,
     };
     const titleRect = getClipTitleRect(state, clip, metrics);
     const handleHeight =
@@ -640,6 +770,7 @@ function createClipViews(
         hoveredClipId != null &&
         hoveredClipId === clip.id &&
         state.hover?.kind !== "automation-point",
+      lockHovered: state.hover?.kind === "clip-lock" && state.hover.clipId === clip.id,
       effectivelyMuted,
       trackLocked,
       groupId: clip.groupId ?? null,
@@ -654,78 +785,110 @@ function createDragPreviewView(
   metrics: PlaylistMetrics,
   cache: TrackLayoutCache,
 ): PlaylistDragPreviewView | null {
-  const preview = state.dragPreview;
+  // The "what goes here?" menu shows the spot it would fill as a ghost.
+  const menu = state.contextMenu;
+  const preview: PlaylistDragPreview | null =
+    state.dragPreview ??
+    (menu && menu.kind === "create"
+      ? {
+          kind: "clip-create",
+          trackIndex: menu.trackIndex,
+          lane: menu.lane,
+          previewStart: menu.time,
+          previewDuration: Math.max(menu.duration ?? 1, metrics.minClipDuration),
+        }
+      : null);
   if (!preview) return null;
   const pxPerBeat = state.viewport.pxPerBeat;
   const headerOffset = metrics.trackHeaderWidth - state.viewport.scrollX;
-  const rulerOffset = metrics.rulerHeight - state.viewport.scrollY;
-  const clipById = new Map(state.clips.map((c) => [c.id, c] as const));
+  const rulerOffset = getTracksTop(metrics) - state.viewport.scrollY;
+  const laneTop = (trackIndex: number, lane: number): { top: number; laneHeight: number } => {
+    const top = trackTopAt(trackIndex, cache, metrics);
+    const laneHeight =
+      trackIndex < cache.laneHeights.length ? cache.laneHeights[trackIndex]! : metrics.trackHeight;
+    return { top: top + lane * laneHeight, laneHeight };
+  };
   const buildRect = (
     start: number,
     duration: number,
     trackIndex: number,
+    lane = 0,
   ): PlaylistRect | null => {
-    const top =
-      trackIndex < cache.trackTops.length
-        ? cache.trackTops[trackIndex]!
-        : cache.trackTops.length > 0
-          ? cache.trackTops[cache.trackTops.length - 1]! +
-            cache.trackHeights[cache.trackHeights.length - 1]! +
-            (trackIndex - cache.trackTops.length) * metrics.trackHeight
-          : trackIndex * metrics.trackHeight;
-    const height =
-      trackIndex < cache.trackHeights.length
-        ? cache.trackHeights[trackIndex]!
-        : metrics.trackHeight;
+    const { top, laneHeight } = laneTop(trackIndex, lane);
     return {
       x: headerOffset + start * pxPerBeat,
       y: rulerOffset + top + metrics.clipPaddingY,
       width: Math.max(0, duration * pxPerBeat),
-      height: Math.max(0, height - metrics.clipPaddingY * 2),
+      height: Math.max(0, laneHeight - metrics.clipPaddingY * 2),
     };
   };
+  if (preview.kind === "clip-create") {
+    const rect = buildRect(
+      preview.previewStart,
+      preview.previewDuration,
+      preview.trackIndex,
+      preview.lane,
+    );
+    return { rects: rect ? [rect] : [], primaryRect: rect, freeLaneRect: null, creating: true };
+  }
+  const clipById = new Map(state.clips.map((c) => [c.id, c] as const));
   if (preview.kind === "clip-move") {
     const rects: PlaylistRect[] = [];
     let primary: PlaylistRect | null = null;
     for (const move of preview.allMoves) {
       const clip = clipById.get(move.id);
       if (!clip) continue;
-      const rect = buildRect(move.start, clip.duration, move.trackIndex);
+      const rect = buildRect(move.start, clip.duration, move.trackIndex, move.lane ?? clip.lane ?? 0);
       if (!rect) continue;
       rects.push(rect);
       if (move.id === preview.primaryClipId) {
         primary = rect;
       }
     }
-    return { rects, primaryRect: primary };
+    // The empty lane the row under the drag opens: as wide as the timeline.
+    let freeLaneRect: PlaylistRect | null = null;
+    if (preview.freeLane) {
+      const { top, laneHeight } = laneTop(preview.freeLane.trackIndex, preview.freeLane.lane);
+      freeLaneRect = {
+        x: metrics.trackHeaderWidth + 4,
+        y: rulerOffset + top + metrics.clipPaddingY,
+        width: Math.max(0, state.viewport.width - metrics.trackHeaderWidth - 8),
+        height: Math.max(0, laneHeight - metrics.clipPaddingY * 2),
+      };
+    }
+    return { rects, primaryRect: primary, freeLaneRect, creating: false };
   }
   if (preview.kind === "clip-resize") {
     const clip = clipById.get(preview.clipId);
-    if (!clip) return { rects: [], primaryRect: null };
+    if (!clip) return EMPTY_DRAG_PREVIEW_VIEW;
     const trackIndex = cache.trackIndexById.get(clip.trackId);
-    if (trackIndex === undefined) return { rects: [], primaryRect: null };
+    if (trackIndex === undefined) return EMPTY_DRAG_PREVIEW_VIEW;
     const rect = buildRect(
       preview.previewStart,
       preview.previewDuration,
       trackIndex,
+      clip.lane ?? 0,
     );
-    return { rects: rect ? [rect] : [], primaryRect: rect };
+    return { rects: rect ? [rect] : [], primaryRect: rect, freeLaneRect: null, creating: false };
   }
   // Marker preview is a 1-d line on the ruler; renderer reads x directly
   // from snapIndicatorX, so we return an empty rect bundle here.
-  return { rects: [], primaryRect: null };
+  return EMPTY_DRAG_PREVIEW_VIEW;
 }
 
 function createTooltipView(state: PlaylistState): PlaylistTooltipView | null {
   if (!state.tooltip) return null;
-  return {
+  const view: PlaylistTooltipView = {
     kind: state.tooltip.kind,
     text: state.tooltip.text,
+    time: state.tooltip.time ?? null,
     // Renderer applies the +12/-22 offset itself so the anchor here stays a
     // raw cursor coordinate, easy to compare against in tests.
     x: state.tooltip.anchor.x,
     y: state.tooltip.anchor.y,
   };
+  if (state.tooltip.clipId !== undefined) view.clipId = state.tooltip.clipId;
+  return view;
 }
 
 function createSnapIndicatorX(
@@ -746,6 +909,7 @@ function createSnapIndicatorX(
 function createRulerTicks(
   state: PlaylistState,
   metrics: PlaylistMetrics,
+  timeAxis: PlaylistTimeAxis | null = null,
 ): PlaylistRulerTickPresentation[] {
   const step = pickGridStep(state.viewport.pxPerBeat);
   const startBeat = Math.max(
@@ -755,6 +919,38 @@ function createRulerTicks(
   );
   const endBeat = screenXToTime(state, state.viewport.width, metrics) + step;
   const ticks: PlaylistRulerTickPresentation[] = [];
+
+  // Pluggable axis: same visible beat range, same x rounding and the same
+  // header cull as the default grid — only the tick list and labels change.
+  if (timeAxis) {
+    const axisTicks = timeAxis.ticks(
+      startBeat,
+      endBeat,
+      state.viewport.pxPerBeat,
+    );
+    const halfCell = state.viewport.pxPerBeat / 2;
+    for (let i = 0; i < axisTicks.length; i += 1) {
+      const tick = axisTicks[i]!;
+      const x = Math.round(timeToScreenX(state, tick.beat, metrics)) + 0.5;
+      const centered = tick.centered === true;
+      // A centred label belongs to its cell: keep it while the cell centre
+      // is past the header even if the tick line itself is not.
+      if (x < metrics.trackHeaderWidth && !(centered && x + halfCell > metrics.trackHeaderWidth)) {
+        continue;
+      }
+      ticks.push({
+        beat: tick.beat,
+        x,
+        isBar: tick.major,
+        label: tick.label,
+        labelX: centered ? x + halfCell : x,
+        centered,
+        emphasis: tick.emphasis === true,
+        dim: tick.dim === true,
+      });
+    }
+    return ticks;
+  }
 
   for (let beat = startBeat; beat <= endBeat; beat += step) {
     const x = Math.round(timeToScreenX(state, beat, metrics)) + 0.5;
@@ -769,15 +965,51 @@ function createRulerTicks(
       x,
       isBar,
       label: isBar ? String(Math.floor(beat / metrics.beatsPerBar) + 1) : null,
+      labelX: x,
+      centered: false,
+      emphasis: false,
+      dim: false,
     });
   }
 
   return ticks;
 }
 
+const NO_BANDS: PlaylistRulerBandPresentation[] = [];
+
+// Axis bands over the same visible beat range as the ticks. Once per
+// presentation build (canon §3.3); [] (shared, never mutated) without bands.
+function createRulerBands(
+  state: PlaylistState,
+  metrics: PlaylistMetrics,
+  timeAxis: PlaylistTimeAxis | null,
+): PlaylistRulerBandPresentation[] {
+  if (!timeAxis || !timeAxis.bands) return NO_BANDS;
+  const fromBeat = Math.max(
+    0,
+    screenXToTime(state, metrics.trackHeaderWidth, metrics),
+  );
+  const toBeat = screenXToTime(state, state.viewport.width, metrics);
+  if (!(toBeat > fromBeat)) return NO_BANDS;
+  const bands = timeAxis.bands(fromBeat, toBeat, state.viewport.pxPerBeat);
+  if (bands.length === 0) return NO_BANDS;
+  const out: PlaylistRulerBandPresentation[] = [];
+  for (let i = 0; i < bands.length; i += 1) {
+    const band = bands[i]!;
+    out.push({
+      kind: band.kind,
+      x0: timeToScreenX(state, band.start, metrics),
+      x1: timeToScreenX(state, band.end, metrics),
+      label: band.label ?? null,
+    });
+  }
+  return out;
+}
+
 function createScrollbars(
   state: PlaylistState,
   metrics: PlaylistMetrics,
+  layoutOptions: PlaylistLayoutOptions,
 ): PlaylistPresentation["scrollbars"] {
   return {
     horizontal: {
@@ -786,7 +1018,7 @@ function createScrollbars(
     },
     vertical: {
       trackRect: getVerticalScrollbarRect(state, metrics),
-      thumbRect: getVerticalScrollbarThumbRect(state, metrics),
+      thumbRect: getVerticalScrollbarThumbRect(state, metrics, layoutOptions),
     },
   };
 }
@@ -876,23 +1108,32 @@ function createMarquee(
 export function createPlaylistPresentation(
   state: PlaylistState,
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
+  timeAxis: PlaylistTimeAxis | null = null,
+  layoutOptions: PlaylistLayoutOptions = {},
 ): PlaylistPresentation {
   const cache = buildTrackLayoutCache(state, metrics);
   const flagsByTrackId = getTrackFlags(state);
   const layout = createLayout(state, metrics);
-  const trackRows = createTrackRows(state, metrics, flagsByTrackId, cache);
+  const trackRows = createTrackRows(
+    state,
+    metrics,
+    flagsByTrackId,
+    cache,
+    layoutOptions.virtualTracks !== false,
+  );
   const trackRowsByIndex = new Map(
     trackRows.map((row) => [row.index, row] as const),
   );
-  const clipViews = createClipViews(state, metrics, cache);
+  const clipViews = createClipViews(state, metrics, cache, layoutOptions.clipMinWidthPx);
   const clipViewsById = new Map(
     clipViews.map((view) => [view.clip.id, view] as const),
   );
   // Every entry in clipViews is already inside the overscanned bounds; the
   // visibility flag remains a strict-intersect filter for the renderer.
   const visibleClipViews = clipViews.filter((view) => view.isVisible);
-  const rulerTicks = createRulerTicks(state, metrics);
-  const scrollbars = createScrollbars(state, metrics);
+  const rulerTicks = createRulerTicks(state, metrics, timeAxis);
+  const rulerBands = createRulerBands(state, metrics, timeAxis);
+  const scrollbars = createScrollbars(state, metrics, layoutOptions);
 
   return {
     state,
@@ -904,6 +1145,7 @@ export function createPlaylistPresentation(
     visibleClipViews,
     clipViewsById,
     rulerTicks,
+    rulerBands,
     scrollbars,
     playPosition: createPlayPosition(state, metrics),
     marquee: createMarquee(state),
@@ -915,11 +1157,11 @@ export function createPlaylistPresentation(
     timeToScreenX: (time: number) => timeToScreenX(state, time, metrics),
     screenXToTime: (screenX: number) => screenXToTime(state, screenX, metrics),
     trackIndexToScreenY: (trackIndex: number) =>
-      metrics.rulerHeight +
+      getTracksTop(metrics) +
       trackTopAt(trackIndex, cache, metrics) -
       state.viewport.scrollY,
     screenYToTrackIndex: (screenY: number) => {
-      const localY = screenY - metrics.rulerHeight + state.viewport.scrollY;
+      const localY = screenY - getTracksTop(metrics) + state.viewport.scrollY;
       if (localY <= 0) return 0;
       for (let i = 0; i < cache.trackTops.length; i += 1) {
         const top = cache.trackTops[i]!;
@@ -943,3 +1185,139 @@ export function createPlaylistPresentation(
 // Re-export so external callers (controller, tools) can use the same fast
 // path that the presentation closure uses internally.
 export { trackTopAt as presentationTrackTopAt, trackHeightAt as presentationTrackHeightAt };
+
+// --- Extend grabber ----------------------------------------------------------
+//
+// The single selected clip shows a vertical grabber that lengthens or
+// shortens it from its RIGHT end: drag right = longer, left = shorter, by the
+// same time the pointer travels (the end itself may be far off-screen). It
+// sits at the CENTRE OF THE VISIBLE TIMELINE, clamped inside the clip's
+// on-screen part — never at the clip's own middle, which on a long clip is
+// as off-screen as its ends. While held it follows the pointer
+// (dragPreview.handleX). Shared by the renderer (draws it) and the
+// hit-test (grabs it) so both always agree.
+
+// Hit width (px) of the grabber, and the on-screen clip width below which it
+// is not offered (the edge handles are enough there).
+export const CLIP_EXTEND_HIT_PX = 20;
+export const CLIP_EXTEND_MIN_VISIBLE_PX = 64;
+const CLIP_EXTEND_PILL_MAX_H = 30;
+const CLIP_EXTEND_PILL_W = 10;
+
+export interface PlaylistClipExtendHandle {
+  clipId: string;
+  // Centre x (screen) of the grabber.
+  x: number;
+  // Hit area and the drawn pill (screen).
+  hitRect: PlaylistRect;
+  pillRect: PlaylistRect;
+  // A clip-extend drag is holding it.
+  active: boolean;
+  // The pointer is over it.
+  hovered: boolean;
+}
+
+/** A blank handle to pass as `out` (render loops reuse one: no per-frame allocation). */
+export function createClipExtendHandle(): PlaylistClipExtendHandle {
+  return {
+    clipId: "",
+    x: 0,
+    hitRect: { x: 0, y: 0, width: 0, height: 0 },
+    pillRect: { x: 0, y: 0, width: 0, height: 0 },
+    active: false,
+    hovered: false,
+  };
+}
+
+/**
+ * The selected clip's extend grabber, or null when there is none: not
+ * exactly one clip selected, a tool other than Select / Draw, an automation
+ * or locked clip, too little of it on screen, or `canExtend` says no (the
+ * host's veto, e.g. a one-time event whose width means nothing). O(1).
+ * Fills and returns `out` when given (otherwise a new object).
+ */
+/** Px from the visible left edge of a long clip to its level grip. */
+export const CLIP_LEVEL_GRIP_INSET = 40;
+
+/**
+ * Centre x (screen) of a clip's level grip on its top edge: the middle of a
+ * short clip, else CLIP_LEVEL_GRIP_INSET px into its VISIBLE part — a clip
+ * longer than the screen keeps a reachable grip (its own centre may be
+ * off-screen), clear of the extend grabber at the centre of the view.
+ * Pure arithmetic, O(1). Shared by the hit-test and the renderer.
+ */
+export function getClipLevelGripX(
+  view: PlaylistClipPresentation,
+  metrics: PlaylistMetrics,
+  viewportWidth: number,
+): number {
+  const left = Math.max(view.rect.x, metrics.trackHeaderWidth);
+  const right = Math.min(view.rect.x + view.rect.width, viewportWidth - metrics.scrollbarSize);
+  const width = Math.max(0, right - left);
+  return left + Math.min(width / 2, CLIP_LEVEL_GRIP_INSET);
+}
+
+export function getClipExtendHandle(
+  presentation: PlaylistPresentation,
+  canExtend?: (clipId: string) => boolean,
+  out: PlaylistClipExtendHandle = createClipExtendHandle(),
+): PlaylistClipExtendHandle | null {
+  const { state, metrics } = presentation;
+  if (state.tool !== "select" && state.tool !== "draw") return null;
+  if (state.selection.clipIds.length !== 1) return null;
+  const clipId = state.selection.clipIds[0]!;
+  const view = presentation.clipViewsById.get(clipId);
+  if (!view || !view.isVisible || view.isAutomation || view.trackLocked) return null;
+  // Its time span is fixed: nothing to extend.
+  if (view.clip.timeLocked === true) return null;
+  if (canExtend && !canExtend(clipId)) return null;
+
+  const viewLeft = metrics.trackHeaderWidth;
+  const viewRight = state.viewport.width - metrics.scrollbarSize;
+  const viewTop = getTracksTop(metrics);
+  const viewBottom = state.viewport.height - getHorizontalScrollbarHeight(metrics);
+  const rect = view.rect;
+  const left = Math.max(rect.x, viewLeft);
+  const right = Math.min(rect.x + rect.width, viewRight);
+  const top = Math.max(rect.y, viewTop);
+  const bottom = Math.min(rect.y + rect.height, viewBottom);
+  if (bottom - top < 16) return null;
+
+  const preview = state.dragPreview;
+  const held =
+    preview?.kind === "clip-resize" && preview.clipId === clipId && preview.handleX !== undefined
+      ? preview.handleX
+      : null;
+
+  let x: number;
+  if (held !== null) {
+    // Held: under the pointer, kept on the clip (it may have shrunk).
+    if (right - left < 4) return null;
+    x = Math.min(Math.max(held, left + 2), right - 2);
+  } else {
+    if (right - left < CLIP_EXTEND_MIN_VISIBLE_PX) return null;
+    // Clear of the edge resize handles.
+    const pad = metrics.resizeHandleWidth + CLIP_EXTEND_HIT_PX / 2 + 4;
+    const centre = (viewLeft + viewRight) / 2;
+    x = Math.min(Math.max(centre, left + pad), right - pad);
+  }
+  x = Math.round(x);
+
+  const pillHeight = Math.min(CLIP_EXTEND_PILL_MAX_H, bottom - top - 10);
+  const pillTop = Math.round((top + bottom) / 2 - pillHeight / 2);
+  const hitTop = Math.max(top, pillTop - 6);
+  const hitBottom = Math.min(bottom, pillTop + pillHeight + 6);
+  out.clipId = clipId;
+  out.x = x;
+  out.hitRect.x = x - CLIP_EXTEND_HIT_PX / 2;
+  out.hitRect.y = hitTop;
+  out.hitRect.width = CLIP_EXTEND_HIT_PX;
+  out.hitRect.height = hitBottom - hitTop;
+  out.pillRect.x = x - CLIP_EXTEND_PILL_W / 2;
+  out.pillRect.y = pillTop;
+  out.pillRect.width = CLIP_EXTEND_PILL_W;
+  out.pillRect.height = pillHeight;
+  out.active = held !== null;
+  out.hovered = state.hover?.kind === "clip-extend" && state.hover.clipId === clipId;
+  return out;
+}

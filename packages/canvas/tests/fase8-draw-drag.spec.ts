@@ -48,8 +48,10 @@ function pointerEvent(
   x: number,
   y: number,
   detail = 1,
+  timeStamp = 0,
 ): PointerEvent {
   return {
+    timeStamp,
     pointerId: 1,
     button: 0,
     clientX: x,
@@ -140,5 +142,162 @@ describe("F4 — draw tool drag-to-create", () => {
     expect(
       (dispatched[0] as CustomEvent<{ clipId: string }>).detail.clipId,
     ).toBe("clip-drums-1");
+  });
+  // Modern Chromium reports PointerEvent.detail === 0 on pointerdown, so the
+  // controller counts presses itself (time + distance window).
+  it("double-click with detail 0 (Chromium) still opens the clip", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setViewportSize(1200, 700);
+    const { host, listeners, dispatched } = createHost();
+    const controller = createPlaylistInteractionController(host, core);
+    const view = core.getPresentation().clipViewsById.get("clip-drums-1")!;
+    const cx = view.bodyRect.x + view.bodyRect.width / 2;
+    const cy = view.bodyRect.y + view.bodyRect.height / 2;
+    listeners.get("pointerdown")?.(pointerEvent(cx, cy, 0, 1000));
+    listeners.get("pointerup")?.(pointerEvent(cx, cy, 0, 1060));
+    listeners.get("pointerdown")?.(pointerEvent(cx + 2, cy, 0, 1200));
+    controller.destroy();
+    const opens = dispatched.filter((e) => e.type === "playlist-clip-open");
+    expect(opens.length).toBe(1);
+  });
+
+  it("two slow presses with detail 0 are not a double-click", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setViewportSize(1200, 700);
+    const { host, listeners, dispatched } = createHost();
+    const controller = createPlaylistInteractionController(host, core);
+    const view = core.getPresentation().clipViewsById.get("clip-drums-1")!;
+    const cx = view.bodyRect.x + view.bodyRect.width / 2;
+    const cy = view.bodyRect.y + view.bodyRect.height / 2;
+    listeners.get("pointerdown")?.(pointerEvent(cx, cy, 0, 1000));
+    listeners.get("pointerup")?.(pointerEvent(cx, cy, 0, 1060));
+    listeners.get("pointerdown")?.(pointerEvent(cx, cy, 0, 2000));
+    controller.destroy();
+    expect(dispatched.some((e) => e.type === "playlist-clip-open")).toBe(false);
+  });
+
+  it("draw tool: double-click with detail 0 on empty creates a clip", () => {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setViewportSize(1200, 700);
+    core.setTool("draw");
+    core.setSnapMode("none");
+    const before = core.getState().clips.length;
+    const { host, listeners } = createHost();
+    const controller = createPlaylistInteractionController(host, core);
+    const px = core.getState().viewport.pxPerBeat;
+    const x = M.trackHeaderWidth + 8 * px;
+    const y = M.rulerHeight + 14 * M.trackHeight;
+    listeners.get("pointerdown")?.(pointerEvent(x, y, 0, 1000));
+    listeners.get("pointerup")?.(pointerEvent(x, y, 0, 1050));
+    listeners.get("pointerdown")?.(pointerEvent(x, y, 0, 1150));
+    listeners.get("pointerup")?.(pointerEvent(x, y, 0, 1200));
+    controller.destroy();
+    expect(core.getState().clips.length).toBe(before + 1);
+  });
+});
+
+// canvas-dblclick-hijacks-tools: "open on double-click" belongs to Select,
+// Draw and Paint only. Zoom / Mute / Slip act on every press, so the second
+// press of a quick pair must reach the tool. Presses use detail 0 (Chromium)
+// so the controller's own counter decides.
+describe("double-click open is limited to select / draw / paint", () => {
+  function setup(tool: Parameters<ReturnType<typeof createPlaylistCore>["setTool"]>[0]) {
+    const core = createPlaylistCore(createDemoPlaylistState());
+    core.setViewportSize(1200, 700);
+    core.setTool(tool);
+    const { host, listeners, dispatched } = createHost();
+    const controller = createPlaylistInteractionController(host, core);
+    const centre = (clipId: string) => {
+      const view = core.getPresentation().clipViewsById.get(clipId)!;
+      return {
+        x: view.bodyRect.x + view.bodyRect.width / 2,
+        y: view.bodyRect.y + view.bodyRect.height / 2,
+      };
+    };
+    const opens = () =>
+      dispatched.filter((e) => e.type === "playlist-clip-open").length;
+    return { core, listeners, controller, centre, opens };
+  }
+
+  it("zoom tool: three quick clicks on a clip zoom three times, no open", () => {
+    const { core, listeners, controller, centre, opens } = setup("zoom");
+    const start = core.getState().viewport.pxPerBeat;
+    for (const t of [1000, 1200, 1400]) {
+      // Zoom anchors at the cursor, so the pointer stays over the same clip.
+      const p = centre("clip-drums-1");
+      listeners.get("pointerdown")?.(pointerEvent(p.x, p.y, 0, t));
+      listeners.get("pointerup")?.(pointerEvent(p.x, p.y, 0, t + 40));
+    }
+    controller.destroy();
+    expect(core.getState().viewport.pxPerBeat).toBeCloseTo(start * 1.5 ** 3, 6);
+    expect(opens()).toBe(0);
+  });
+
+  it("mute tool: two quick clicks mute then unmute, no open", () => {
+    const { core, listeners, controller, centre, opens } = setup("mute");
+    const p = centre("clip-drums-1");
+    listeners.get("pointerdown")?.(pointerEvent(p.x, p.y, 0, 1000));
+    listeners.get("pointerup")?.(pointerEvent(p.x, p.y, 0, 1040));
+    const mutedAfterFirst = core
+      .getState()
+      .clips.find((c) => c.id === "clip-drums-1")!.muted;
+    listeners.get("pointerdown")?.(pointerEvent(p.x, p.y, 0, 1250));
+    listeners.get("pointerup")?.(pointerEvent(p.x, p.y, 0, 1290));
+    controller.destroy();
+    expect(mutedAfterFirst).toBe(true);
+    expect(
+      core.getState().clips.find((c) => c.id === "clip-drums-1")!.muted,
+    ).not.toBe(true);
+    expect(opens()).toBe(0);
+  });
+
+  it("slip tool: two quick 3px nudges both apply, no open", () => {
+    const { core, listeners, controller, centre, opens } = setup("slip");
+    const offset = () =>
+      core.getState().clips.find((c) => c.id === "clip-chords-1")!
+        .contentOffset ?? 0;
+    const p = centre("clip-chords-1");
+    listeners.get("pointerdown")?.(pointerEvent(p.x, p.y, 0, 1000));
+    listeners.get("pointermove")?.(pointerEvent(p.x + 3, p.y, 0, 1050));
+    listeners.get("pointerup")?.(pointerEvent(p.x + 3, p.y, 0, 1100));
+    const afterFirst = offset();
+    listeners.get("pointerdown")?.(pointerEvent(p.x + 3, p.y, 0, 1300));
+    listeners.get("pointermove")?.(pointerEvent(p.x + 6, p.y, 0, 1350));
+    listeners.get("pointerup")?.(pointerEvent(p.x + 6, p.y, 0, 1400));
+    controller.destroy();
+    expect(afterFirst).not.toBe(0);
+    expect(offset()).toBeCloseTo(2 * afterFirst, 9);
+    expect(opens()).toBe(0);
+  });
+
+  it("select tool: a press that dragged past the slop is not the first half of a double-click", () => {
+    const { core, listeners, controller, centre, opens } = setup("select");
+    core.setSnapMode("none");
+    const p = centre("clip-drums-1");
+    // Press, drag 20px away and back, release where it started.
+    listeners.get("pointerdown")?.(pointerEvent(p.x, p.y, 0, 1000));
+    listeners.get("pointermove")?.(pointerEvent(p.x + 20, p.y, 0, 1050));
+    listeners.get("pointermove")?.(pointerEvent(p.x, p.y, 0, 1100));
+    listeners.get("pointerup")?.(pointerEvent(p.x, p.y, 0, 1150));
+    // Second press inside the time + distance window.
+    listeners.get("pointerdown")?.(pointerEvent(p.x, p.y, 0, 1300));
+    listeners.get("pointerup")?.(pointerEvent(p.x, p.y, 0, 1340));
+    expect(opens()).toBe(0);
+    // A genuine double-click right after still opens.
+    listeners.get("pointerdown")?.(pointerEvent(p.x, p.y, 0, 1450));
+    controller.destroy();
+    expect(opens()).toBe(1);
+  });
+
+  it("draw and paint tools still open on a double-click", () => {
+    for (const tool of ["draw", "paint"] as const) {
+      const { listeners, controller, centre, opens } = setup(tool);
+      const p = centre("clip-drums-1");
+      listeners.get("pointerdown")?.(pointerEvent(p.x, p.y, 0, 1000));
+      listeners.get("pointerup")?.(pointerEvent(p.x, p.y, 0, 1040));
+      listeners.get("pointerdown")?.(pointerEvent(p.x, p.y, 0, 1200));
+      controller.destroy();
+      expect(opens()).toBe(1);
+    }
   });
 });

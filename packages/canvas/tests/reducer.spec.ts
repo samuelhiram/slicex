@@ -93,6 +93,80 @@ describe("playlistReducer", () => {
     expect(s1.tracks.length).toBeGreaterThanOrEqual(6);
   });
 
+  // PERF2-3 / canon §4: MOVE_CLIPS is idempotent.
+  it("MOVE_CLIPS returns the same state when no clip moves and no track is materialized", () => {
+    const s0 = createBaseState();
+    const same = playlistReducer(
+      s0,
+      {
+        type: "MOVE_CLIPS",
+        updates: [
+          { id: "c1", start: 0, trackIndex: 0 },
+          { id: "c-auto", start: -3, trackIndex: 1 }, // max(0, -3) === 0
+          { id: "missing", start: 9, trackIndex: 1 },
+        ],
+      },
+      M,
+    );
+    expect(same).toBe(s0);
+  });
+
+  it("MOVE_CLIPS copies only from the first real move and keeps untouched clips", () => {
+    const s0 = createBaseState();
+    const s1 = playlistReducer(
+      s0,
+      {
+        type: "MOVE_CLIPS",
+        updates: [
+          { id: "c1", start: 0, trackIndex: 0 },
+          { id: "c-auto", start: 2, trackIndex: 1 },
+        ],
+      },
+      M,
+    );
+    expect(s1).not.toBe(s0);
+    expect(s1.clips).toHaveLength(2);
+    expect(s1.clips[0]).toBe(s0.clips[0]);
+    expect(s1.clips[1]!.start).toBe(2);
+    expect(s1.tracks).toBe(s0.tracks);
+  });
+
+  it("MOVE_CLIPS that only materializes a track is still a change", () => {
+    const s0 = createBaseState();
+    const s1 = playlistReducer(
+      s0,
+      {
+        type: "MOVE_CLIPS",
+        updates: [{ id: "missing", start: 0, trackIndex: 4 }],
+      },
+      M,
+    );
+    expect(s1).not.toBe(s0);
+    expect(s1.tracks.length).toBe(5);
+    expect(s1.clips).toBe(s0.clips);
+  });
+
+  // PERF2-3 / canon §4: RESIZE_CLIP is idempotent.
+  it("RESIZE_CLIP returns the same state when start, duration and contentOffset are unchanged", () => {
+    const s0 = createBaseState();
+    const run = (clipId: string, edge: "left" | "right", time: number, s = s0) =>
+      playlistReducer(s, { type: "RESIZE_CLIP", clipId, edge, time }, M);
+    expect(run("c1", "right", 4)).toBe(s0);
+    expect(run("c1", "left", 0)).toBe(s0);
+    expect(run("c1", "left", -5)).toBe(s0); // clamps to 0 = current start
+    expect(run("c-auto", "left", 0)).toBe(s0);
+    expect(run("missing", "right", 9)).toBe(s0);
+    const min = run("c1", "right", 0);
+    expect(min).not.toBe(s0);
+    expect(run("c1", "right", 0.1, min)).toBe(min); // still clamped to minimum
+    const slipped: PlaylistState = {
+      ...s0,
+      clips: s0.clips.map((c) => (c.id === "c1" ? { ...c, contentOffset: 1.5 } : c)),
+    };
+    expect(run("c1", "left", 0, slipped)).toBe(slipped);
+    expect(run("c1", "left", 1, slipped)).not.toBe(slipped);
+  });
+
   it("RESIZE_CLIP right edge respects minClipDuration", () => {
     const s0 = createBaseState();
     const s1 = playlistReducer(

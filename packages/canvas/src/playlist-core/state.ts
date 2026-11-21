@@ -4,10 +4,16 @@ import {
   type PlaylistClipMoveUpdate,
 } from "./actions";
 import {
+  clamp,
+  formatBarBeat,
   getContentEndBeat,
+  getRealTracksScrollLimit,
   getTrackIdByIndex,
   getTrackIndexById,
+  getTrackLaneHeight,
   isAutomationClip,
+  snapTime,
+  type PlaylistLayoutOptions,
 } from "./geometry";
 import {
   canRedo,
@@ -19,6 +25,7 @@ import {
   undoHistory,
   type History,
 } from "./history";
+import { provisionalLanes, settleLanes, type SettleLanesOptions } from "./lanes";
 import { playlistReducer } from "./reducer";
 import {
   DEFAULT_PLAYLIST_METRICS,
@@ -38,8 +45,10 @@ import {
   type PlaylistSnapMode,
   type PlaylistState,
   type PlaylistStateListener,
+  type PlaylistTimeAxis,
   type PlaylistToolId,
   type PlaylistTooltip,
+  type PlaylistTrack,
 } from "./types";
 import type { PlaylistPresentation } from "./presentation";
 import { createPlaylistPresentation } from "./presentation";
@@ -65,6 +74,22 @@ export interface PlaylistCreateClipInput {
   muted?: boolean;
   sourceId?: string;
   points?: PlaylistAutomationPoint[];
+  // true → the clip is skipped by every slice path (see PlaylistClip.noSlice).
+  noSlice?: boolean;
+  // true → gestures never change its time (see PlaylistClip.timeLocked).
+  timeLocked?: boolean;
+}
+
+// Opaque snapshot of a document + its undo history (see saveSession).
+export interface PlaylistSession {
+  readonly history: unknown;
+}
+
+function isPlaylistSession(
+  value: PlaylistSession | PlaylistState,
+): value is PlaylistSession {
+  return (value as PlaylistSession).history !== undefined &&
+    (value as PlaylistState).clips === undefined;
 }
 
 // PlaylistCore is the mutable facade backed by a pure reducer + history stack.
@@ -72,10 +97,50 @@ export interface PlaylistCreateClipInput {
 // shell) keep working unchanged. Internally each mutator dispatches an action.
 export interface PlaylistCoreOptions {
   metrics?: PlaylistMetrics;
+  // Optional pluggable time axis: ruler ticks + tooltip time text. Without
+  // it the playlist keeps the FL bar/beat grid and "bar.beat.tick" format.
+  timeAxis?: PlaylistTimeAxis;
+  // FL stretch mode (Shift+M: edge-resize scales stretchRatio instead of
+  // cropping). Default true. A host whose clips have no stretchable content
+  // passes false: setStretchMode(true) / toggleStretchMode() (and the raw
+  // SET_STRETCH_MODE / TOGGLE_STRETCH_MODE actions) become no-ops, the
+  // initial state is normalized to stretchMode false, and no resize gesture
+  // can enter stretch-resize.
+  stretchEnabled?: boolean;
+  // FL "infinite tracks": virtual "Track N" rows below the real tracks that
+  // materialise when a clip lands on them. Default true. A host whose tracks
+  // are its own model (e.g. one per category) passes false:
+  //   - no virtual rows are drawn below the real tracks (just background);
+  //   - the vertical extent / scrollbar cover the real tracks only, and
+  //     updateViewport / setViewportSize clamp scrollY so the last track
+  //     rests above the horizontal scrollbar (nothing below to reveal;
+  //     getMaxScrollY itself stays infinite — canon §2.5 is the X axis);
+  //   - no gesture materialises a track: createClip(s) beyond the last real
+  //     track are no-ops (like a locked track) and moveClips clamps the
+  //     destination to the last real track.
+  virtualTracks?: boolean;
+  // See PlaylistLayoutOptions.clipMinWidthPx.
+  clipMinWidthPx?: (clip: PlaylistClip, height: number, titleHeight: number) => number;
 }
 
 export interface PlaylistSubscription {
   unsubscribe: () => void;
+}
+
+// Lanes keep the DRAWN cards apart (PlaylistLayoutOptions.clipMinWidthPx:
+// a one-day tag drawn as wide as its name), and a drawn width in beats
+// depends on the zoom. Not re-laid out per zoom frame (canon §3.15: the
+// viewport costs nothing): the zoom is read in levels of ×ZOOM_LEVEL_STEP,
+// each one taken at its most zoomed-out end (its widest footprints), so the
+// cards never touch within a level and the lanes settle only when the zoom
+// crosses into another one.
+const ZOOM_LEVEL_STEP = 1.25;
+const ZOOM_LEVEL_LOG = Math.log(ZOOM_LEVEL_STEP);
+// Room kept between a drawn card and the next one (px).
+const FOOTPRINT_GAP_PX = 6;
+
+function zoomLevel(pxPerBeat: number): number {
+  return Math.floor(Math.log(Math.max(pxPerBeat, 1e-6)) / ZOOM_LEVEL_LOG);
 }
 
 export class PlaylistCore {
@@ -89,13 +154,67 @@ export class PlaylistCore {
   } | null = null;
 
   private gestureDepth = 0;
-  private gestureSnapshot: PlaylistState | null = null;
+  // Undo target of the open gesture: the present right before its FIRST
+  // undoable dispatch (amend() dispatches excluded). null while no gesture
+  // is open and while the open one has not changed the document yet — so a
+  // gesture made only of selection / marquee / overlay / viewport changes
+  // records no undo entry, exactly as if those dispatches ran outside it.
+  private gestureBase: PlaylistState | null = null;
+  // > 0 while amend() runs: undoable dispatches replace the present instead
+  // of pushing a new undo entry. A counter so nested amend() calls are safe.
+  private amendDepth = 0;
+  private gestureOpenedInAmend = false;
+  // Clips a drag dropped on an explicit lane during the open gesture: they
+  // keep it when the gesture ends and the lanes settle (lanes.ts).
+  private readonly gesturePinned = new Set<string>();
+  // The (settled) present when the outermost gesture opened: the lanes no
+  // row may lose while it is open. Not gestureBase — that one is taken at
+  // the first UNDOABLE dispatch, and a drag preview (not undoable) may
+  // already have opened a free lane by then.
+  private laneBase: PlaylistState | null = null;
 
   readonly metrics: PlaylistMetrics;
 
+  // The rows' default height when the document sets none (state.rowHeight).
+  private baseTrackHeight: number;
+
+  readonly timeAxis: PlaylistTimeAxis | null;
+
+  // See PlaylistCoreOptions.stretchEnabled.
+  readonly stretchEnabled: boolean;
+
+  // See PlaylistCoreOptions.virtualTracks.
+  readonly virtualTracks: boolean;
+
+  private readonly layoutOptions: PlaylistLayoutOptions;
+
   constructor(initialState: PlaylistState, options: PlaylistCoreOptions = {}) {
-    this.metrics = options.metrics ?? DEFAULT_PLAYLIST_METRICS;
-    this.history = createHistory(normalizeState(initialState, this.metrics));
+    // Its own copy: the default row height can change in place
+    // (setDefaultTrackHeight) and every holder of `core.metrics` — the
+    // controller, the navigator — sees it.
+    this.metrics = { ...(options.metrics ?? DEFAULT_PLAYLIST_METRICS) };
+    this.baseTrackHeight = this.metrics.trackHeight;
+    this.timeAxis = options.timeAxis ?? null;
+    this.stretchEnabled = options.stretchEnabled !== false;
+    this.virtualTracks = options.virtualTracks !== false;
+    this.layoutOptions = {
+      virtualTracks: this.virtualTracks,
+      ...(options.clipMinWidthPx ? { clipMinWidthPx: options.clipMinWidthPx } : {}),
+    };
+    const initial =
+      !this.stretchEnabled && initialState.stretchMode
+        ? { ...initialState, stretchMode: false }
+        : initialState;
+    // The rows' default height first (state.rowHeight): the lanes below
+    // are laid out with it.
+    if (initial.rowHeight !== undefined) {
+      const metrics = this.metrics;
+      (metrics as { trackHeight: number }).trackHeight = Math.round(
+        clamp(initial.rowHeight, metrics.trackMinHeight, metrics.trackMaxHeight),
+      );
+    }
+    const normalized = normalizeState(initial, this.metrics);
+    this.history = createHistory(settleLanes(normalized, this.laneOptions(normalized)));
   }
 
   // Lifecycle and derived presentation.
@@ -110,12 +229,60 @@ export class PlaylistCore {
     const presentation = createPlaylistPresentation(
       this.history.present,
       this.metrics,
+      this.timeAxis,
+      this.layoutOptions,
     );
     this.presentationCache = {
       state: this.history.present,
       presentation,
     };
     return presentation;
+  }
+
+  // Layout switches the core was created with (for geometry helpers that
+  // take PlaylistLayoutOptions, e.g. the vertical scrollbar maths).
+  getLayoutOptions(): PlaylistLayoutOptions {
+    return this.layoutOptions;
+  }
+
+  // Time text for tooltips. Delegates to the pluggable axis when present;
+  // otherwise the FL "bar.beat.tick" format.
+  formatTime(beat: number): string {
+    if (this.timeAxis) {
+      return this.timeAxis.formatTime(beat);
+    }
+    return formatBarBeat(beat, this.metrics.beatsPerBar);
+  }
+
+  // Tooltip text + beat for an exclusive end (a right edge): the axis can
+  // name the last unit still covered ("hasta 31 ago") instead of the
+  // boundary, which belongs to the next unit.
+  formatEndTime(beat: number): string {
+    return this.timeAxis?.formatEnd ? this.timeAxis.formatEnd(beat) : this.formatTime(beat);
+  }
+
+  endTooltipBeat(beat: number): number {
+    return this.timeAxis?.lastCoveredBeat ? this.timeAxis.lastCoveredBeat(beat) : beat;
+  }
+
+  // Snap a raw time with the active snap mode, this core's metrics (bar
+  // length) and time axis ("axis" mode). `ignoreSnap` = Alt held. `state`
+  // defaults to the present; gesture handlers pass the snapshot they read
+  // so "events" snapping sees the same clips as the rest of the handler.
+  snapTime(
+    value: number,
+    ignoreSnap = false,
+    state: PlaylistState = this.history.present,
+  ): number {
+    return snapTime(value, state, ignoreSnap, this.metrics, this.timeAxis);
+  }
+
+  // Last valid real-track index for gestures, or +Infinity when virtual
+  // tracks are on (any index materialises). -1 when there are no tracks.
+  maxTrackIndex(): number {
+    return this.virtualTracks
+      ? Number.POSITIVE_INFINITY
+      : this.history.present.tracks.length - 1;
   }
 
   // Subscription management.
@@ -130,6 +297,14 @@ export class PlaylistCore {
 
   // Generic dispatch — any caller (including future tools/gestures) can use this directly.
   dispatch(action: PlaylistAction): void {
+    if (
+      !this.stretchEnabled &&
+      (action.type === "TOGGLE_STRETCH_MODE" ||
+        (action.type === "SET_STRETCH_MODE" && action.enabled))
+    ) {
+      // Stretch mode is off for this host: it can never be switched on.
+      return;
+    }
     const previous = this.history.present;
     const reduced = playlistReducer(previous, action, this.metrics);
     // Reducer signals "no change" by returning the same reference. Skip
@@ -139,19 +314,119 @@ export class PlaylistCore {
     if (reduced === previous) {
       return;
     }
-    const next = normalizeState(reduced, this.metrics);
-    if (isUndoableAction(action) && this.gestureDepth === 0) {
-      this.history = pushHistory(this.history, next);
+    // Passing `previous` lets normalizeState hand back previous.clips /
+    // previous.tracks untouched when the reducer did not replace them, so a
+    // hover / playhead / viewport dispatch keeps their identity (SYNC-15).
+    const next = this.layoutLanes(
+      normalizeState(reduced, this.metrics, previous),
+      previous,
+      action,
+    );
+    if (isUndoableAction(action) && this.amendDepth === 0) {
+      if (this.gestureDepth === 0) {
+        this.history = pushHistory(this.history, next);
+      } else {
+        // First document change of the open gesture: what endGesture()
+        // pushes as the undo target.
+        if (this.gestureBase === null) this.gestureBase = previous;
+        this.history = replacePresent(this.history, next);
+      }
     } else {
       this.history = replacePresent(this.history, next);
     }
     this.notify();
   }
 
-  // Gesture brackets — coalesce many transient mutations into a single undo entry.
+  // Stacked lanes (lanes.ts). Outside a gesture a clip change settles them
+  // at once (a MOVE_CLIPS with explicit lanes pins those clips). Inside a
+  // pointer gesture they stay provisional — the dragged clips on the lane
+  // under the pointer, no track losing lanes, the free lane of the row
+  // under the drag open — and settle once in endGesture. Same state (O(1))
+  // when neither the clips, the tracks nor the drag preview changed.
+  private layoutLanes(
+    next: PlaylistState,
+    previous: PlaylistState,
+    action: PlaylistAction,
+  ): PlaylistState {
+    const contentChanged =
+      next.clips !== previous.clips ||
+      next.tracks !== previous.tracks ||
+      // Drawn widths in beats change with the zoom: only across a level.
+      (this.layoutOptions.clipMinWidthPx !== undefined &&
+        zoomLevel(next.viewport.pxPerBeat) !== zoomLevel(previous.viewport.pxPerBeat));
+    if (this.gestureDepth > 0) {
+      if (action.type === "MOVE_CLIPS") {
+        for (const update of action.updates) {
+          if (update.lane !== undefined) this.gesturePinned.add(update.id);
+        }
+      }
+      if (!contentChanged && next.dragPreview === previous.dragPreview) return next;
+      return provisionalLanes(next, this.laneBase ?? previous);
+    }
+    if (!contentChanged) return next;
+    let pinned: Set<string> | undefined;
+    if (action.type === "MOVE_CLIPS") {
+      for (const update of action.updates) {
+        if (update.lane !== undefined) (pinned ??= new Set()).add(update.id);
+      }
+    }
+    return settleLanes(next, this.laneOptions(next, { pinned, previous }));
+  }
+
+  // settleLanes options plus, for a host whose cards may be drawn wider than
+  // their time (clipMinWidthPx), each clip's drawn end at `state`'s zoom
+  // level (+ FOOTPRINT_GAP_PX): such cards cascade instead of touching.
+  private laneOptions(state: PlaylistState, options: SettleLanesOptions = {}): SettleLanesOptions {
+    const minWidth = this.layoutOptions.clipMinWidthPx;
+    if (!minWidth) return options;
+    const pxPerBeat = Math.pow(ZOOM_LEVEL_STEP, zoomLevel(state.viewport.pxPerBeat));
+    const metrics = this.metrics;
+    // Lane height per track id, once per settle (rows without one: default).
+    const laneHeights = new Map<string, number>();
+    for (const track of state.tracks) laneHeights.set(track.id, getTrackLaneHeight(track, metrics));
+    return {
+      ...options,
+      footprint: (clip) => {
+        const end = clip.start + clip.duration;
+        const laneHeight = laneHeights.get(clip.trackId) ?? metrics.trackHeight;
+        const height = Math.max(1, laneHeight - metrics.clipPaddingY * 2);
+        const widthPx = minWidth(clip, height, Math.min(metrics.clipTitleHeight, height));
+        if (!(widthPx > 0)) return end;
+        return Math.max(end, clip.start + (widthPx + FOOTPRINT_GAP_PX) / pxPerBeat);
+      },
+    };
+  }
+
+  // Run `mutate` so that every dispatch it makes REPLACES the current undo
+  // entry instead of pushing a new one: follow-up corrections that belong to
+  // the previous step (e.g. a host relabelling a clip it just pasted). Undo
+  // from the amended state goes straight to the entry before it; past and
+  // future are left untouched. Listeners are still notified per dispatch.
+  // Nesting-safe (counter). Inside an open gesture that already changed the
+  // document it folds into the gesture's entry; inside one that has not, it
+  // folds into the entry before it (amend never starts an undo step, so it
+  // never fixes the gesture base). A gesture opened inside `mutate` folds
+  // into the present entry too instead of pushing its own step.
+  amend(mutate: () => void): void {
+    this.amendDepth += 1;
+    try {
+      mutate();
+    } finally {
+      this.amendDepth -= 1;
+    }
+  }
+
+  // Gesture brackets — coalesce many transient mutations into a single undo
+  // entry. Every undoable dispatch between the outermost begin/end lands in
+  // ONE entry whose undo target is the present before the first of them
+  // (see getGestureBase). A gesture with no undoable dispatch records
+  // nothing, so opening one "just in case" (the controller does it around
+  // every tool pointer-down) never creates an entry on its own.
   beginGesture(): void {
     if (this.gestureDepth === 0) {
-      this.gestureSnapshot = this.history.present;
+      this.gestureBase = null;
+      this.gestureOpenedInAmend = this.amendDepth > 0;
+      this.laneBase = this.history.present;
     }
     this.gestureDepth += 1;
   }
@@ -161,19 +436,73 @@ export class PlaylistCore {
       return;
     }
     this.gestureDepth -= 1;
-    if (this.gestureDepth > 0 || !this.gestureSnapshot) {
+    if (this.gestureDepth > 0) {
       return;
     }
-    const snapshot = this.gestureSnapshot;
-    this.gestureSnapshot = null;
-    if (snapshot === this.history.present) {
+    const base = this.gestureBase;
+    const openedInAmend = this.gestureOpenedInAmend;
+    this.gestureBase = null;
+    this.gestureOpenedInAmend = false;
+    // The lanes stayed provisional during the gesture: settle them now
+    // (dropped clips keep the lane they were dropped on; the free lane
+    // closes; empty lanes go). Part of the gesture's own undo entry.
+    const pinned = this.gesturePinned.size > 0 ? new Set(this.gesturePinned) : undefined;
+    this.gesturePinned.clear();
+    this.laneBase = null;
+    const present = this.history.present;
+    const settled = settleLanes(present, this.laneOptions(present, { pinned, previous: base ?? present }));
+    // Opened inside amend(): its dispatches already replaced the present
+    // entry (and notified), so there is no new undo step to record.
+    if (base === null || base === present || openedInAmend) {
+      if (settled !== present) {
+        this.history = replacePresent(this.history, settled);
+        this.notify();
+      }
       return;
     }
-    this.history = {
-      past: [...this.history.past, snapshot],
-      present: this.history.present,
-      future: [],
-    };
+    // The undo target too: a free lane opened before the first undoable
+    // dispatch is in it — settling closes it (same object when none was).
+    this.history = pushHistory({ ...this.history, present: settleLanes(base, this.laneOptions(base)) }, settled);
+    this.notify();
+  }
+
+  // The state the open gesture's undo entry returns to — the present right
+  // before its first undoable dispatch; while it has made none yet, the
+  // present itself. Its clips / tracks are those at gesture start (only
+  // undoable dispatches change them, amend() aside). null when no gesture
+  // is open. Nested gestures report the outermost one.
+  getGestureBase(): PlaylistState | null {
+    if (this.gestureDepth === 0) {
+      return null;
+    }
+    return this.gestureBase ?? this.history.present;
+  }
+
+  // Sessions: the whole document + its undo history, opaque to the host.
+  // A host that keeps several documents (e.g. alternative futures) saves
+  // the active one and loads another; each keeps its own undo stack.
+  // Call with no gesture open. Loading notifies listeners once.
+  saveSession(): PlaylistSession {
+    return { history: this.history };
+  }
+
+  loadSession(source: PlaylistSession | PlaylistState): void {
+    this.gestureDepth = 0;
+    this.gestureBase = null;
+    this.gestureOpenedInAmend = false;
+    this.gesturePinned.clear();
+    this.laneBase = null;
+    if (isPlaylistSession(source)) {
+      this.history = source.history as History<PlaylistState>;
+    } else {
+      const initial =
+        !this.stretchEnabled && source.stretchMode
+          ? { ...source, stretchMode: false }
+          : source;
+      const normalized = normalizeState(initial, this.metrics);
+      this.history = createHistory(settleLanes(normalized, this.laneOptions(normalized)));
+    }
+    this.syncRowHeight();
     this.notify();
   }
 
@@ -183,8 +512,9 @@ export class PlaylistCore {
       return false;
     }
     this.history = undoHistory(this.history);
-    this.gestureDepth = 0;
-    this.gestureSnapshot = null;
+    this.resetGesture();
+    this.syncRowHeight();
+    this.resettleDrawnWidths();
     this.notify();
     return true;
   }
@@ -194,10 +524,39 @@ export class PlaylistCore {
       return false;
     }
     this.history = redoHistory(this.history);
-    this.gestureDepth = 0;
-    this.gestureSnapshot = null;
+    this.resetGesture();
+    this.syncRowHeight();
+    this.resettleDrawnWidths();
     this.notify();
     return true;
+  }
+
+  // A restored entry was laid out at another zoom: keep its drawn cards
+  // apart at this one (no undo step; nothing for a host without drawn
+  // widths).
+  private resettleDrawnWidths(): boolean {
+    if (!this.layoutOptions.clipMinWidthPx || this.gestureDepth > 0) return false;
+    const present = this.history.present;
+    const settled = settleLanes(present, this.laneOptions(present));
+    if (settled === present) return false;
+    this.history = replacePresent(this.history, settled);
+    return true;
+  }
+
+  // For a host whose drawn widths (clipMinWidthPx) changed with no clip
+  // change — e.g. it has just learnt the items behind the clips: lays the
+  // lanes out again so the cards keep apart. No undo step; notifies only
+  // when a lane moved. Ignored while a gesture is open.
+  relayoutLanes(): void {
+    if (this.resettleDrawnWidths()) this.notify();
+  }
+
+  private resetGesture(): void {
+    this.gestureDepth = 0;
+    this.gestureBase = null;
+    this.gestureOpenedInAmend = false;
+    this.gesturePinned.clear();
+    this.laneBase = null;
   }
 
   canUndo(): boolean {
@@ -211,15 +570,33 @@ export class PlaylistCore {
   // Viewport and selection.
   setViewportSize(width: number, height: number): void {
     this.dispatch({ type: "SET_VIEWPORT_SIZE", width, height });
+    if (!this.virtualTracks) {
+      // A taller viewport can leave scrollY past the real tracks: pull it
+      // back (no dispatch, hence no notify, when it is already in range).
+      const state = this.history.present;
+      const limit = getRealTracksScrollLimit(state, this.metrics);
+      if (state.viewport.scrollY > limit) {
+        this.updateViewport({ scrollY: limit });
+      }
+    }
   }
 
   updateViewport(
     patch: Partial<PlaylistState["viewport"]>,
     options: { clamp?: boolean } = {},
   ): void {
+    let effective = patch;
+    if (!this.virtualTracks && patch.scrollY !== undefined) {
+      // virtualTracks: false — nothing to reveal below the real tracks.
+      const limit = getRealTracksScrollLimit(this.history.present, this.metrics);
+      const scrollY = clamp(patch.scrollY, 0, limit);
+      if (scrollY !== patch.scrollY) {
+        effective = { ...patch, scrollY };
+      }
+    }
     this.dispatch({
       type: "UPDATE_VIEWPORT",
-      patch,
+      patch: effective,
       clamp: options.clamp !== false,
     });
   }
@@ -248,6 +625,12 @@ export class PlaylistCore {
     this.dispatch({ type: "SET_HOVER", hover });
   }
 
+  /** Beat cell under the pointer (hover-time indicator); null hides it. */
+  setHoverTime(time: number | null): void {
+    const cell = time === null || !Number.isFinite(time) ? null : Math.max(0, Math.floor(time));
+    this.dispatch({ type: "SET_HOVER_TIME", time: cell });
+  }
+
   setPlayPosition(time: number): void {
     this.dispatch({ type: "SET_PLAY_POSITION", time });
   }
@@ -263,7 +646,7 @@ export class PlaylistCore {
   // Track and clip mutations.
   moveClips(updates: PlaylistClipMoveUpdate[]): void {
     const state = this.history.present;
-    const filtered = updates.filter((update) => {
+    const filtered = this.clampMoveTargets(updates).filter((update) => {
       const clip = state.clips.find((candidate) => candidate.id === update.id);
       if (!clip) return false;
       // Cannot move a clip that lives on a locked track.
@@ -278,8 +661,29 @@ export class PlaylistCore {
     // every sibling missing from the updates with the same start/track delta.
     // Idempotent — if the caller (e.g. the controller after pointerdown
     // expansion) already passed every member, no extras are appended.
-    const expanded = expandMoveUpdatesToGroups(state, filtered);
+    const expanded = this.clampMoveTargets(
+      expandMoveUpdatesToGroups(state, filtered),
+    );
     this.dispatch({ type: "MOVE_CLIPS", updates: expanded });
+  }
+
+  // virtualTracks: false — a move never targets a row past the last real
+  // track (it would materialise a track the host does not know about).
+  // Identity when nothing needs clamping (always, with virtual tracks on).
+  private clampMoveTargets(
+    updates: PlaylistClipMoveUpdate[],
+  ): PlaylistClipMoveUpdate[] {
+    const maxTrack = this.maxTrackIndex();
+    if (maxTrack === Number.POSITIVE_INFINITY) return updates;
+    const last = Math.max(0, maxTrack);
+    let out: PlaylistClipMoveUpdate[] | null = null;
+    for (let i = 0; i < updates.length; i += 1) {
+      const update = updates[i]!;
+      if (update.trackIndex <= last) continue;
+      out ??= updates.slice();
+      out[i] = { ...update, trackIndex: last };
+    }
+    return out ?? updates;
   }
 
   clearTrackClips(trackIndex: number): void {
@@ -427,6 +831,55 @@ export class PlaylistCore {
     this.dispatch({ type: "SET_TRACK_HEIGHT", trackIndex, height });
   }
 
+  // The height of rows without their own (the endless rows below the
+  // materialised ones) when the document sets none: a host preference (e.g.
+  // the one remembered from last time), no undo step. Clamped to the
+  // metrics' bounds; changes `metrics.trackHeight` in place.
+  setDefaultTrackHeight(height: number): void {
+    const metrics = this.metrics;
+    this.baseTrackHeight = Math.round(clamp(height, metrics.trackMinHeight, metrics.trackMaxHeight));
+    if (this.history.present.rowHeight === undefined && this.applyDefaultTrackHeight(this.baseTrackHeight)) {
+      this.resettleDrawnWidths();
+      this.notify();
+    }
+  }
+
+  // Every row to one height: the materialised ones and the default for the
+  // rest (state.rowHeight) — one undoable dispatch, its own step or the open
+  // gesture's — so the whole table grows or shrinks together, and an undo
+  // gives it its height back.
+  setAllTrackHeights(height: number): void {
+    // The metrics first: whoever reads them on this dispatch's notify sees
+    // the new height.
+    this.applyDefaultTrackHeight(height);
+    this.dispatch({ type: "SET_ALL_TRACK_HEIGHTS", height: this.metrics.trackHeight });
+  }
+
+  // `metrics.trackHeight` follows the present's rowHeight (the base height
+  // when it sets none) — after an undo / redo / load.
+  private syncRowHeight(): void {
+    this.applyDefaultTrackHeight(this.history.present.rowHeight ?? this.baseTrackHeight);
+  }
+
+  private applyDefaultTrackHeight(height: number): boolean {
+    const metrics = this.metrics;
+    const clamped = Math.round(clamp(height, metrics.trackMinHeight, metrics.trackMaxHeight));
+    if (!Number.isFinite(clamped) || clamped === metrics.trackHeight) return false;
+    (metrics as { trackHeight: number }).trackHeight = clamped;
+    // The presentation is keyed by state: the geometry changed under it.
+    this.presentationCache = null;
+    return true;
+  }
+
+  /**
+   * Re-arrange the rows in ONE undo step: `tracks` become the rows (in
+   * order) and each clip named in `placement` goes to its row (clip id →
+   * track id); the lanes settle after.
+   */
+  arrangeTracks(tracks: PlaylistTrack[], placement: Readonly<Record<string, string>>): void {
+    this.dispatch({ type: "ARRANGE_TRACKS", tracks, placement });
+  }
+
   reorderTrack(fromIndex: number, toIndex: number): void {
     this.dispatch({ type: "REORDER_TRACK", fromIndex, toIndex });
   }
@@ -456,6 +909,30 @@ export class PlaylistCore {
     this.dispatch({ type: "SET_CLIP_STRETCH_RATIO", clipId, stretchRatio });
   }
 
+  // Mark a clip as (un)sliceable. Undoable; setting the value the clip
+  // already has is a no-op (same state, no notify, no undo entry).
+  setClipNoSlice(clipId: string, noSlice: boolean): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
+    this.dispatch({ type: "SET_CLIP_NO_SLICE", clipId, noSlice });
+  }
+
+  // Fix / free a clip's time span for gestures (PlaylistClip.timeLocked).
+  // Undoable; the value the clip already has is a no-op.
+  setClipTimeLocked(clipId: string, timeLocked: boolean): void {
+    if (this.isClipOnLockedTrack(clipId)) return;
+    this.dispatch({ type: "SET_CLIP_TIME_LOCKED", clipId, timeLocked });
+  }
+
+  // Undo checkpoint without a playlist change: the present is replaced by a
+  // content-identical state with a new identity (clips/tracks arrays are
+  // reused). Outside a gesture it is its own undo entry; inside a gesture it
+  // makes the gesture commit an entry even when nothing else changed. Hosts
+  // that key their own data by state identity (the financial bridge) use it
+  // so their edits undo/redo in step with the playlist.
+  touch(): void {
+    this.dispatch({ type: "TOUCH" });
+  }
+
   // Resize-with-stretch: scales the clip's stretchRatio by the duration
   // change instead of cropping content. Used while stretchMode is on.
   stretchResizeClip(
@@ -470,16 +947,22 @@ export class PlaylistCore {
   // Slice every clip whose body crosses `time` (Slice tool drag / Insert key).
   // Each affected clip becomes a left half (truncated in place) plus a right
   // half pushed back into the state with a fresh id and a contentOffset that
-  // represents the drop-in time of the cut. Locked tracks are skipped.
-  sliceClipsAtTime(time: number): string[] {
+  // represents the drop-in time of the cut. Locked tracks and noSlice clips
+  // are skipped. `onlyClipIds` narrows the cut to those clips (a host whose
+  // Slice acts on the clip under the pointer / the selection, not on every
+  // row at once); absent = every clip crossing `time` (FL).
+  sliceClipsAtTime(time: number, onlyClipIds?: readonly string[]): string[] {
     const state = this.history.present;
     const lockedTrackIds = new Set(
       state.tracks
         .filter((track) => track.locked === true)
         .map((track) => track.id),
     );
+    const only = onlyClipIds ? new Set(onlyClipIds) : null;
     const candidates = state.clips.filter(
       (clip) =>
+        (only === null || only.has(clip.id)) &&
+        clip.noSlice !== true &&
         !lockedTrackIds.has(clip.trackId) &&
         time > clip.start + 1e-6 &&
         time < clip.start + clip.duration - 1e-6,
@@ -572,30 +1055,29 @@ export class PlaylistCore {
 
   // Clone the selected clips in place (same start, same track) with fresh
   // ids but matching sourceId. Returns the new clip ids and selects them.
-  // Used by Shift-drag clone-drag in the select tool.
+  // Used by Shift-drag clone-drag in the select tool. Like createClip(s),
+  // never lands a clone on a locked track (the destination is the source's
+  // own track here).
   cloneClipsInPlace(clipIds: string[]): string[] {
     const state = this.history.present;
     const ids = new Set(clipIds);
-    const sourceClips = state.clips.filter(
-      (clip) => ids.has(clip.id) && !this.isClipOnLockedTrack(clip.id),
-    );
-    if (sourceClips.length === 0) {
-      return [];
-    }
     let working = [...state.clips];
     const entries: { clip: PlaylistClip; trackIndex: number }[] = [];
-    for (const source of sourceClips) {
+    for (const source of state.clips) {
+      if (!ids.has(source.id)) continue;
+      const trackIndex = getTrackIndexById(state, source.trackId);
+      if (state.tracks[trackIndex]?.locked) continue;
       const id = makeClipId(working);
       const newClip: PlaylistClip = {
         ...cloneClip(source),
         id,
         sourceId: source.sourceId ?? source.id,
       };
-      entries.push({
-        clip: newClip,
-        trackIndex: getTrackIndexById(state, source.trackId),
-      });
+      entries.push({ clip: newClip, trackIndex });
       working = [...working, newClip];
+    }
+    if (entries.length === 0) {
+      return [];
     }
     const selectIds = entries.map((entry) => entry.clip.id);
     this.dispatch({ type: "PASTE_CLIPS", entries, selectIds });
@@ -803,6 +1285,27 @@ export class PlaylistCore {
     });
   }
 
+  /** The "what goes here?" menu at a spot (see PlaylistCreateContextMenu). */
+  openCreateMenu(input: {
+    time: number;
+    duration: number | null;
+    trackIndex: number;
+    lane?: number;
+    position: PlaylistPoint;
+  }): void {
+    this.dispatch({
+      type: "SET_CONTEXT_MENU",
+      contextMenu: {
+        kind: "create",
+        time: Math.max(0, input.time),
+        duration: input.duration !== null && input.duration > 0 ? input.duration : null,
+        trackIndex: Math.max(0, input.trackIndex),
+        lane: Math.max(0, input.lane ?? 0),
+        position: input.position,
+      },
+    });
+  }
+
   openBackgroundContextMenu(
     time: number,
     trackIndex: number,
@@ -825,6 +1328,11 @@ export class PlaylistCore {
     if (state.tracks[input.trackIndex]?.locked) {
       return "";
     }
+    // virtualTracks: false — rows past the last real track are background,
+    // not tracks: nothing is created there (same contract as a locked track).
+    if (input.trackIndex > this.maxTrackIndex()) {
+      return "";
+    }
     const trackId = getTrackIdByIndex(state, input.trackIndex);
     const id = input.id ?? makeClipId(state.clips);
     const baseClip = {
@@ -837,6 +1345,8 @@ export class PlaylistCore {
       color: input.color ?? "#888888",
       muted: input.muted,
       sourceId: input.sourceId ?? id,
+      ...(input.noSlice === true ? { noSlice: true } : null),
+      ...(input.timeLocked === true ? { timeLocked: true } : null),
     };
     const clip: PlaylistClip =
       baseClip.type === "automation"
@@ -867,8 +1377,12 @@ export class PlaylistCore {
     let working = state.clips;
     const entries: { clip: PlaylistClip; trackIndex: number }[] = [];
     const ids: string[] = [];
+    const maxTrack = this.maxTrackIndex();
     for (const input of inputs) {
       if (state.tracks[input.trackIndex]?.locked) {
+        continue;
+      }
+      if (input.trackIndex > maxTrack) {
         continue;
       }
       const id = input.id ?? makeClipId(working);
@@ -882,6 +1396,9 @@ export class PlaylistCore {
         color: input.color ?? "#888888",
         muted: input.muted,
         sourceId: input.sourceId ?? id,
+        ...(input.noSlice === true ? { noSlice: true } : null),
+        ...(input.timeLocked === true ? { timeLocked: true } : null),
+      ...(input.timeLocked === true ? { timeLocked: true } : null),
       };
       const clip: PlaylistClip =
         baseClip.type === "automation"
@@ -1061,8 +1578,13 @@ export class PlaylistCore {
       }
     }
     for (const entry of state.clipboard.entries) {
-      const id = makeClipId(workingClips);
       const trackIndex = Math.max(0, baseTrackIndex + entry.trackOffset);
+      // Like createClip(s): nothing lands on a locked track (nor, with
+      // virtualTracks: false, past the last real one). The rest of the
+      // clipboard still pastes at its relative position.
+      if (state.tracks[trackIndex]?.locked) continue;
+      if (trackIndex > this.maxTrackIndex()) continue;
+      const id = makeClipId(workingClips);
       const nextGroupId =
         entry.clip.groupId !== undefined
           ? groupIdRemap.get(entry.clip.groupId)!
@@ -1082,6 +1604,9 @@ export class PlaylistCore {
       newEntries.push({ clip: newClip, trackIndex });
       workingClips = [...workingClips, newClip];
     }
+    if (newEntries.length === 0) {
+      return [];
+    }
     const selectIds = newEntries.map((entry) => entry.clip.id);
     this.dispatch({
       type: "PASTE_CLIPS",
@@ -1091,6 +1616,10 @@ export class PlaylistCore {
     return selectIds;
   }
 
+  // Ctrl+B: duplicates the selection right after itself (shifted by the
+  // selection's span). Clips on a locked track are not duplicated (the copy
+  // would land on that same track); the span still covers the whole
+  // selection so the unlocked copies keep their relative layout.
   duplicateSelectionRight(): string[] {
     const state = this.history.present;
     const ids = new Set(state.selection.clipIds);
@@ -1110,6 +1639,8 @@ export class PlaylistCore {
     const newEntries: { clip: PlaylistClip; trackIndex: number }[] = [];
     let workingClips = [...state.clips];
     for (const clip of selected) {
+      const trackIndex = getTrackIndexById(state, clip.trackId);
+      if (state.tracks[trackIndex]?.locked) continue;
       const id = makeClipId(workingClips);
       const newClip: PlaylistClip = {
         ...cloneClip(clip),
@@ -1117,11 +1648,11 @@ export class PlaylistCore {
         start: clip.start + span,
         sourceId: clip.sourceId ?? clip.id,
       };
-      newEntries.push({
-        clip: newClip,
-        trackIndex: getTrackIndexById(state, clip.trackId),
-      });
+      newEntries.push({ clip: newClip, trackIndex });
       workingClips = [...workingClips, newClip];
+    }
+    if (newEntries.length === 0) {
+      return [];
     }
     const selectIds = newEntries.map((entry) => entry.clip.id);
     this.dispatch({

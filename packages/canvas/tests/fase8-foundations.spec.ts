@@ -330,6 +330,7 @@ describe("F1 — presentation projects the new fields", () => {
     expect(p.tooltipView).toEqual({
       kind: "time",
       text: "3.2.0",
+      time: null,
       x: 300,
       y: 80,
     });

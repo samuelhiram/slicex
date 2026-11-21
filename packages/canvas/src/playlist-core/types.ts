@@ -43,8 +43,13 @@ export interface PlaylistTrack {
   muted?: boolean;
   soloed?: boolean;
   locked?: boolean;
-  // Per-track height in px. Falls back to metrics.trackHeight when unset.
+  // Height of ONE lane in px (user-resizable). Falls back to
+  // metrics.trackHeight when unset. The row is `lanes` times this tall.
   height?: number;
+  // Stacked lanes the row needs so none of its clips overlap another
+  // (absent = 1). Derived: the core's lane layout (lanes.ts) keeps it in
+  // sync with the clips' `lane` — never set it by hand.
+  lanes?: number;
 }
 
 export interface PlaylistAutomationPoint {
@@ -77,6 +82,32 @@ interface PlaylistClipBase {
   // any of them is dragged or nudged. Cleared by Ctrl+Shift+G or by paste
   // (paste reassigns a fresh groupId so a pasted group becomes a sibling).
   groupId?: string;
+  // Host-owned "this object cannot be cut" flag. Every slice path skips a
+  // clip with noSlice === true: core.sliceClipsAtTime (Slice tool release,
+  // Insert at the playhead) and the SLICE_CLIPS_AT_TIME reducer itself.
+  // Copy / paste / clone / duplicate keep it (they spread the clip). Toggled
+  // with core.setClipNoSlice (undoable). Absent / false = sliceable.
+  noSlice?: boolean;
+  // Host-owned "its time span is fixed" flag. Gestures never move it in
+  // time nor change its length or phase: a drag moves it between rows only,
+  // its edges and the extend grabber don't resize it, Slip leaves it, and
+  // ←/→ move the playhead instead of nudging it. Programmatic edits
+  // (moveClips / resizeClip from a host form) still apply. Toggled with
+  // core.setClipTimeLocked (undoable) or the lock button the controller /
+  // renderer draw on clips when the host asks (clipTimeLock). Absent /
+  // false = free. Pair with noSlice when a cut must not alter it either.
+  timeLocked?: boolean;
+  // Lane inside its track (0 = top; absent = 0). Clips that overlap in
+  // time stack in different lanes instead of covering each other. Set by
+  // the core's lane layout (lanes.ts): a drag drops a clip on the lane under
+  // the pointer, everything else keeps its lane when it still fits.
+  lane?: number;
+  // The lane the clip sits on when nothing drawn pushes it: set (by the lane
+  // layout) only while a neighbour's drawn width — wider than its time, e.g.
+  // a one-day tag as wide as its name (PlaylistLayoutOptions.clipMinWidthPx)
+  // — has cascaded it to a lower lane; it goes back when there is room
+  // again (zooming in). Absent otherwise.
+  homeLane?: number;
 }
 
 export interface PlaylistRegularClip extends PlaylistClipBase {
@@ -130,7 +161,11 @@ export type PlaylistSnapMode =
   | "half-beat"
   | "beat"
   | "bar"
-  | "events";
+  | "events"
+  // Snap to the host time axis' targets (PlaylistTimeAxis.snapTargets),
+  // e.g. the start of each pay period. Falls back to "beat" when the axis
+  // provides none.
+  | "axis";
 
 export interface PlaylistSnap {
   mode: PlaylistSnapMode;
@@ -212,7 +247,22 @@ export type PlaylistDragPreview =
         id: string;
         start: number;
         trackIndex: number;
+        lane?: number;
       }>;
+      // The extra empty lane the row under the pointer opens while a clip
+      // is dragged over it (only when other clips live there): drop on it
+      // to stack at the same time as another clip. Drawn dashed.
+      freeLane?: { trackIndex: number; lane: number } | null;
+    }
+  | {
+      // Draw tool on empty space with a host that creates through its own
+      // flow (onCreateRequest): the range a new clip would take, nothing
+      // created yet.
+      kind: "clip-create";
+      trackIndex: number;
+      lane: number;
+      previewStart: number;
+      previewDuration: number;
     }
   | {
       kind: "clip-resize";
@@ -220,6 +270,9 @@ export type PlaylistDragPreview =
       edge: "left" | "right";
       previewStart: number;
       previewDuration: number;
+      // Screen x where the extend grabber is held (clip-extend gesture);
+      // absent for an edge resize.
+      handleX?: number;
     }
   | {
       kind: "marker";
@@ -238,9 +291,17 @@ export interface PlaylistSnapHint {
 // Time tooltip floating near the cursor. Kind tells the renderer how to
 // format/colour it; anchor is in screen coordinates.
 export interface PlaylistTooltip {
-  kind: "time" | "ratio" | "offset";
+  // "clip": the info card of a hovered / tapped clip (the host adds its
+  // lines through PlaylistRendererCallbacks.getClipInfo). "hint": a plain
+  // label (e.g. what a track header button does).
+  kind: "time" | "ratio" | "offset" | "clip" | "hint";
   text: string;
   anchor: PlaylistPoint;
+  // Beat a "time" tooltip is about: lets the host add a detail line under
+  // the date (PlaylistRendererCallbacks.getTooltipDetail).
+  time?: number;
+  // Clip a "clip" tooltip describes.
+  clipId?: string;
 }
 
 export interface PlaylistTrackContextMenu {
@@ -263,6 +324,20 @@ export interface PlaylistBackgroundContextMenu {
   position: PlaylistPoint;
 }
 
+// "What goes here?": a host that creates through its own flow asks the
+// person on a click on empty space (PlaylistInteractionOptions.clickToCreate).
+// While it is open the spot shows a dashed ghost (presentation
+// dragPreviewView, `creating`): `duration` beats (null: one cell) from
+// `time`, in row `trackIndex`, lane `lane`.
+export interface PlaylistCreateContextMenu {
+  kind: "create";
+  time: number;
+  duration: number | null;
+  trackIndex: number;
+  lane: number;
+  position: PlaylistPoint;
+}
+
 export interface PlaylistMarkerContextMenu {
   kind: "marker";
   markerId: string;
@@ -273,6 +348,7 @@ export type PlaylistContextMenu =
   | PlaylistTrackContextMenu
   | PlaylistClipContextMenu
   | PlaylistBackgroundContextMenu
+  | PlaylistCreateContextMenu
   | PlaylistMarkerContextMenu
   | null;
 
@@ -280,6 +356,10 @@ export type PlaylistHover =
   | { kind: "clip"; clipId: string }
   | { kind: "resize-left"; clipId: string }
   | { kind: "resize-right"; clipId: string }
+  // The extend grabber of the selected clip (getClipExtendHandle).
+  | { kind: "clip-extend"; clipId: string }
+  // The lock button of a clip (controller clipTimeLock.rectOf).
+  | { kind: "clip-lock"; clipId: string }
   | { kind: "automation-point"; clipId: string; pointId: string }
   | { kind: "track"; trackId: string }
   | { kind: "marker"; markerId: string }
@@ -288,12 +368,22 @@ export type PlaylistHover =
 export interface PlaylistState {
   tracks: PlaylistTrack[];
   clips: PlaylistClip[];
+  // The height rows without their own take (the endless rows too), set by
+  // SET_ALL_TRACK_HEIGHTS; absent: the metrics' trackHeight. Part of the
+  // undo history: an undo gives the whole table its height back.
+  rowHeight?: number;
   viewport: PlaylistViewport;
   snap: PlaylistSnap;
   selection: PlaylistSelection;
   marquee: PlaylistMarquee | null;
   contextMenu: PlaylistContextMenu;
   hover: PlaylistHover;
+  // Beat cell under the pointer over the timeline columns (ruler, overview
+  // lane, rows): floor(time). Drives the hover-time indicator (a faint line
+  // that follows the pointer + the day's name on the ruler). null / absent:
+  // the pointer is elsewhere, a gesture is running or the host did not ask
+  // for it (PlaylistInteractionOptions.hoverTimeIndicator).
+  hoverTime?: number | null;
   playPosition: PlaylistPlayPosition;
   tool: PlaylistToolId;
   clipboard: PlaylistClipboard | null;
@@ -314,6 +404,14 @@ export interface PlaylistState {
 
 export interface PlaylistMetrics {
   rulerHeight: number;
+  /**
+   * One row for the ruler: the axis' group labels (months, years) share the
+   * row with the tick labels — sticky at the timeline's left edge, after the
+   * "now" pill when they would touch it — instead of a tier of their own, so
+   * a short ruler still says which month (and year) you are in. Default
+   * false: groups get the upper tier.
+   */
+  rulerSingleRow?: boolean;
   trackHeaderWidth: number;
   trackHeight: number;
   trackMinHeight: number;
@@ -332,13 +430,218 @@ export interface PlaylistMetrics {
   timelineOverscanPx: number;
   playMarkerHitWidth: number;
   scrollbarSize: number;
+  // Height of the horizontal scrollbar (the timeline navigator) when it is
+  // thicker than the vertical one is wide. Absent: scrollbarSize.
+  horizontalScrollbarHeight?: number;
   scrollbarThumbMin: number;
   scrollbarVirtualRangePx: number;
   contextMenuWidth: number;
   contextMenuItemHeight: number;
+  // Height of the overview lane between the ruler and the first track.
+  // 0 = no lane (default; layout identical to before).
+  overviewLaneHeight: number;
 }
 
 export type PlaylistStateListener = (state: PlaylistState) => void;
+
+// Pluggable time axis. When a PlaylistCore is created with one, the ruler
+// ticks and every time tooltip (drag / resize / slice / ruler hover) come
+// from it instead of the built-in "bar.beat.tick" grid. The canvas stays
+// agnostic of what a beat means — the host decides (e.g. 1 beat = 1 day).
+export interface PlaylistTimeAxisTick {
+  beat: number;
+  // Major ticks draw the taller ruler line, the stronger grid line and their
+  // label (when non-null). Minor ticks only draw a short line.
+  major: boolean;
+  label: string | null;
+  // Label centred in the [beat, beat + 1) cell (e.g. one label per day)
+  // instead of starting at the tick line.
+  centered?: boolean;
+  // Highlighted label (e.g. "today"): drawn on a pill in the "now" colour.
+  emphasis?: boolean;
+  // De-emphasised label (e.g. weekend days).
+  dim?: boolean;
+}
+
+// A span of the axis. "group": a labelled span on the ruler's upper tier
+// (e.g. a month) — its presence turns the ruler into two tiers. "shade": a
+// tinted column behind the tracks (e.g. a weekend).
+export interface PlaylistTimeAxisBand {
+  start: number;
+  end: number;
+  kind: "group" | "shade";
+  label?: string | null;
+}
+
+export interface PlaylistTimeAxis {
+  // Ticks covering [fromBeat, toBeat] at zoom pxPerBeat, ascending beats.
+  // Called at most once per presentation build; may allocate. Must be a pure
+  // function of its arguments (the renderer's grid cache relies on it).
+  ticks(fromBeat: number, toBeat: number, pxPerBeat: number): PlaylistTimeAxisTick[];
+  // Text for time tooltips (drag / resize / slice / ruler hover). Replaces
+  // the default bar.beat.tick format.
+  formatTime(beat: number): string;
+  // Optional text for an EXCLUSIVE end (a clip's right edge), e.g. "hasta"
+  // + the last whole unit the clip still covers. Absent: formatTime.
+  formatEnd?(beat: number): string;
+  // Optional: the beat that names an exclusive end's last covered unit
+  // (e.g. beat - 1 for whole days). Used as the tooltip's beat for host
+  // details. Absent: the end itself.
+  lastCoveredBeat?(endBeat: number): number;
+  // Optional snap targets for the "axis" snap mode, ascending, covering at
+  // least [fromBeat, toBeat]. Pure function of its arguments.
+  snapTargets?(fromBeat: number, toBeat: number): readonly number[];
+  // Optional bands intersecting [fromBeat, toBeat] at zoom pxPerBeat (any
+  // order; bands may start before fromBeat). Same call contract as
+  // ticks(): at most once per presentation build, pure function of its
+  // arguments.
+  bands?(
+    fromBeat: number,
+    toBeat: number,
+    pxPerBeat: number,
+  ): PlaylistTimeAxisBand[];
+}
+
+// ---------------------------------------------------------------------------
+// Host-provided visual data. The canvas never interprets the domain: it
+// draws step series, events and annotations expressed in beats. Every
+// provider follows the same contract as getClipSparkline: called from the
+// render loop, it must be an O(1) cached lookup that returns the SAME object
+// while its data is unchanged (a new reference = repaint).
+
+/**
+ * Step function over beats: values[i] holds on [beats[i], beats[i+1]);
+ * before beats[0] the value is `initial`. `beats` ascending, same length as
+ * `values`.
+ */
+export interface PlaylistStepSeries {
+  initial: number;
+  beats: readonly number[];
+  values: readonly number[];
+}
+
+export interface PlaylistOverviewThreshold {
+  value: number;
+  // Below a "warning" threshold the area is tinted warning; below a
+  // "danger" threshold it is tinted danger. Above all thresholds: positive.
+  tone: "warning" | "danger";
+  label?: string;
+}
+
+export interface PlaylistOverviewAnnotation {
+  beat: number;
+  value: number;
+  label: string;
+  tone: "danger" | "warning" | "info";
+}
+
+/** Data of the overview lane (a "master" band between ruler and tracks). */
+export interface PlaylistOverviewData {
+  title: string;
+  /** Main curve (e.g. cash), drawn as a filled step area toned by thresholds. */
+  primary: PlaylistStepSeries;
+  /** Secondary curve (e.g. total debt), faint, on its own scale. */
+  secondary?: PlaylistStepSeries | null;
+  /** Ghost curve on the primary scale (e.g. before the current gesture). */
+  baseline?: PlaylistStepSeries | null;
+  thresholds: readonly PlaylistOverviewThreshold[];
+  annotations: readonly PlaylistOverviewAnnotation[];
+  /** Formats values for annotation / scale labels (called only on rebuild). */
+  formatValue?: (value: number) => string;
+  /**
+   * Vertical scale of the primary curve. "symlog" (sign(v)·log(1+|v|/c))
+   * keeps detail near zero when values span orders of magnitude; `constant`
+   * is the value where it turns from linear-ish to logarithmic. Default
+   * linear.
+   */
+  scale?: { kind: "linear" } | { kind: "symlog"; constant: number };
+  /** Data ends here (e.g. a projection horizon): no curve past it. */
+  endBeat?: number;
+  /**
+   * Faint labelled guide lines on the primary scale (e.g. round amounts),
+   * drawn with the frame — once per data reference, never per frame. A
+   * guide outside the scale or too close to another label is skipped.
+   */
+  guides?: readonly number[];
+  /**
+   * Fixed bounds of the primary scale (∪ 0 ∪ thresholds). With it the scale
+   * does not follow every small change of the data: the host decides when
+   * it moves (e.g. round steps with hysteresis). Absent: the data extent.
+   */
+  domain?: { min: number; max: number };
+  /**
+   * The host's colours (0xRRGGBB) over the theme's: `positive` the primary
+   * curve above every threshold; `warning` a warning threshold (its line,
+   * its label, the area under it); `secondary` / `baseline` those curves;
+   * `annotation` the pins and pills that are not "danger". Danger (under a
+   * danger threshold) always keeps the theme's.
+   */
+  colors?: PlaylistOverviewColors;
+  /** false: no scale labels at the right edge (extents, guides). Default true. */
+  scaleLabels?: boolean;
+  /**
+   * A box at the lane's top-left (px) kept clear of labels: a host control
+   * sits there (threshold names and pills go round it).
+   */
+  corner?: { width: number; height: number };
+}
+
+export interface PlaylistOverviewColors {
+  positive?: number;
+  warning?: number;
+  secondary?: number;
+  baseline?: number;
+  annotation?: number;
+}
+
+/**
+ * Shape of a clip's accent bar, so kinds tell apart without colour (e.g. a
+ * grayscale print): "solid" (default), "dashed" or "dotted".
+ */
+export type PlaylistClipAccent = "solid" | "dashed" | "dotted";
+
+/** Content drawn inside a clip body, positioned at absolute beats. */
+export type PlaylistClipContent =
+  | {
+      kind: "events";
+      beats: readonly number[];
+      // In [-1, 1]. > 0: bar rising from the body bottom; < 0: bar hanging
+      // from under the title bar. |value| = relative height.
+      values: readonly number[];
+      // Optional vertical guide lines at these beats (e.g. a billing cut).
+      marks?: readonly number[];
+      // Real extent of what the clip stands for, in beats from its start
+      // (e.g. 1 for a one-day event drawn wider so its name fits): that
+      // span is drawn as the card, the rest as a faint tag.
+      extent?: number;
+      accent?: PlaylistClipAccent;
+    }
+  | {
+      kind: "level";
+      // A level over time (e.g. remaining debt) drawn as a filled area from
+      // the body bottom; value / max = relative height.
+      series: PlaylistStepSeries;
+      max: number;
+      // Optional vertical guide lines at these beats (e.g. a billing cut).
+      marks?: readonly number[];
+      accent?: PlaylistClipAccent;
+    };
+
+/** A pill attached to the drag tooltip (e.g. the effect of the gesture). */
+export interface PlaylistDragAnnotation {
+  text: string;
+  tone: "positive" | "negative" | "neutral";
+}
+
+/** Extra header info for a track (e.g. its yearly impact). */
+export interface PlaylistTrackMeta {
+  // Name shown instead of the track's label (e.g. an automatic name that
+  // depends on what the row holds). Absent: the label.
+  title?: string;
+  subtitle?: string;
+  /** In [-1, 1]: a thin meter bar, right/positive or left/negative. */
+  meter?: number;
+}
 
 export const DEFAULT_PLAYLIST_METRICS: PlaylistMetrics = {
   rulerHeight: 38,
@@ -364,4 +667,5 @@ export const DEFAULT_PLAYLIST_METRICS: PlaylistMetrics = {
   scrollbarVirtualRangePx: 120000,
   contextMenuWidth: 228,
   contextMenuItemHeight: 28,
+  overviewLaneHeight: 0,
 };

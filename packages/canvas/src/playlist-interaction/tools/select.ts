@@ -88,6 +88,8 @@ export const selectTool: PlaylistTool = {
             id: clip.id,
             start: clip.start,
             trackIndex: getTrackIndexById(newState, clip.trackId),
+            lane: clip.lane ?? 0,
+            ...(clip.timeLocked === true ? { timeLocked: true } : null),
           })),
         };
       }
@@ -117,6 +119,8 @@ export const selectTool: PlaylistTool = {
           id: clip.id,
           start: clip.start,
           trackIndex: getTrackIndexById(state, clip.trackId),
+          lane: clip.lane ?? 0,
+          ...(clip.timeLocked === true ? { timeLocked: true } : null),
         })),
       };
     }
@@ -131,6 +135,8 @@ export const selectTool: PlaylistTool = {
       kind: "marquee",
       pointerId: event.pointerId,
       startPoint: point,
+      startTime: screenXToTime(state, point.x, metrics),
+      startContentY: point.y + state.viewport.scrollY,
       additive,
     };
   },

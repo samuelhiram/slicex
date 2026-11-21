@@ -4,17 +4,21 @@ Lee esto antes de tocar el repo. Para comportamiento del producto ver [docs/prod
 
 ## Qué es el producto
 
-Gestor financiero avanzado tipo **Excel-DAW**: timeline infinito con tracks y objetos financieros estirables (ingresos, egresos, deudas con tarjetas/MSI), múltiples timelines clonables para simular escenarios. Expectativa de UX: *Figma Experience pero mejor*. Detalles de mecánicas en [docs/product-spec.md](docs/product-spec.md).
+Gestor financiero avanzado tipo **Excel-DAW**: timeline infinito con líneas de evento y objetos financieros estirables (ingresos, egresos, deudas con tarjetas/MSI), múltiples timelines clonables para simular escenarios. Expectativa de UX: *Figma Experience pero mejor*. Detalles de mecánicas en [docs/product-spec.md](docs/product-spec.md).
+
+**Nombre de las filas:** en producto son **líneas de evento** (ES) / **slots** (EN), nunca "tracks" ni "filas" en textos visibles. El código del motor `@slicex/canvas` todavía dice `track`; renombrarlo es un cambio aparte que hay que confirmar.
 
 Target multi-plataforma: web → Android → iOS. Por eso la **separación motor gráfico / motor lógico no es estilo, es requisito**. `@slicex/core` debe poder portarse sin React ni Pixi.
 
 ## Estado real hoy (master, verificado 2026-08-13)
 
-- Foco actual: **motor de interacción del playlist tipo FL Studio** en `@slicex/canvas/playlist-*`. Fases 1–8 (F1–F12) cerradas; **el producto financiero sigue sin conectar**.
+- Foco actual: **MVP del motor financiero sobre el playlist** (branch `feat/financial-engine-mvp`). El playlist muestra objetos financieros reales (ingresos, gastos, préstamos, tarjetas, compras, MSI) generados por `@slicex/core/finance` y sincronizados por `FinancialBridge` ([apps/web/src/finance/](apps/web/src/finance/)); ver [docs/project-canon.md](docs/project-canon.md) §2. En memoria, sin persistencia todavía.
 - Las 8 herramientas de la toolbar (`select`, `draw`, `paint`, `delete`, `mute`, `slip`, `slice`, `zoom`) tienen implementación viva en [playlist-interaction/tools/](packages/canvas/src/playlist-interaction/tools/). Ninguna es stub.
-- La UI principal monta el playlist con datos demo en memoria ([PlaylistShell.tsx](apps/web/src/components/PlaylistShell.tsx) → `createDemoPlaylistState()`) más un panel [PlaylistInspector.tsx](apps/web/src/components/PlaylistInspector.tsx). No hay flujo financiero conectado todavía.
-- La rama financiera (`@slicex/core`, `@slicex/contracts`, `@slicex/db`, ruta `/api/timelines/[timelineId]`, `editorStore.ts`) está **dormida pero viva** — es scaffolding para la fase 2, no deuda muerta. **No proponer borrarla sin confirmación explícita.**
-- Suite actual: **314 tests unitarios en 30 archivos**, todos verdes. Playwright tiene **1 spec** ([reload-stress.pw.ts](apps/web/tests/reload-stress.pw.ts)), no cero.
+- Olas 2–4 del producto implementadas (búsqueda de objetivo en deudas, monto con la mano, valles que se arreglan, futuros/ramas, tarjeta totalera, comando "/", año mexicano, Rec + persistencia local, onboarding); ver [docs/project-canon.md](docs/project-canon.md) §2. El plan se guarda en `localStorage` (`slicex.plan.v1`); la persistencia en servidor sigue dormida.
+- UI con tema **claro y oscuro** (tokens en `globals.css` ↔ paleta del canvas en `palette.ts`, se cambian juntos; ver [docs/project-canon.md](docs/project-canon.md) §2 "Lenguaje visual"). Lenguaje calmado y de alto contraste: nada de estética DAW.
+- La UI principal monta el playlist con el documento financiero demo ([PlaylistShell.tsx](apps/web/src/components/PlaylistShell.tsx) → `createDemoFinancialDocument(hoy)` → `createFinancialPlaylistState`) más [PlaylistInspector.tsx](apps/web/src/components/PlaylistInspector.tsx) y los paneles de [apps/web/src/finance/components/](apps/web/src/finance/components/).
+- Scaffolding de persistencia (`@slicex/contracts`, `@slicex/db`, ruta `/api/timelines/[timelineId]`, `editorStore.ts`, y el legado `calculateBalanceAt`/`TimelineDocument` de `@slicex/core`) sigue **dormido pero vivo**. **No proponer borrarlo sin confirmación explícita.**
+- Suite actual: **1103 tests unitarios en 80 archivos**, todos verdes (2026-11-10). Playwright tiene **1 spec** ([reload-stress.pw.ts](apps/web/tests/reload-stress.pw.ts)), no cero.
 - `master` es la **única branch** del repo (local y remota) desde 2026-08-13.
 
 ## Stack
@@ -28,8 +32,9 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 | Estado | Zustand 4 (store actual `editorStore.ts` está dormido — modelo financial, no playlist) |
 | Persistencia | Prisma 7 + `@prisma/adapter-pg` sobre Cloudflare Hyperdrive (Postgres) |
 | Validación | Zod en `@slicex/contracts` |
+| Formularios | Mantine Form 9.7.3 (solo estado/validación, sin componentes de Mantine) + esquemas Zod de `@slicex/contracts` (`finance.ts`); selectores con `Select` (`apps/web/src/ui/select.tsx`, Radix Select 2.4.1 con los tokens): nunca `<select>` ni pickers nativos; ver [docs/forms-audit.md](docs/forms-audit.md) §5 |
 | Observabilidad | `@sentry/cloudflare` (Worker) + `@sentry/react` (browser) + JSON `console` → Workers Logpush |
-| Tests | Vitest (314 unit) + Playwright (1 spec: `apps/web/tests/*.pw.ts`) |
+| Tests | Vitest (1103 unit) + Playwright (1 spec: `apps/web/tests/*.pw.ts`) |
 | Deploy | `wrangler deploy` o Workers Builds (push a `master` → build+deploy) |
 
 ## Mapa rápido

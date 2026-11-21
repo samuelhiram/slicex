@@ -12,6 +12,7 @@ import type {
   PlaylistHover,
   PlaylistSnapHint,
   PlaylistTooltip,
+  PlaylistTrack,
 } from "./types";
 import {
   createInsertedTrack,
@@ -42,6 +43,8 @@ function tooltipsEqual(
   return (
     a.kind === b.kind &&
     a.text === b.text &&
+    a.time === b.time &&
+    a.clipId === b.clipId &&
     a.anchor.x === b.anchor.x &&
     a.anchor.y === b.anchor.y
   );
@@ -61,7 +64,9 @@ function dragPreviewsEqual(
         a.primaryClipId !== other.primaryClipId ||
         a.previewTrackIndex !== other.previewTrackIndex ||
         a.previewStart !== other.previewStart ||
-        a.allMoves.length !== other.allMoves.length
+        a.allMoves.length !== other.allMoves.length ||
+        (a.freeLane?.trackIndex ?? -1) !== (other.freeLane?.trackIndex ?? -1) ||
+        (a.freeLane?.lane ?? -1) !== (other.freeLane?.lane ?? -1)
       ) {
         return false;
       }
@@ -71,7 +76,8 @@ function dragPreviewsEqual(
         if (
           left.id !== right.id ||
           left.start !== right.start ||
-          left.trackIndex !== right.trackIndex
+          left.trackIndex !== right.trackIndex ||
+          left.lane !== right.lane
         ) {
           return false;
         }
@@ -84,12 +90,22 @@ function dragPreviewsEqual(
         a.clipId === other.clipId &&
         a.edge === other.edge &&
         a.previewStart === other.previewStart &&
-        a.previewDuration === other.previewDuration
+        a.previewDuration === other.previewDuration &&
+        a.handleX === other.handleX
       );
     }
     case "marker": {
       const other = b as Extract<PlaylistDragPreview, { kind: "marker" }>;
       return a.markerId === other.markerId && a.previewTime === other.previewTime;
+    }
+    case "clip-create": {
+      const other = b as Extract<PlaylistDragPreview, { kind: "clip-create" }>;
+      return (
+        a.trackIndex === other.trackIndex &&
+        a.lane === other.lane &&
+        a.previewStart === other.previewStart &&
+        a.previewDuration === other.previewDuration
+      );
     }
     default: {
       const exhaustive: never = a;
@@ -108,6 +124,8 @@ function hoversEqual(a: PlaylistHover, b: PlaylistHover): boolean {
     case "clip":
     case "resize-left":
     case "resize-right":
+    case "clip-extend":
+    case "clip-lock":
       return a.clipId === (b as { clipId: string }).clipId;
     case "automation-point":
       return (
@@ -189,8 +207,12 @@ export function playlistReducer(
       return toggleTrackFlag(state, action.trackIndex, "locked");
     case "SET_TRACK_HEIGHT":
       return setTrackHeight(state, action.trackIndex, action.height, metrics);
+    case "SET_ALL_TRACK_HEIGHTS":
+      return setAllTrackHeights(state, action.height, metrics);
     case "REORDER_TRACK":
       return reorderTrack(state, action.fromIndex, action.toIndex);
+    case "ARRANGE_TRACKS":
+      return arrangeTracks(state, action.tracks, action.placement);
     case "MAKE_CLIPS_UNIQUE":
       return makeClipsUnique(state, action.clipIds);
     case "SET_CLIP_LABEL":
@@ -211,6 +233,14 @@ export function playlistReducer(
         "stretchRatio",
         Math.max(0.01, action.stretchRatio),
       );
+    case "SET_CLIP_NO_SLICE":
+      return setClipNoSlice(state, action.clipId, action.noSlice);
+    case "SET_CLIP_TIME_LOCKED":
+      return setClipTimeLocked(state, action.clipId, action.timeLocked);
+    case "TOUCH":
+      // Deliberately NOT idempotent: the new identity is the point. Never
+      // dispatched at UI frequency (canon §4 does not apply).
+      return { ...state };
     case "STRETCH_RESIZE_CLIP":
       return stretchResizeClip(
         state,
@@ -380,6 +410,11 @@ export function playlistReducer(
         return state;
       }
       return { ...state, hover: action.hover ? { ...action.hover } : null };
+    case "SET_HOVER_TIME":
+      if ((state.hoverTime ?? null) === action.time) {
+        return state;
+      }
+      return { ...state, hoverTime: action.time };
     case "SET_CONTEXT_MENU":
       return {
         ...state,
@@ -527,9 +562,15 @@ export function playlistReducer(
   }
 }
 
+// Idempotent (canon §4): pointermove calls this on every move of a drag,
+// mostly with the position the clip already has (moves under one snap
+// step). When no track gets materialized and every update leaves the clip's
+// start / track as they are, the SAME state comes back — no notify, clips
+// keep their identity, subscribers (renderer, financial bridge) pay O(1).
+// The clips array is only copied from the first clip that really moves.
 function moveClips(
   state: PlaylistState,
-  updates: { id: string; start: number; trackIndex: number }[],
+  updates: { id: string; start: number; trackIndex: number; lane?: number }[],
 ): PlaylistState {
   const byId = new Map(updates.map((update) => [update.id, update]));
   const maxTrackIndex = updates.reduce(
@@ -537,20 +578,43 @@ function moveClips(
     state.tracks.length - 1,
   );
   const materialized = materializeTracksThrough(state, maxTrackIndex);
-  const clips = materialized.clips.map((clip) => {
+  const source = materialized.clips;
+  let clips: PlaylistClip[] | null = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const clip = source[index]!;
     const update = byId.get(clip.id);
-    if (!update) {
-      return clip;
+    if (update) {
+      const start = Math.max(0, update.start);
+      const trackId = getTrackIdByIndex(materialized, update.trackIndex);
+      // Lane: the one asked for; else kept in the same track, and dropped
+      // on another track (the lane layout then picks the first free one).
+      const lane =
+        update.lane !== undefined
+          ? Math.max(0, Math.floor(update.lane))
+          : trackId === clip.trackId
+            ? (clip.lane ?? 0)
+            : 0;
+      if (start !== clip.start || trackId !== clip.trackId || lane !== (clip.lane ?? 0)) {
+        clips ??= source.slice(0, index);
+        const moved: PlaylistClip = { ...clip, start, trackId };
+        if (lane > 0) moved.lane = lane;
+        else delete moved.lane;
+        clips.push(moved);
+        continue;
+      }
     }
-    return {
-      ...clip,
-      start: Math.max(0, update.start),
-      trackId: getTrackIdByIndex(materialized, update.trackIndex),
-    };
-  });
+    clips?.push(clip);
+  }
+  if (clips === null) {
+    // No clip moved: only a materialized track (if any) is a change.
+    return materialized;
+  }
   return { ...materialized, clips };
 }
 
+// Idempotent (canon §4): same contract as moveClips — an edge dragged to
+// where it already is (start, duration and contentOffset unchanged) returns
+// the SAME state.
 function resizeClip(
   state: PlaylistState,
   clipId: string,
@@ -558,20 +622,64 @@ function resizeClip(
   time: number,
   metrics: PlaylistMetrics,
 ): PlaylistState {
-  const clips = state.clips.map((clip) => {
-    if (clip.id !== clipId) {
-      return clip;
-    }
-    const start = clip.start;
-    const end = clip.start + clip.duration;
-    if (edge === "right") {
-      const nextEnd = Math.max(start + metrics.minClipDuration, time);
-      return { ...clip, duration: nextEnd - start };
-    }
-    const nextStart = clamp(time, 0, end - metrics.minClipDuration);
-    return { ...clip, start: nextStart, duration: end - nextStart };
-  });
+  const index = state.clips.findIndex((clip) => clip.id === clipId);
+  if (index < 0) {
+    return state;
+  }
+  const clip = state.clips[index]!;
+  const next = resizedClip(clip, edge, time, metrics);
+  if (
+    next.start === clip.start &&
+    next.duration === clip.duration &&
+    next.contentOffset === clip.contentOffset
+  ) {
+    return state;
+  }
+  const clips = state.clips.slice();
+  clips[index] = next;
   return { ...state, clips };
+}
+
+function resizedClip(
+  clip: PlaylistClip,
+  edge: "left" | "right",
+  time: number,
+  metrics: PlaylistMetrics,
+): PlaylistClip {
+  const start = clip.start;
+  const end = clip.start + clip.duration;
+  if (edge === "right") {
+    const nextEnd = Math.max(start + metrics.minClipDuration, time);
+    return { ...clip, duration: nextEnd - start };
+  }
+  const nextStart = clamp(time, 0, end - metrics.minClipDuration);
+  // FL parity: cropping the LEFT edge keeps the inner content in place on
+  // the timeline — the window moves, the content doesn't. Shift the slip
+  // offset by the start delta measured in content beats (one screen beat =
+  // stretchRatio content beats, same convention as slip/slice). Automation
+  // clips keep their old behaviour (points are clip-relative). Stretch-mode
+  // resize goes through STRETCH_RESIZE_CLIP instead and never lands here.
+  const delta = nextStart - start;
+  if (isAutomationClip(clip) || (delta === 0 && clip.contentOffset === undefined)) {
+    return { ...clip, start: nextStart, duration: end - nextStart };
+  }
+  const contentOffset = cleanBeats(
+    (clip.contentOffset ?? 0) + delta * (clip.stretchRatio ?? 1),
+  );
+  return {
+    ...clip,
+    start: nextStart,
+    duration: end - nextStart,
+    contentOffset,
+  };
+}
+
+// Accumulated pointermove deltas (e.g. third-step snaps) leave binary noise
+// like 0.30000000000000004 in the offset. Snap times are already rounded to
+// 1e-4 beats, so rounding the sum to 1e-9 only strips the noise.
+function cleanBeats(value: number): number {
+  const rounded = Math.round(value * 1e9) / 1e9;
+  return rounded === 0 ? 0 : rounded;
 }
 
 function addAutomationPoint(
@@ -944,6 +1052,27 @@ function setTrackHeight(
   return { ...materialized, tracks };
 }
 
+// Every materialised row to `height` (clamped); the same state when they
+// all have it already (idempotent: a drag repeats it per move).
+function setAllTrackHeights(
+  state: PlaylistState,
+  height: number,
+  metrics: PlaylistMetrics,
+): PlaylistState {
+  const clamped = Math.round(
+    Math.min(metrics.trackMaxHeight, Math.max(metrics.trackMinHeight, height)),
+  );
+  let tracks: PlaylistState["tracks"] | null = null;
+  for (let index = 0; index < state.tracks.length; index += 1) {
+    const track = state.tracks[index]!;
+    if (track.height === clamped) continue;
+    tracks ??= state.tracks.slice();
+    tracks[index] = { ...track, height: clamped };
+  }
+  if (!tracks && state.rowHeight === clamped) return state;
+  return { ...state, tracks: tracks ?? state.tracks, rowHeight: clamped };
+}
+
 function reorderTrack(
   state: PlaylistState,
   fromIndex: number,
@@ -964,6 +1093,28 @@ function reorderTrack(
   const [moved] = tracks.splice(fromIndex, 1);
   tracks.splice(clamped, 0, moved!);
   return { ...state, tracks };
+}
+
+// The host's new rows and the row of each clip it names. A clip going to
+// another row restarts at lane 0 (the lane layout settles it); a clip whose
+// row is gone and that is not placed goes to the first row (never lost).
+function arrangeTracks(
+  state: PlaylistState,
+  tracks: readonly PlaylistTrack[],
+  placement: Readonly<Record<string, string>>,
+): PlaylistState {
+  if (tracks.length === 0) return state;
+  const ids = new Set(tracks.map((track) => track.id));
+  const fallback = tracks[0]!.id;
+  const clips = state.clips.map((clip) => {
+    const placed = placement[clip.id];
+    const trackId =
+      placed !== undefined && ids.has(placed) ? placed : ids.has(clip.trackId) ? clip.trackId : fallback;
+    if (trackId === clip.trackId) return clip;
+    const { lane: _lane, ...rest } = clip;
+    return { ...rest, trackId };
+  });
+  return { ...state, tracks: tracks.map((track) => ({ ...track })), clips };
 }
 
 function makeClipsUnique(
@@ -1025,6 +1176,52 @@ function setClipNumericField<K extends "contentOffset" | "stretchRatio">(
   return changed ? { ...state, clips } : state;
 }
 
+// Idempotent: setting the flag a clip already has returns the same state, so
+// the dispatch neither notifies nor pushes an undo entry. `false` drops the
+// key instead of storing `noSlice: false`, so a cleared clip is structurally
+// identical to one that never had the flag.
+function setClipNoSlice(
+  state: PlaylistState,
+  clipId: string,
+  noSlice: boolean,
+): PlaylistState {
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId || (clip.noSlice === true) === noSlice) {
+      return clip;
+    }
+    changed = true;
+    if (noSlice) {
+      return { ...clip, noSlice: true };
+    }
+    const { noSlice: _drop, ...rest } = clip;
+    return rest as PlaylistClip;
+  });
+  return changed ? { ...state, clips } : state;
+}
+
+// Same contract as setClipNoSlice: idempotent (same state, no undo entry),
+// `false` drops the key.
+function setClipTimeLocked(
+  state: PlaylistState,
+  clipId: string,
+  timeLocked: boolean,
+): PlaylistState {
+  let changed = false;
+  const clips = state.clips.map((clip) => {
+    if (clip.id !== clipId || (clip.timeLocked === true) === timeLocked) {
+      return clip;
+    }
+    changed = true;
+    if (timeLocked) {
+      return { ...clip, timeLocked: true };
+    }
+    const { timeLocked: _drop, ...rest } = clip;
+    return rest as PlaylistClip;
+  });
+  return changed ? { ...state, clips } : state;
+}
+
 function stretchResizeClip(
   state: PlaylistState,
   clipId: string,
@@ -1073,6 +1270,35 @@ function sliceClipsAtTime(
   clipIds: string[],
   newClips: import("./types").PlaylistClip[],
 ): PlaylistState {
+  // noSlice clips are never cut, whoever built the action (core.sliceClipsAtTime
+  // already skips them; this guards a raw dispatch). A blocked clip keeps its
+  // full length and its right half is not appended: core.sliceClipsAtTime
+  // builds `newClips` index-aligned with `clipIds`, and a right half spread
+  // from a noSlice clip inherits the flag, so either signal identifies it.
+  const blocked = new Set<string>();
+  if (clipIds.length > 0) {
+    const requested = new Set(clipIds);
+    for (const clip of state.clips) {
+      if (clip.noSlice === true && requested.has(clip.id)) {
+        blocked.add(clip.id);
+      }
+    }
+  }
+  if (blocked.size > 0 || newClips.some((clip) => clip.noSlice === true)) {
+    const aligned = clipIds.length === newClips.length;
+    const sourceIds = clipIds;
+    const keptIds = sourceIds.filter((id) => !blocked.has(id));
+    const keptNew = newClips.filter(
+      (clip, index) =>
+        clip.noSlice !== true &&
+        !(aligned && blocked.has(sourceIds[index]!)),
+    );
+    if (keptIds.length === 0 && keptNew.length === 0) {
+      return state;
+    }
+    clipIds = keptIds;
+    newClips = keptNew;
+  }
   const newById = new Map(newClips.map((c) => [c.id, c] as const));
   // Only the clips the caller resolved get truncated. Deriving the set from
   // `time` here would also truncate clips on locked tracks, which never get a

@@ -10,10 +10,33 @@
 // core schedules at most one render per animation frame, and the static
 // layers (mask, grid) keep a dirty-key cache so hover/selection updates
 // don't redraw them.
-import { Application, Container, Graphics } from "pixi.js";
-import type { PlaylistCore } from "../playlist-core";
-import { createClipNodeRegistry } from "./clip-node-registry";
-import { COLORS } from "./palette";
+import {
+  Application,
+  CanvasTextMetrics,
+  Container,
+  Graphics,
+  Text,
+} from "pixi.js";
+import type {
+  PlaylistClipContent,
+  PlaylistCore,
+  PlaylistDragAnnotation,
+  PlaylistOverviewData,
+  PlaylistRect,
+  PlaylistTrackMeta,
+} from "../playlist-core";
+import {
+  createClipExtendHandle,
+  getClipExtendHandle,
+  getClipLevelGripX,
+  type PlaylistPresentation,
+} from "../playlist-core";
+import { createClipNodeRegistry, type PlaylistClipIcon } from "./clip-node-registry";
+import {
+  COLORS,
+  applyPlaylistTheme,
+  type PlaylistThemeName,
+} from "./palette";
 import {
   clearTextLayer,
   disposeTextLayer,
@@ -23,23 +46,124 @@ import {
   drawTrackRowsBackground,
 } from "./layers/background";
 import { drawRulerChrome, drawTimelineGrid } from "./layers/ruler";
-import { drawTrackRows } from "./layers/track-rows";
+import { createTrackLabelFormatter, createTrackMetaSource, drawTrackRows } from "./layers/track-rows";
+import { createOverviewLaneLayer } from "./layers/overview-lane";
+import { createDragAnnotationLayer } from "./layers/drag-annotation";
 import { drawMarkers } from "./layers/markers";
 import { drawLoopRegion } from "./layers/loop-region";
 import { drawPlayPositionRulerMarker } from "./layers/play-position";
 import { drawTimelineOverlay } from "./layers/overlay";
-import { drawScrollbars } from "./layers/scrollbars";
+import { drawClipExtendHandle } from "./layers/extend-handle";
+import { createNavigatorLayer, drawScrollbars } from "./layers/scrollbars";
 import { drawSnapIndicator } from "./layers/snap-indicator";
+import { drawHoverTime } from "./layers/hover-time";
 import { drawDropGhost } from "./layers/drop-ghost";
 import { drawTooltip } from "./layers/tooltip";
 
 export interface PlaylistRendererCallbacks {
+  // Initial theme (light / dark). Default: whatever the live palette holds
+  // (light unless a previous renderer switched it). Change it later with
+  // PlaylistRenderer.setTheme.
+  theme?: PlaylistThemeName;
+  // Hovered clips show the level grip on their top edge (pair with the
+  // interaction controller's onClipLevelDrag).
+  clipLevelHandles?: boolean;
+  // The grip is a fixed target (pair with the controller's clipLevelGrip):
+  // drawn on the hovered and the selected clip where the hit-test expects
+  // it (getClipLevelGripX), in the per-frame overlay — at most two shapes.
+  clipLevelGrip?: boolean;
+  // The selected clip shows the extend grabber (pair with the interaction
+  // controller's clipExtend, passing the SAME predicate). Called once per
+  // frame for the selected clip: O(1), a plain boolean.
+  clipExtend?: (clipId: string) => boolean;
+  // Clips show a lock button before their title (pair with the
+  // controller's clipTimeLock, rectOf = getClipLockRect below): closed on a
+  // time-locked clip, open and quiet on a free one. Read once.
+  clipTimeLock?: boolean;
+  // The dates a clip covers, drawn after its lock (with clipTimeLock):
+  // "1 dic 2026 – 1 sep 2027". Called once per VISIBLE clip per frame: O(1)
+  // cached, the SAME string while unchanged; null = none.
+  getClipPeriod?: (clipId: string) => string | null;
+  // The clip's icon, first in its name's pill (with clipTimeLock): SVG path
+  // data on a 24-unit grid, stroked in the clip's colour. Called once per
+  // VISIBLE clip per frame: O(1), the SAME array while unchanged; null =
+  // none. A change with no core notify needs invalidate(), like the detail.
+  getClipIcon?: (clipId: string) => PlaylistClipIcon | null;
+  // Host emphasis per clip: true = warm ring, "danger" = a red ring and a
+  // dimmed card (e.g. what a delete sweep will remove). Called once per
+  // VISIBLE clip per frame: O(1), a primitive; call invalidate() when it
+  // changes.
+  getClipHighlight?: (clipId: string) => boolean | "danger";
+  // Lines of a clip's info card (a "clip" tooltip, see the interaction
+  // controller's hoverCardDelayMs), "\n"-separated. Called once per frame
+  // while the card shows: O(1) cached, the SAME string while unchanged.
+  getClipInfo?: (clipId: string) => string | null;
+  // Show the FL slip / stretch badges ("↻ offset", "×ratio") on clips.
+  // Default true; a host whose clips have no such meaning turns them off.
+  // Read once.
+  clipBadges?: boolean;
+  // A second line under the date of a time tooltip (e.g. the cash that
+  // day). Called once per frame while such a tooltip shows: O(1) cached,
+  // the SAME string while unchanged; null = no line.
+  getTooltipDetail?: (beat: number) => string | null;
   onReady?: () => void;
   onError?: (error: unknown) => void;
+  // Secondary line drawn inside the clip body under the title. Called once
+  // per VISIBLE clip per frame: must be an O(1) cached lookup returning a
+  // stable string. null → no detail line.
+  getClipDetail?: (clipId: string) => string | null;
+  // Per-renderer sparkline data; takes precedence over the global
+  // setSparklineProvider. null → existing behaviour, [] → no bars. Called
+  // once per VISIBLE pattern clip per frame: must be an O(1) cached lookup
+  // that returns the SAME array reference while the bars are unchanged (a
+  // new reference repaints that clip body). See ClipNodeProviders in
+  // clip-node-registry.ts.
+  getClipSparkline?: (clipId: string) => readonly number[] | null;
+  // Content drawn inside a clip body at absolute beats (events / level).
+  // Non-null wins over the sparkline for that clip. Called once per VISIBLE
+  // non-automation clip per frame: O(1) lookup returning the SAME object
+  // while unchanged (a new reference repaints that body).
+  getClipContent?: (clipId: string) => PlaylistClipContent | null;
+  // Data of the overview lane (metrics.overviewLaneHeight > 0). Called once
+  // per frame: O(1), the SAME object while unchanged. A new reference (or
+  // a scroll / zoom / resize) rebuilds the lane geometry; nothing else does.
+  getOverviewData?: () => PlaylistOverviewData | null;
+  // Pill attached below the floating tooltip while it is visible. Called
+  // once per frame while a tooltip shows: O(1), same object while unchanged
+  // (a new reference repaints the pill; following the cursor is free).
+  getDragAnnotation?: () => PlaylistDragAnnotation | null;
+  // Header extras per track (subtitle + meter). Called once per VISIBLE
+  // real row per frame: O(1), same object while unchanged.
+  getTrackMeta?: (trackId: string) => PlaylistTrackMeta | null;
+  // Name shown for a row (e.g. the host's own word for the engine's
+  // auto-named "Track N" rows). Called once per distinct label: the result
+  // is cached, so a steady frame allocates nothing.
+  formatTrackLabel?: (label: string) => string;
 }
 
 export interface PlaylistRenderer {
   destroy: () => void;
+  // Ask for a repaint without a core notify — for hosts whose provider data
+  // (getClipDetail / getClipSparkline) changed while PlaylistState did not.
+  // Goes through the same rAF-coalesced requestRender as core notifies
+  // (canon §3.10): any number of calls (and notifies) within one frame
+  // paint once; no extra tick is started (canon §3.11). Safe before the
+  // Pixi app is ready (the first ready frame picks it up) and a no-op after
+  // destroy().
+  invalidate: () => void;
+  // Switches the live palette (palette.ts) and repaints every cached layer
+  // once (grid, clip nodes, overview lane, drag pill). No-op when the theme
+  // is already active. Rare event: never call it per frame.
+  setTheme: (theme: PlaylistThemeName) => void;
+  // Re-rasterises every canvas label with the fonts available now. Call it
+  // once when a web font finishes loading after the renderer was created
+  // (Pixi rasterises a Text once and caches it by text + style key). Never
+  // per frame.
+  refreshFonts: () => void;
+  // Where the lock button of `clipId` was drawn in the last frame (screen
+  // px, fills `out`), or null (none shown). O(1). Hand it to the
+  // controller's clipTimeLock.rectOf so a click lands where it is drawn.
+  getClipLockRect: (clipId: string, out: PlaylistRect) => PlaylistRect | null;
 }
 
 export function createPlaylistRenderer(
@@ -58,17 +182,79 @@ export function createPlaylistRenderer(
   // See clip-node-registry.ts (canon §3.8).
   const clipsLayer = new Container();
   clipsLayer.eventMode = "none";
-  const clipNodeRegistry = createClipNodeRegistry({
-    text: COLORS.text,
-    textMuted: COLORS.textMuted,
-    selected: COLORS.selected,
-    hover: COLORS.hover,
-    rowLine: COLORS.rowLine,
-    panel: COLORS.panel,
-    panelStrong: COLORS.panelStrong,
-    automationLine: COLORS.automationLine,
+  if (callbacks.theme) applyPlaylistTheme(callbacks.theme);
+  // The LIVE palette object: a theme switch mutates it in place and
+  // invalidates the registry, so nodes repaint with the new colours.
+  const clipNodeRegistry = createClipNodeRegistry(
+    COLORS,
+    {
+      levelHandles: callbacks.clipLevelHandles === true,
+      levelGrip: callbacks.clipLevelGrip === true,
+      isClipHighlighted: callbacks.getClipHighlight,
+      badges: callbacks.clipBadges !== false,
+      getClipDetail: callbacks.getClipDetail,
+      getClipSparkline: callbacks.getClipSparkline,
+      getClipContent: callbacks.getClipContent,
+      timeLock: callbacks.clipTimeLock === true,
+      getClipPeriod: callbacks.getClipPeriod,
+      getClipIcon: callbacks.getClipIcon,
+    },
+  );
+  // Overview lane (canon §3.10 cached layer): frame + curves rebuilt only
+  // on their dirty keys; a tiny dynamic Graphics for the playhead.
+  const overviewContainer = new Container();
+  overviewContainer.eventMode = "none";
+  overviewContainer.visible = false;
+  const overviewFrameGraphics = new Graphics();
+  const overviewFrameText = new Container();
+  const overviewCurveGraphics = new Graphics();
+  const overviewCurveText = new Container();
+  const overviewDynamicGraphics = new Graphics();
+  overviewContainer.addChild(
+    overviewFrameGraphics,
+    overviewFrameText,
+    overviewCurveGraphics,
+    overviewCurveText,
+    overviewDynamicGraphics,
+  );
+  const overviewLane = createOverviewLaneLayer({
+    container: overviewContainer,
+    frameGraphics: overviewFrameGraphics,
+    frameText: overviewFrameText,
+    curveGraphics: overviewCurveGraphics,
+    curveText: overviewCurveText,
+    dynamicGraphics: overviewDynamicGraphics,
   });
+  const getOverviewData = callbacks.getOverviewData;
+  const trackMetaSource = callbacks.getTrackMeta
+    ? createTrackMetaSource(callbacks.getTrackMeta)
+    : null;
+  const trackLabel = callbacks.formatTrackLabel
+    ? createTrackLabelFormatter(callbacks.formatTrackLabel)
+    : null;
   const overlayGraphics = new Graphics();
+  const levelGrip = callbacks.clipLevelGrip === true;
+  // The level grip of one clip (O(1): a map lookup + a rounded rect).
+  const drawLevelGripOf = (presentation: PlaylistPresentation, clipId: string): void => {
+    const view = presentation.clipViewsById.get(clipId);
+    if (!view || !view.isVisible || view.isAutomation || view.trackLocked) return;
+    if (view.rect.width < 24 || view.rect.height < 12) return;
+    const x = getClipLevelGripX(view, presentation.metrics, presentation.state.viewport.width);
+    overlayGraphics
+      .roundRect(x - 9, view.rect.y + 1.5, 18, 3.5, 1.75)
+      .fill({ color: view.selected ? COLORS.selected : COLORS.text, alpha: view.selected ? 0.9 : 0.45 });
+  };
+  const drawLevelGrips = (presentation: PlaylistPresentation): void => {
+    const state = presentation.state;
+    const hover = state.hover;
+    const hovered = hover && hover.kind === "clip" ? hover.clipId : null;
+    if (hovered) drawLevelGripOf(presentation, hovered);
+    const selected = state.selection.clipIds;
+    if (selected.length === 1 && selected[0] !== hovered) drawLevelGripOf(presentation, selected[0]!);
+  };
+  // Extend grabber: one reusable handle (no per-frame allocation).
+  const clipExtend = callbacks.clipExtend;
+  const extendHandle = createClipExtendHandle();
   // Drag-preview ghost + snap indicator sit inside the timeline mask so they
   // disappear behind the ruler/header instead of bleeding into the chrome.
   const dropGhostGraphics = new Graphics();
@@ -79,6 +265,26 @@ export function createPlaylistRenderer(
   // layer on the rAF tick without touching the rest of chrome.
   const recordingPulseGraphics = new Graphics();
   const chromeTextLayer = new Container();
+  // Track rows (headers + row lines) in their own container, masked to the
+  // band below the ruler + money lane: rows scrolled up never paint over
+  // the ruler or the header corner (tracks are endless, so they do scroll).
+  const trackRowsContainer = new Container();
+  trackRowsContainer.eventMode = "none";
+  const trackRowsGraphics = new Graphics();
+  const trackRowsTextLayer = new Container();
+  const trackRowsMask = new Graphics();
+  trackRowsContainer.addChild(trackRowsGraphics, trackRowsTextLayer);
+  trackRowsContainer.mask = trackRowsMask;
+  let trackRowsMaskKey = "";
+  // Navigator track + miniature (cached layer under the scrollbar thumbs).
+  // Hover-time indicator (state.hoverTime): the line + the ruler pill, above
+  // the money lane so it crosses it. The label is cached per cell.
+  const hoverTimeGraphics = new Graphics();
+  const hoverTimeTextLayer = new Container();
+  let hoverLabelTime: number | null = null;
+  let hoverLabel: string | null = null;
+  const navigatorGraphics = new Graphics();
+  const navigatorLayer = createNavigatorLayer(navigatorGraphics);
   const foregroundGraphics = new Graphics();
   const foregroundTextLayer = new Container();
   // Tooltip layer — one Container with its own background Graphics + text
@@ -89,6 +295,25 @@ export function createPlaylistRenderer(
   const tooltipBackground = new Graphics();
   const tooltipTextLayer = new Container();
   tooltipContainer.addChild(tooltipBackground, tooltipTextLayer);
+  // Drag annotation pill under the tooltip: drawn once per reference in
+  // local coords, moved by transform (see layers/drag-annotation.ts).
+  const dragAnnotationContainer = new Container();
+  dragAnnotationContainer.eventMode = "none";
+  dragAnnotationContainer.visible = false;
+  const dragAnnotationBackground = new Graphics();
+  const dragAnnotationTextLayer = new Container();
+  dragAnnotationContainer.addChild(
+    dragAnnotationBackground,
+    dragAnnotationTextLayer,
+  );
+  const dragAnnotation = createDragAnnotationLayer({
+    container: dragAnnotationContainer,
+    background: dragAnnotationBackground,
+    textLayer: dragAnnotationTextLayer,
+  });
+  const getDragAnnotation = callbacks.getDragAnnotation;
+  const getTooltipDetail = callbacks.getTooltipDetail;
+  const getClipInfo = callbacks.getClipInfo;
 
   let destroyed = false;
   let ready = false;
@@ -129,10 +354,19 @@ export function createPlaylistRenderer(
     timelineContainer,
     chromeGraphics,
     chromeTextLayer,
+    trackRowsMask,
+    trackRowsContainer,
+    // Above the chrome so track headers scrolled up under the lane never
+    // bleed into it; below the scrollbars / tooltip.
+    overviewContainer,
+    hoverTimeGraphics,
+    hoverTimeTextLayer,
+    navigatorGraphics,
     foregroundGraphics,
     foregroundTextLayer,
     recordingPulseGraphics,
     tooltipContainer,
+    dragAnnotationContainer,
   );
 
   // Canon §3.10: coalesce notifications into a single rAF frame.
@@ -166,10 +400,14 @@ export function createPlaylistRenderer(
     snapIndicatorGraphics.clear();
     chromeGraphics.clear();
     clearTextLayer(chromeTextLayer);
+    trackRowsGraphics.clear();
+    clearTextLayer(trackRowsTextLayer);
     foregroundGraphics.clear();
     clearTextLayer(foregroundTextLayer);
     tooltipBackground.clear();
     clearTextLayer(tooltipTextLayer);
+    hoverTimeGraphics.clear();
+    clearTextLayer(hoverTimeTextLayer);
 
     drawSceneBackground(sceneGraphics, presentation);
     drawTrackRowsBackground(sceneGraphics, presentation);
@@ -193,7 +431,7 @@ export function createPlaylistRenderer(
     // Grid only changes with zoom, horizontal scroll, viewport width, or
     // total scene height. Hover/selection/etc. don't touch it.
     const ticks = presentation.rulerTicks;
-    const nextGridKey = `${viewport.pxPerBeat}|${viewport.scrollX}|${viewport.width}|${layout.sceneRect.height}|${ticks.length}|${ticks[0]?.x ?? 0}`;
+    const nextGridKey = `${viewport.pxPerBeat}|${viewport.scrollX}|${viewport.width}|${layout.sceneRect.height}|${ticks.length}|${ticks[0]?.x ?? 0}|${presentation.rulerBands.length}`;
     if (nextGridKey !== gridKey) {
       gridKey = nextGridKey;
       timelineGridGraphics.clear();
@@ -203,8 +441,17 @@ export function createPlaylistRenderer(
     // Per-clip cached scene graph: each clip is a Container with its own
     // Graphics + Text drawn once in local coords. Frame-to-frame work is
     // just transform updates unless the clip's visual hash changed.
-    clipNodeRegistry.syncFrame(clipsLayer, presentation.visibleClipViews);
+    clipNodeRegistry.syncFrame(
+      clipsLayer,
+      presentation.visibleClipViews,
+      presentation.metrics.trackHeaderWidth,
+    );
     drawTimelineOverlay(overlayGraphics, presentation);
+    if (levelGrip) drawLevelGrips(presentation);
+    if (clipExtend) {
+      const handle = getClipExtendHandle(presentation, clipExtend, extendHandle);
+      if (handle) drawClipExtendHandle(overlayGraphics, handle);
+    }
     // F3 overlays: ghost outline at the snapped destination + vertical
     // snap-indicator line. Both are no-ops until F3 lands; the Graphics
     // layers exist now so the renderer-impl init stays the single source
@@ -213,11 +460,39 @@ export function createPlaylistRenderer(
     drawSnapIndicator(snapIndicatorGraphics, presentation);
 
     drawRulerChrome(chromeGraphics, chromeTextLayer, presentation);
-    drawTrackRows(chromeGraphics, chromeTextLayer, presentation);
+    const tracksTop = layout.timelineRect.y;
+    const nextRowsMaskKey = `${tracksTop}|${viewport.width}|${viewport.height}`;
+    if (nextRowsMaskKey !== trackRowsMaskKey) {
+      trackRowsMaskKey = nextRowsMaskKey;
+      trackRowsMask.clear();
+      trackRowsMask
+        .rect(0, tracksTop, viewport.width, Math.max(0, viewport.height - tracksTop))
+        .fill({ color: 0xffffff });
+    }
+    drawTrackRows(trackRowsGraphics, trackRowsTextLayer, presentation, trackMetaSource, trackLabel);
     drawLoopRegion(chromeGraphics, presentation);
     drawMarkers(chromeGraphics, chromeTextLayer, presentation);
     drawPlayPositionRulerMarker(chromeGraphics, presentation);
 
+    // Overview lane: returns immediately (and stays hidden) with no lane;
+    // otherwise rebuilds only on its dirty keys (data ref, scroll, zoom,
+    // width, lane geometry). The provider is not queried without a lane.
+    // One provider call per frame feeds the lane and the navigator's
+    // miniature — only when the host has a lane (provider contract).
+    const overviewData =
+      presentation.layout.overviewRect.height > 0 && getOverviewData
+        ? getOverviewData()
+        : null;
+    overviewLane.sync(presentation, overviewData);
+
+    const hoverTime = presentation.state.hoverTime ?? null;
+    if (hoverTime !== hoverLabelTime) {
+      hoverLabelTime = hoverTime;
+      hoverLabel = hoverTime === null ? null : core.formatTime(hoverTime);
+    }
+    drawHoverTime(hoverTimeGraphics, hoverTimeTextLayer, presentation, hoverLabel);
+
+    navigatorLayer.sync(presentation, overviewData);
     drawScrollbars(foregroundGraphics, presentation);
 
     // F10: recording pulse — only emit when transport.recording is true.
@@ -231,16 +506,41 @@ export function createPlaylistRenderer(
         .fill({ color: COLORS.recordingIndicator, alpha });
     }
 
-    drawTooltip(
+    const tooltipView = presentation.tooltipView;
+    const tooltipDetail = !tooltipView
+      ? null
+      : tooltipView.kind === "clip"
+        ? tooltipView.clipId && getClipInfo
+          ? getClipInfo(tooltipView.clipId)
+          : null
+        : tooltipView.time !== null && getTooltipDetail
+          ? getTooltipDetail(tooltipView.time)
+          : null;
+    const tooltipHeight = drawTooltip(
       {
         container: tooltipContainer,
         background: tooltipBackground,
         textLayer: tooltipTextLayer,
       },
       presentation,
+      tooltipDetail,
+    );
+    dragAnnotation.sync(
+      presentation,
+      tooltipView && getDragAnnotation ? getDragAnnotation() : null,
+      tooltipHeight,
     );
 
     (app as any).render?.();
+  };
+
+  // The rAF callback clears the pending id BEFORE renderNow: renderNow bails
+  // out while the Pixi app is still initialising, and an id left set there
+  // would make every later requestRender (notify, resize, invalidate) a
+  // no-op forever. Hoisted so scheduling a frame allocates no closure.
+  const flushRender = (): void => {
+    renderFrameId = 0;
+    renderNow();
   };
 
   const requestRender = (): void => {
@@ -248,9 +548,10 @@ export function createPlaylistRenderer(
     if (typeof requestAnimationFrame === "undefined") {
       renderQueuedNow = true;
       renderNow();
+      renderQueuedNow = false;
       return;
     }
-    renderFrameId = requestAnimationFrame(() => renderNow());
+    renderFrameId = requestAnimationFrame(flushRender);
   };
 
   const resize = (): void => {
@@ -309,6 +610,12 @@ export function createPlaylistRenderer(
 
   void app
     .init({
+      // Render on demand only (requestRender, canon §3.10/§3.11). Pixi's
+      // default ticker repaints the whole stage EVERY frame even when
+      // nothing changed: a constant full-canvas GPU load that, under the
+      // editor's blurred backdrop on a modest machine, froze the browser.
+      autoStart: false,
+      sharedTicker: false,
       antialias: true,
       autoDensity: true,
       backgroundColor: COLORS.background,
@@ -322,6 +629,12 @@ export function createPlaylistRenderer(
         disposeApp();
         return;
       }
+
+      // Pixi's EventSystem is unused (the interaction controller owns all
+      // input): detach it. Attached, it listens to every document
+      // pointermove and keeps a rAF ticker alive that re-dispatches a fake
+      // pointermove every 10 ms while the pointer rests on the canvas.
+      (app.renderer as any).events?.setTargetElement?.(null);
 
       const canvas = (app as any).canvas as HTMLCanvasElement;
       canvas.style.display = "block";
@@ -348,7 +661,55 @@ export function createPlaylistRenderer(
       callbacks.onError?.(error);
     });
 
+  // Drops every dirty-key cache so the next frame repaints all layers with
+  // the current palette (theme switch).
+  const invalidateCachedLayers = (): void => {
+    maskKey = "";
+    gridKey = "";
+    clipNodeRegistry.invalidate();
+    overviewLane.invalidate();
+    dragAnnotation.invalidate();
+    navigatorLayer.invalidate();
+  };
+
+  const refreshTextLayer = (layer: Container): void => {
+    for (const child of layer.children) {
+      // style.update() bumps the style key → Pixi rasterises a new texture.
+      if (child instanceof Text) child.style.update();
+    }
+  };
+
   return {
+    invalidate() {
+      requestRender();
+    },
+    getClipLockRect(clipId, out) {
+      return destroyed ? null : clipNodeRegistry.lockRectOf(clipId, out);
+    },
+    refreshFonts() {
+      if (destroyed) return;
+      // Metrics measured with the fallback face would keep stale widths.
+      CanvasTextMetrics.clearMetrics();
+      refreshTextLayer(chromeTextLayer);
+      refreshTextLayer(trackRowsTextLayer);
+      refreshTextLayer(foregroundTextLayer);
+      refreshTextLayer(tooltipTextLayer);
+      refreshTextLayer(overviewFrameText);
+      refreshTextLayer(overviewCurveText);
+      refreshTextLayer(dragAnnotationTextLayer);
+      refreshTextLayer(hoverTimeTextLayer);
+      clipNodeRegistry.refreshText();
+      requestRender();
+    },
+    setTheme(theme) {
+      if (destroyed) return;
+      if (!applyPlaylistTheme(theme)) return;
+      if (ready) {
+        (app.renderer as any).background.color = COLORS.background;
+      }
+      invalidateCachedLayers();
+      requestRender();
+    },
     destroy() {
       destroyed = true;
       subscription.unsubscribe();
@@ -384,10 +745,17 @@ export function createPlaylistRenderer(
       chromeGraphics.clear();
       recordingPulseGraphics.clear();
       disposeTextLayer(chromeTextLayer);
+      trackRowsGraphics.clear();
+      trackRowsMask.clear();
+      disposeTextLayer(trackRowsTextLayer);
       foregroundGraphics.clear();
+      navigatorGraphics.clear();
       disposeTextLayer(foregroundTextLayer);
       tooltipBackground.clear();
       disposeTextLayer(tooltipTextLayer);
+      disposeTextLayer(hoverTimeTextLayer);
+      overviewLane.dispose();
+      dragAnnotation.dispose();
       disposeApp();
     },
   };

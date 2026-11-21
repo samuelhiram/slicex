@@ -7,6 +7,7 @@ export const muteTool: PlaylistTool = {
   onPointerDown(env: ToolEnvironment) {
     const { core, point, hit, event } = env;
     const touchedClipIds = new Set<string>();
+    const changed = new Map<string, boolean>();
     let muted = true;
     if (
       hit.kind === "clip" ||
@@ -16,6 +17,7 @@ export const muteTool: PlaylistTool = {
     ) {
       muted = hit.clip.muted !== true;
       touchedClipIds.add(hit.clip.id);
+      changed.set(hit.clip.id, hit.clip.muted === true);
       core.setClipsMuted([hit.clip.id], muted);
     }
     return {
@@ -24,6 +26,7 @@ export const muteTool: PlaylistTool = {
       lastPoint: { ...point },
       muted,
       touchedClipIds,
+      changed,
     };
   },
 };
