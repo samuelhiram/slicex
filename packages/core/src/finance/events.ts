@@ -16,6 +16,7 @@ import {
 } from "./items";
 import { positiveMoney } from "./money";
 import { countMonthlyOnDay, expandMonthlyOnDay, expandRecurrence, intersectWindow } from "./recurrence";
+import { cardPaymentWindows, occurrenceEditAmounts, ruleSegments } from "./rules";
 import type {
   CreditCardItem,
   FinancialDocument,
@@ -68,6 +69,44 @@ function pushDates(
   }
 }
 
+/**
+ * The occurrences of an item that follows a recurrence (income, expense,
+ * loan, card purchase): segment by segment (rules.ts — a single one, the
+ * item's own rule, without changes), each date with the amount in force,
+ * edits applied (an edited 0 is still emitted; the projection skips it).
+ */
+function pushRuleEvents(
+  out: FinancialEvent[],
+  item: FinancialItem,
+  range: Range,
+  type: FinancialEventType,
+  accountId: string | undefined,
+): void {
+  const segments = ruleSegments(item);
+  const edits = item.recurrence.frequency === "once" ? null : occurrenceEditAmounts(item);
+  for (const segment of segments) {
+    const dates = expandRecurrence(segment.recurrence, range);
+    const amount = positiveMoney(segment.amount);
+    if (edits === null) {
+      pushDates(out, dates, item, type, amount, accountId);
+      continue;
+    }
+    for (const date of dates) {
+      const edited = edits.get(date);
+      const event: FinancialEvent = {
+        id: "",
+        itemId: item.id,
+        type,
+        date,
+        amount: edited !== undefined ? positiveMoney(edited) : amount,
+        name: item.name,
+      };
+      if (accountId !== undefined) event.accountId = accountId;
+      out.push(event);
+    }
+  }
+}
+
 /** First credit card per id (disabled ones included), the card an MSI plan pays on. */
 function firstCards(doc: FinancialDocument): Map<string, CreditCardItem> {
   const cards = new Map<string, CreditCardItem>();
@@ -94,13 +133,13 @@ function expandItem(
   const rec = item.recurrence;
   switch (item.kind) {
     case "income":
-      pushDates(out, expandRecurrence(rec, range), item, "income", positiveMoney(item.amount), undefined);
+      pushRuleEvents(out, item, range, "income", undefined);
       break;
     case "expense":
-      pushDates(out, expandRecurrence(rec, range), item, "expense", positiveMoney(item.amount), undefined);
+      pushRuleEvents(out, item, range, "expense", undefined);
       break;
     case "loan":
-      pushDates(out, expandRecurrence(rec, range), item, "loan-payment", positiveMoney(item.paymentAmount), item.id);
+      pushRuleEvents(out, item, range, "loan-payment", item.id);
       break;
     case "credit-card": {
       // "statement" mode: the projection computes every payment (the pending
@@ -109,10 +148,31 @@ function expandItem(
       const statement = item.paymentMode === "statement";
       const payWindow = intersectWindow(rec.startDate, rec.endDate, range);
       if (payWindow) {
-        scratch.length = 0;
-        expandMonthlyOnDay(item.dueDay, payWindow, scratch);
-        const planned = statement ? 0 : positiveMoney(item.paymentAmount ?? item.minimumPayment);
-        pushDates(out, scratch, item, "credit-card-payment", planned, item.id);
+        const edits = statement ? null : occurrenceEditAmounts(item);
+        if (statement || (edits === null && (item.ruleChanges?.length ?? 0) === 0)) {
+          scratch.length = 0;
+          expandMonthlyOnDay(item.dueDay, payWindow, scratch);
+          const planned = statement ? 0 : positiveMoney(item.paymentAmount ?? item.minimumPayment);
+          pushDates(out, scratch, item, "credit-card-payment", planned, item.id);
+        } else {
+          // "fixed" mode with changes / edits: the amount in force on each due date.
+          for (const window of cardPaymentWindows(item, range)) {
+            scratch.length = 0;
+            expandMonthlyOnDay(item.dueDay, window, scratch);
+            for (const date of scratch) {
+              const edited = edits?.get(date);
+              out.push({
+                id: "",
+                itemId: item.id,
+                type: "credit-card-payment",
+                date,
+                amount: edited !== undefined ? positiveMoney(edited) : window.amount,
+                name: item.name,
+                accountId: item.id,
+              });
+            }
+          }
+        }
       }
       if (statement) break;
       const interestWindow = intersectWindow(range.from, undefined, range);
@@ -124,14 +184,7 @@ function expandItem(
       break;
     }
     case "card-purchase":
-      pushDates(
-        out,
-        expandRecurrence(rec, range),
-        item,
-        "credit-card-purchase",
-        positiveMoney(item.amount),
-        item.cardId ? item.cardId : item.id,
-      );
+      pushRuleEvents(out, item, range, "credit-card-purchase", item.cardId ? item.cardId : item.id);
       break;
     case "installment-plan": {
       const remaining = remainingInstallmentCount(item);
@@ -275,6 +328,9 @@ interface ItemExpansion {
   startDate: unknown;
   endDate: unknown;
   anchorDate: unknown;
+  /** Rule changes / occurrence edits (immutable arrays: compared by identity). */
+  ruleChanges: unknown;
+  occurrenceEdits: unknown;
   /** Kind-specific fields, see `kindFieldsMatch`. */
   f1: unknown;
   f2: unknown;
@@ -366,6 +422,8 @@ function entryMatches(e: ItemExpansion, item: FinancialItem, range: Range, docSt
     e.startDate === rec?.startDate &&
     e.endDate === rec?.endDate &&
     e.anchorDate === rec?.anchorDate &&
+    e.ruleChanges === item.ruleChanges &&
+    e.occurrenceEdits === item.occurrenceEdits &&
     Object.is(e.cardDay, cardDay) &&
     kindFieldsMatch(e, item)
   );
@@ -426,6 +484,8 @@ function buildEntry(
     startDate: rec?.startDate,
     endDate: rec?.endDate,
     anchorDate: rec?.anchorDate,
+    ruleChanges: item.ruleChanges,
+    occurrenceEdits: item.occurrenceEdits,
     f1: undefined,
     f2: undefined,
     f3: undefined,

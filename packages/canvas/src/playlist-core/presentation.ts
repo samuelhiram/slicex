@@ -285,6 +285,9 @@ export interface PlaylistTooltipView {
   time: number | null;
   // Clip of a "clip" tooltip (null / absent otherwise).
   clipId?: string | null;
+  // Screen band the card keeps clear (PlaylistTooltip.avoidTop / Bottom).
+  avoidTop?: number;
+  avoidBottom?: number;
   x: number;
   y: number;
 }
@@ -888,6 +891,10 @@ function createTooltipView(state: PlaylistState): PlaylistTooltipView | null {
     y: state.tooltip.anchor.y,
   };
   if (state.tooltip.clipId !== undefined) view.clipId = state.tooltip.clipId;
+  if (state.tooltip.avoidTop !== undefined && state.tooltip.avoidBottom !== undefined) {
+    view.avoidTop = state.tooltip.avoidTop;
+    view.avoidBottom = state.tooltip.avoidBottom;
+  }
   return view;
 }
 

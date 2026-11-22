@@ -55,6 +55,20 @@ export interface PlaylistInteractionController {
   readonly navigator: ViewportNavigator;
 }
 
+/**
+ * A quick click on a clip (Select / Draw): pressed and released within
+ * CLIP_TAP_MAX_MS without moving past the double-click slop and without
+ * modifiers. Press and hold (or drag) still moves the clip.
+ */
+export interface PlaylistClipTapEvent {
+  clipId: string;
+  /** Beat under the pointer (not snapped). */
+  time: number;
+  /** Pointer position at the release, host-relative px. */
+  point: PlaylistPoint;
+  pointerType: string;
+}
+
 export interface PlaylistClipLevelEvent {
   clipId: string;
   phase: "start" | "move" | "end";
@@ -213,6 +227,12 @@ export interface PlaylistInteractionOptions {
   clipLevelGrip?: boolean;
   // Alt+← / Alt+→ moved the keyboard focus (the selection) to this clip.
   onClipFocus?: (clipId: string) => void;
+  // A quick click on a clip (see PlaylistClipTapEvent): the host may open
+  // something for the spot clicked (e.g. that payment of a recurring
+  // item). The press still selects the clip first. With this set, a touch
+  // tap reports here instead of showing the hover card. The first press of
+  // a double-click reports a tap too; the second opens the clip as before.
+  onClipTap?: (event: PlaylistClipTapEvent) => void;
   // What moving clips may change. "free" (default, FL): time and row.
   // "rows": the row only — a host whose clips' times come from elsewhere
   // (e.g. dates set in a form) lets a drag move clips up / down between
@@ -782,6 +802,8 @@ function setHoverFromHit(core: PlaylistCore, hit: PlaylistHit): void {
 // Double-click window when the browser does not report a click count.
 const DOUBLE_CLICK_MS = 500;
 const DOUBLE_CLICK_SLOP_PX = 5;
+/** Longest press that still counts as a quick click on a clip (onClipTap). */
+export const CLIP_TAP_MAX_MS = 400;
 
 export function createPlaylistInteractionController(
   host: PlaylistInteractionHost,
@@ -793,6 +815,7 @@ export function createPlaylistInteractionController(
   const onClipLevelDrag = options.onClipLevelDrag;
   const onOverviewHover = options.onOverviewHover;
   const onCreateRequest = options.onCreateRequest;
+  const onClipTap = options.onClipTap;
   const wheelScrollsRows = options.mouseWheel === "rows";
   // Host semantics (read once).
   const toolCursors = options.toolCursors;
@@ -1011,7 +1034,21 @@ export function createPlaylistInteractionController(
   const showClipCard = (clipId: string, point: PlaylistPoint): void => {
     const clip = core.getState().clips.find((candidate) => candidate.id === clipId);
     if (!clip) return;
-    core.setTooltip({ kind: "clip", text: clip.label, anchor: { ...point }, clipId });
+    // The card keeps the clip's own row clear (its cells stay readable
+    // while the pointer walks them): once per card, not per move.
+    const view = core.getPresentation().visibleClipViews.find((candidate) => candidate.clip.id === clipId);
+    core.setTooltip(
+      view
+        ? {
+            kind: "clip",
+            text: clip.label,
+            anchor: { ...point },
+            clipId,
+            avoidTop: view.rect.y,
+            avoidBottom: view.rect.y + view.rect.height,
+          }
+        : { kind: "clip", text: clip.label, anchor: { ...point }, clipId },
+    );
   };
 
   // Lane of row `trackIndex` under screen `y` for a dragged clip, and the
@@ -1179,6 +1216,10 @@ export function createPlaylistInteractionController(
   let lastPressCount = 0;
   let pressHeld = false;
   let pressDragged = false;
+  // Quick-click detection (onClipTap): when the press started and whether it
+  // carried a modifier. Plain fields, set on every primary press.
+  let pressStartTime = 0;
+  let pressModified = false;
   const pressClickCount = (event: PointerEvent, point: PlaylistPoint): number => {
     const afterDrag = pressDragged;
     pressDragged = false;
@@ -1220,6 +1261,8 @@ export function createPlaylistInteractionController(
     const point = resolvePoint(host, event);
     const rawHit = hitAt(point, event.button === 2 ? menuHitOptions : hitOptions);
     const clickCount = pressClickCount(event, point);
+    pressStartTime = event.timeStamp;
+    pressModified = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey;
     createPressX = point.x;
     createPressY = point.y;
     createPressCount = clickCount;
@@ -1238,9 +1281,13 @@ export function createPlaylistInteractionController(
       event.button === 0 &&
       levelTool &&
       !(event.ctrlKey || event.metaKey || event.shiftKey || event.altKey);
+    // The second press of a double-click is the clip's, even on a grabber
+    // the first press brought up under the pointer (the extend grabber
+    // shows once the clip is selected; the level grip on hover): a
+    // double-click opens the clip wherever on it it lands.
     const hit: PlaylistHit =
-      (rawHit.kind === "clip-level" && (!levelTool || event.button !== 0)) ||
-      (rawHit.kind === "clip-extend" && event.button !== 0) ||
+      (rawHit.kind === "clip-level" && (!levelTool || event.button !== 0 || clickCount === 2)) ||
+      (rawHit.kind === "clip-extend" && (event.button !== 0 || clickCount === 2)) ||
       (rawHit.kind === "clip-lock" && !lockToggle)
         ? { kind: "clip", clip: rawHit.clip, clipId: rawHit.clipId }
         : rawHit;
@@ -1870,8 +1917,44 @@ export function createPlaylistInteractionController(
   const followViewport = (): void => {
     if (activeGesture && lastGestureMove && followsViewport(activeGesture)) {
       handlePointerMove(lastGestureMove);
+      return;
+    }
+    if (!activeGesture && hoverPointKnown) refreshHover();
+  };
+
+  // The pointer resting over the canvas while the view moves under it (the
+  // wheel, a glide): what it is over changed without a pointermove. The
+  // hovered clip / cell and the hover-time day follow the content; an info
+  // card, anchored to the old spot, closes (the next move re-arms it).
+  // Plain fields, one hit-test per step: no allocation.
+  const hoverPoint: PlaylistPoint = { x: 0, y: 0 };
+  let hoverPointKnown = false;
+  const refreshHover = (): void => {
+    const hit = hitAt(hoverPoint);
+    setHoverFromHit(core, hit);
+    if (hoverTimeIndicator) {
+      const state = core.getState();
+      core.setHoverTime(
+        overTimelineAt(state, hoverPoint, hit) ? screenXToTime(state, hoverPoint.x, metrics) : null,
+      );
+    }
+    if (hoverCardClipId !== null || core.getState().tooltip?.kind === "clip") {
+      cancelHoverCard();
+      clearCardTooltip();
     }
   };
+  // Over the timeline columns (ruler, overview lane, rows), off the bars.
+  const overTimelineAt = (
+    state: import("../playlist-core").PlaylistState,
+    point: PlaylistPoint,
+    hit: PlaylistHit,
+  ): boolean =>
+    point.x >= metrics.trackHeaderWidth &&
+    point.x < state.viewport.width - metrics.scrollbarSize &&
+    point.y >= 0 &&
+    point.y < state.viewport.height - getHorizontalScrollbarHeight(metrics) &&
+    hit.kind !== "scrollbar-horizontal" &&
+    hit.kind !== "scrollbar-vertical";
 
   const handlePointerMove = (event: PointerEvent): void => {
     const state = core.getState();
@@ -1900,6 +1983,11 @@ export function createPlaylistInteractionController(
     }
 
     if (!activeGesture) {
+      if (event.pointerType !== "touch") {
+        hoverPoint.x = point.x;
+        hoverPoint.y = point.y;
+        hoverPointKnown = true;
+      }
       const hit = hitAt(point);
       setHoverFromHit(core, hit);
       // Info card: armed when the hovered clip changes (mouse / pen only;
@@ -1934,15 +2022,7 @@ export function createPlaylistInteractionController(
       // Hover-time indicator: the beat cell under the pointer over the
       // timeline columns (SET_HOVER_TIME is idempotent: one notify per cell).
       if (hoverTimeIndicator) {
-        const viewport = state.viewport;
-        const overTimeline =
-          point.x >= metrics.trackHeaderWidth &&
-          point.x < viewport.width - metrics.scrollbarSize &&
-          point.y >= 0 &&
-          point.y < viewport.height - getHorizontalScrollbarHeight(metrics) &&
-          hit.kind !== "scrollbar-horizontal" &&
-          hit.kind !== "scrollbar-vertical";
-        core.setHoverTime(overTimeline ? screenXToTime(state, point.x, metrics) : null);
+        core.setHoverTime(overTimelineAt(state, point, hit) ? screenXToTime(state, point.x, metrics) : null);
       }
       // F3: hover on the ruler emits a B.B.T tooltip; everywhere else the
       // tooltip is cleared. setTooltip short-circuits when the value
@@ -2757,7 +2837,16 @@ export function createPlaylistInteractionController(
     // in the list above, but it still sets snap/tooltip.
     clearDragOverlays(core);
 
+    const quickClipId =
+      onClipTap !== undefined &&
+      !pressDragged &&
+      !pressModified &&
+      activeGesture.kind === "clip-drag" &&
+      event.timeStamp - pressStartTime <= CLIP_TAP_MAX_MS
+        ? activeGesture.primaryClipId
+        : null;
     const tappedClipId =
+      onClipTap === undefined &&
       hoverCardDelayMs !== undefined &&
       event.pointerType === "touch" &&
       !pressDragged &&
@@ -2766,9 +2855,18 @@ export function createPlaylistInteractionController(
         : null;
     activeGesture = null;
     host.releasePointerCapture?.(event.pointerId);
-    setCursor(host, hitAt(resolvePoint(host, event)), null, core.getState().tool, toolCursors);
+    const releasePoint = resolvePoint(host, event);
+    setCursor(host, hitAt(releasePoint), null, core.getState().tool, toolCursors);
     if (createRequest) onCreateRequest?.(createRequest);
-    if (tappedClipId !== null) showClipCard(tappedClipId, resolvePoint(host, event));
+    if (tappedClipId !== null) showClipCard(tappedClipId, releasePoint);
+    if (quickClipId !== null) {
+      onClipTap!({
+        clipId: quickClipId,
+        time: screenXToTime(core.getState(), releasePoint.x, metrics),
+        point: releasePoint,
+        pointerType: event.pointerType,
+      });
+    }
   };
 
   // Pointer wheel / trackpad.
@@ -3373,6 +3471,7 @@ export function createPlaylistInteractionController(
   };
 
   const handlePointerLeave = (): void => {
+    hoverPointKnown = false;
     cancelHoverCard();
     core.setHoverTime(null);
     if (activeGesture) return;

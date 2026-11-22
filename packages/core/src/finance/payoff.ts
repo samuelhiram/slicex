@@ -15,6 +15,7 @@ import { installmentAmount, installmentsPaidOf, isFutureInstallmentPlan, remaini
 import { positiveMoney, roundMoney } from "./money";
 import { installmentOpeningDebt, loanOpeningDebt } from "./projection";
 import { intersectWindow } from "./recurrence";
+import { cardPaymentWindows, occurrenceEditDays, ruleSegments } from "./rules";
 import { DayCursor } from "./schedule";
 import type {
   CardPurchaseItem,
@@ -57,10 +58,19 @@ interface Source {
   firstNumber: number;
   /** Occurrences already processed. */
   taken: number;
+  /** CHARGE / fixed PAYMENT: one-occurrence amounts by day number (rules.ts edits), or null. */
+  edits: ReadonlyMap<number, number> | null;
 }
 
-function source(cursor: DayCursor, priority: number, role: Source["role"], amount: number, steady = false): Source {
-  return { cursor, priority, role, amount, steady, plan: null, firstNumber: 0, taken: 0 };
+function source(
+  cursor: DayCursor,
+  priority: number,
+  role: Source["role"],
+  amount: number,
+  steady = false,
+  edits: ReadonlyMap<number, number> | null = null,
+): Source {
+  return { cursor, priority, role, amount, steady, plan: null, firstNumber: 0, taken: 0, edits };
 }
 
 interface AccountInput {
@@ -174,11 +184,12 @@ function simulate(input: AccountInput, startDay: number, capDay: number): Totals
         break;
       }
       case CHARGE: {
-        if (next.amount === 0) break;
+        const amount = next.edits?.get(nextDay) ?? next.amount;
+        if (amount === 0) break;
         accrue(nextDay);
-        debt = roundMoney(debt + next.amount);
+        debt = roundMoney(debt + amount);
         if (!next.steady) candidate = null;
-        else if (statement) steadySinceCut = roundMoney(steadySinceCut + next.amount);
+        else if (statement) steadySinceCut = roundMoney(steadySinceCut + amount);
         break;
       }
       case CUT:
@@ -193,7 +204,7 @@ function simulate(input: AccountInput, startDay: number, capDay: number): Totals
           planned = statementDue;
           statementDue = 0;
         } else {
-          planned = next.amount;
+          planned = next.edits?.get(nextDay) ?? next.amount;
         }
         const applied = Math.min(planned, Math.max(0, debt));
         if (applied !== 0) {
@@ -262,23 +273,38 @@ function cardInput(
   }
   if (purchases) {
     for (const purchase of purchases) {
-      const amount = positiveMoney(purchase.amount);
-      if (amount === 0) continue;
-      const cursor = new DayCursor().startRecurrence(purchase.recurrence, range);
-      if (cursor.day > capDay) continue;
+      const edits = occurrenceEditDays(purchase);
+      // The whole schedule is steady or not; its segments (rule changes) share that.
       const steady = isSteady(purchase.recurrence, range.to);
-      sources.push(source(cursor, EVENT_TYPE_PRIORITY["credit-card-purchase"], CHARGE, amount, steady));
+      for (const segment of ruleSegments(purchase)) {
+        const amount = positiveMoney(segment.amount);
+        if (amount === 0 && edits === null) continue;
+        const cursor = new DayCursor().startRecurrence(segment.recurrence, range);
+        if (cursor.day > capDay) continue;
+        sources.push(source(cursor, EVENT_TYPE_PRIORITY["credit-card-purchase"], CHARGE, amount, steady, edits));
+      }
     }
   }
-  // "statement": each payment pays the pending statement (its amount is computed by `simulate`).
-  const planned = statement ? 0 : positiveMoney(card.paymentAmount ?? card.minimumPayment);
   const rec = card.recurrence;
-  const payWindow = statement || planned > 0 ? intersectWindow(rec.startDate, rec.endDate, range) : null;
   let paysPastCap = false;
-  if (payWindow) {
-    const cursor = new DayCursor().startMonthly(card.dueDay, payWindow);
-    if (cursor.day <= capDay) {
-      sources.push(source(cursor, EVENT_TYPE_PRIORITY["credit-card-payment"], PAYMENT, planned));
+  if (statement) {
+    // Each payment pays the pending statement (its amount is computed by `simulate`).
+    const payWindow = intersectWindow(rec.startDate, rec.endDate, range);
+    if (payWindow) {
+      const cursor = new DayCursor().startMonthly(card.dueDay, payWindow);
+      if (cursor.day <= capDay) {
+        sources.push(source(cursor, EVENT_TYPE_PRIORITY["credit-card-payment"], PAYMENT, 0));
+        paysPastCap = rec.endDate === undefined || rec.endDate > range.to;
+      }
+    }
+  } else {
+    // "fixed": one payment schedule per rule segment (the amount in force there), edits by day.
+    const edits = occurrenceEditDays(card);
+    for (const window of cardPaymentWindows(card, range)) {
+      if (window.amount === 0 && edits === null) continue;
+      const cursor = new DayCursor().startMonthly(card.dueDay, window);
+      if (cursor.day > capDay) continue;
+      sources.push(source(cursor, EVENT_TYPE_PRIORITY["credit-card-payment"], PAYMENT, window.amount, false, edits));
       paysPastCap = rec.endDate === undefined || rec.endDate > range.to;
     }
   }
@@ -287,10 +313,12 @@ function cardInput(
 
 function loanInput(loan: LoanItem, range: Range): AccountInput {
   const sources: Source[] = [];
-  const amount = positiveMoney(loan.paymentAmount);
-  if (amount > 0) {
-    const cursor = new DayCursor().startRecurrence(loan.recurrence, range);
-    sources.push(source(cursor, EVENT_TYPE_PRIORITY["loan-payment"], PAYMENT, amount));
+  const edits = occurrenceEditDays(loan);
+  for (const segment of ruleSegments(loan)) {
+    const amount = positiveMoney(segment.amount);
+    if (amount === 0 && edits === null) continue;
+    const cursor = new DayCursor().startRecurrence(segment.recurrence, range);
+    sources.push(source(cursor, EVENT_TYPE_PRIORITY["loan-payment"], PAYMENT, amount, false, edits));
   }
   // The MVP accrues no loan interest (annualRate is informative).
   return { opening: loanOpeningDebt(loan, range), rate: 0, sources, paysPastCap: true, statement: false };

@@ -62,6 +62,41 @@ export interface FinancialRecurrence {
   flexibleDay?: boolean;
 }
 
+/**
+ * "A partir de aquí": from `from` (inclusive) on, the item follows another
+ * rule — a new amount, a new cadence, or both — and stays the same item.
+ * See rules.ts for the segment semantics.
+ */
+export interface FinancialRuleChange {
+  /** First day the new rule is in force (inclusive). */
+  from: ISODate;
+  /**
+   * New planned amount per occurrence (income / expense / card purchase:
+   * `amount`; loan, credit card in "fixed" mode: `paymentAmount`). Absent:
+   * the amount in force before keeps going.
+   */
+  amount?: number;
+  /**
+   * New cadence from `from`. Absent: the cadence in force before keeps
+   * going, with its phase (paydays do not move). With a new cadence the
+   * phase restarts at `from` (its first occurrence; monthly: its day of the
+   * month). Ignored by credit cards (they pay on their due day) and MSI.
+   */
+  frequency?: RecurrenceFrequency;
+  /** "Cada N" of the new cadence (daily / monthly), like FinancialRecurrence.interval. */
+  interval?: number;
+}
+
+/**
+ * "Solo este pago": the occurrence scheduled on `date` carries `amount`
+ * (≥ 0; 0 = it does not happen this time) instead of the rule's. A date that
+ * is not an occurrence of the item changes nothing.
+ */
+export interface FinancialOccurrenceEdit {
+  date: ISODate;
+  amount: number;
+}
+
 export type FinancialItemKind =
   | "income"
   | "expense"
@@ -93,6 +128,17 @@ export interface FinancialItemBase {
    */
   lockDates?: boolean;
   recurrence: FinancialRecurrence;
+  /**
+   * Rule changes from a date on ("a partir de aquí"), one per date (rules.ts
+   * sorts them; the last of a date wins). Immutable: replace the array to
+   * change it (the event memo compares it by identity).
+   */
+  ruleChanges?: FinancialRuleChange[];
+  /**
+   * One-occurrence amount edits ("solo este pago"), one per date (the last
+   * of a date wins). Immutable like `ruleChanges`.
+   */
+  occurrenceEdits?: FinancialOccurrenceEdit[];
 }
 
 /** Adds `amount` to cash on every occurrence. */

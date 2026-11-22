@@ -50,9 +50,17 @@ import {
   type LiquidityWarning,
   type UpcomingPayment,
   debtByAccountAt,
+  diffDays,
+  editItemOccurrence,
+  canEditOccurrences,
+  isISODate,
+  type FinancialRecurrence,
   estimateDebtPayoffs,
+  shiftItemRules,
   type DebtPayoffEstimate,
+  type OccurrenceEditRequest,
 } from "@slicex/core";
+import { findOccurrence, type OccurrenceInfo } from "./occurrence";
 import {
   clipCardWidthPx,
   prefersReducedMotion,
@@ -279,6 +287,18 @@ function easeInOut(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
+/**
+ * Days the phase (anchor) of a rule moved between two versions of it: a
+ * move / slip of the clip. 0 when the anchor stayed (an edge crop) or a
+ * date is unreadable.
+ */
+function phaseShift(before: FinancialRecurrence, after: FinancialRecurrence): number {
+  const from = before.anchorDate ?? before.startDate;
+  const to = after.anchorDate ?? after.startDate;
+  if (from === to || !isISODate(from) || !isISODate(to)) return 0;
+  return diffDays(from, to);
+}
+
 function cloneItem<T extends FinancialItem>(item: T, id: string): T {
   const copy = JSON.parse(JSON.stringify(item)) as T;
   copy.id = id;
@@ -424,6 +444,14 @@ export class FinancialBridge implements FinancialBridgeApi {
   // Info cards of clips (hover / tap), per revision.
   private readonly infoCache = new Map<string, string | null>();
   private infoDay = Number.NaN;
+  // The info card with the payment under the pointer (getClipInfo + beat).
+  private cellInfo: {
+    clipId: string;
+    day: number;
+    content: PlaylistClipContent | null;
+    base: string;
+    text: string;
+  } | null = null;
   // Debt payoffs of a gesture's baseline (the "antes" of a goal-seek).
   private basePayoffs: { snapshot: DocSnapshot; value: Map<string, DebtPayoffEstimate> } | null =
     null;
@@ -957,19 +985,72 @@ export class FinancialBridge implements FinancialBridgeApi {
    * cadence, the next payment, how it ends. Cached per revision and clip:
    * O(1) per frame while it shows.
    */
-  getClipInfo(clipId: string): string | null {
+  getClipInfo(clipId: string, beat: number | null = null): string | null {
     // Its lines follow the playhead day (next payment, debt): per day too.
     const day = this.playheadDay();
     if (day !== this.infoDay) {
       this.infoCache.clear();
       this.infoDay = day;
     }
-    const cached = this.infoCache.get(clipId);
-    if (cached !== undefined) return cached;
-    const item = this.itemIndex.get(clipId);
-    const text = item ? this.describeClipInfo(item) : null;
-    this.infoCache.set(clipId, text);
+    let base = this.infoCache.get(clipId);
+    if (base === undefined) {
+      const item = this.itemIndex.get(clipId);
+      base = item ? this.describeClipInfo(item) : null;
+      this.infoCache.set(clipId, base);
+    }
+    if (base === null || beat === null || !Number.isFinite(beat)) return base;
+    // The payment under the pointer (its cell): one memo entry — the card
+    // shows one clip at a time; recomputed only when the cell's day, the
+    // clip's cells or its base lines change.
+    const content = this.getClipContent(clipId);
+    const cellDay = Math.floor(beat);
+    const memo = this.cellInfo;
+    if (
+      memo !== null &&
+      memo.clipId === clipId &&
+      memo.day === cellDay &&
+      memo.content === content &&
+      memo.base === base
+    ) {
+      return memo.text;
+    }
+    const line = this.describeCellAt(clipId, content, cellDay);
+    let text = base;
+    if (line !== null) {
+      // Right under the kind line (what the pointer points at comes first).
+      const lines = base.split("\n");
+      lines.splice(1, 0, line);
+      text = lines.join("\n");
+    }
+    this.cellInfo = { clipId, day: cellDay, content, base, text };
     return text;
+  }
+
+  // "Pago del 23 dic: −$550 · clic para cambiarlo" — the cell of `day`
+  // (the last payment on or before it), or null outside the payments.
+  private describeCellAt(
+    clipId: string,
+    content: PlaylistClipContent | null,
+    day: number,
+  ): string | null {
+    const cells = content?.cells;
+    const item = this.itemIndex.get(clipId);
+    if (!cells || !item) return null;
+    const beats = cells.beats;
+    let lo = 0;
+    let hi = beats.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (beats[mid]! <= day) lo = mid + 1;
+      else hi = mid;
+    }
+    const index = lo - 1;
+    if (index < 0) return null;
+    const date = dateOf(this.doc, beats[index]!);
+    const label = cells.labels[index] ?? "";
+    const changed = cells.strong?.[index] === true ? " (ajustado)" : "";
+    const action = canEditOccurrences(item) ? " · clic para cambiarlo" : "";
+    return `Pago del ${formatDateShort(date)}: ${label}${changed}${action}`;
   }
 
   private describeClipInfo(item: FinancialItem): string {
@@ -1378,6 +1459,20 @@ export class FinancialBridge implements FinancialBridgeApi {
     return true;
   }
 
+  occurrenceAt(clipId: string, beat: number): OccurrenceInfo | null {
+    const item = this.itemIndex.get(clipId);
+    if (!item || !Number.isFinite(beat)) return null;
+    return findOccurrence(this.doc, this.projection, item, dateOf(this.doc, Math.floor(beat)));
+  }
+
+  editOccurrence(itemId: string, request: OccurrenceEditRequest): boolean {
+    const item = this.itemIndex.get(itemId);
+    if (!item) return false;
+    const next = editItemOccurrence(item, request);
+    if (next === item) return false;
+    return this.replaceItem(next);
+  }
+
   deleteItem(id: string): boolean {
     const clip = this.findClip(id);
     if (!clip || !this.itemIndex.has(id) || this.isClipLocked(clip)) return false;
@@ -1589,6 +1684,9 @@ export class FinancialBridge implements FinancialBridgeApi {
       recurrence === item.recurrence ? item : ({ ...item, recurrence } as FinancialItem),
     );
     const lockDates = locked === lockDefault ? undefined : locked;
+    // The item moved in time (its phase moved): its rule changes and one-off
+    // edits move with it. Cropping an edge keeps the phase (and them).
+    const shift = recurrence === item.recurrence ? 0 : phaseShift(item.recurrence, recurrence);
 
     if (
       recurrence === item.recurrence &&
@@ -1600,7 +1698,7 @@ export class FinancialBridge implements FinancialBridgeApi {
     ) {
       return item;
     }
-    const next = { ...item, recurrence, name } as FinancialItem;
+    const next = { ...shiftItemRules(item, shift), recurrence, name } as FinancialItem;
     if (lockDates === undefined) delete next.lockDates;
     else next.lockDates = lockDates;
     if (payment !== undefined) (next as { paymentAmount?: number }).paymentAmount = payment;
@@ -1858,6 +1956,12 @@ export class FinancialBridge implements FinancialBridgeApi {
       geometry,
       base.recurrence.endDate === undefined,
     );
+    // A copy placed elsewhere in time carries its rule changes / edits along.
+    const moved = shiftItemRules(item, phaseShift(base.recurrence, item.recurrence));
+    if (moved !== item) {
+      item.ruleChanges = moved.ruleChanges;
+      item.occurrenceEdits = moved.occurrenceEdits;
+    }
     if (clip.muted === true || excludedTracks.has(clip.trackId)) item.enabled = false;
     else delete item.enabled;
     // A copy keeps its clip's lock; a generic stamp takes the default of

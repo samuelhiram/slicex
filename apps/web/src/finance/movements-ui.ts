@@ -10,6 +10,8 @@ import {
   addMonths,
   applyMovementEffect,
   isEmptyMovementEffect,
+  ruleSegmentAt,
+  withAmountInForce,
   type CreditCardItem,
   type FinancialDocument,
   type FinancialItem,
@@ -299,15 +301,22 @@ export const PLAN_TABS: ReadonlyArray<{ id: PlanTab; label: string; kinds: reado
   { id: "msi", label: "MSI", kinds: ["installment-plan"] },
 ];
 
-/** The amount a plan row shows and edits in place (null: not editable inline). */
-export function planAmountOf(item: FinancialItem): number | null {
+/**
+ * The amount a plan row shows and edits in place (null: not editable
+ * inline): with `today`, the payment of the rule in force that day (a rule
+ * change from a past date is today's amount).
+ */
+export function planAmountOf(item: FinancialItem, today?: ISODate): number | null {
   switch (item.kind) {
     case "income":
     case "expense":
     case "card-purchase":
-      return item.amount;
     case "loan":
-      return item.paymentAmount;
+      if (today !== undefined && item.recurrence.frequency !== "once") {
+        const amount = ruleSegmentAt(item, today).amount;
+        if (amount !== undefined) return amount;
+      }
+      return item.kind === "loan" ? item.paymentAmount : item.amount;
     case "credit-card":
       return item.balance;
     default:
@@ -315,8 +324,11 @@ export function planAmountOf(item: FinancialItem): number | null {
   }
 }
 
-/** The item with its inline amount set (see planAmountOf). */
-export function withPlanAmount(item: FinancialItem, amount: number): FinancialItem {
+/** The item with its inline amount set (see planAmountOf; `today`: the rule in force then). */
+export function withPlanAmount(item: FinancialItem, amount: number, today?: ISODate): FinancialItem {
+  if (today !== undefined && item.kind !== "credit-card" && item.kind !== "installment-plan" && item.recurrence.frequency !== "once") {
+    return withAmountInForce(item, today, amount);
+  }
   switch (item.kind) {
     case "income":
     case "expense":

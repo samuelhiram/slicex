@@ -73,6 +73,24 @@ export const FinancialRecurrenceSchema = z
     }
   });
 
+/** "A partir de aquí": the rule an item follows from `from` on (@slicex/core FinancialRuleChange). */
+export const FinancialRuleChangeSchema = z.object({
+  from: ISODateSchema,
+  amount: MoneySchema.optional(),
+  frequency: RecurrenceFrequencySchema.optional(),
+  interval: number()
+    .int("Debe ser un entero")
+    .min(1, "Debe ser 1 o más")
+    .max(MAX_INTERVAL, "Demasiado grande")
+    .optional(),
+});
+
+/** "Solo este pago": the amount of one occurrence (@slicex/core FinancialOccurrenceEdit). */
+export const FinancialOccurrenceEditSchema = z.object({
+  date: ISODateSchema,
+  amount: MoneySchema,
+});
+
 export const FinancialItemKindSchema = z.enum([
   "income",
   "expense",
@@ -101,6 +119,8 @@ const base = {
   icon: ItemIconSchema.optional(),
   lockDates: z.boolean().optional(),
   recurrence: FinancialRecurrenceSchema,
+  ruleChanges: z.array(FinancialRuleChangeSchema).optional(),
+  occurrenceEdits: z.array(FinancialOccurrenceEditSchema).optional(),
 };
 
 export const IncomeItemSchema = z.object({ ...base, kind: z.literal("income"), amount: MoneySchema });

@@ -15,6 +15,7 @@ import {
   createDemoFinancialDocument,
   debtByAccountAt,
   diffDays,
+  editItemOccurrence,
   findLiquidityWarnings,
   nextPayment,
   projectFinancialDocument,
@@ -24,11 +25,14 @@ import {
   type FinancialItemKind,
   type FinancialProjectionPoint,
   type MovementEffect,
+  type OccurrenceEditRequest,
 } from "@slicex/core";
 import type { PlaylistCore } from "@slicex/canvas";
 import type { FinancialBridgeApi } from "../src/finance/bridge-api";
 import { MoneySchema, SignedMoneySchema } from "@slicex/contracts";
 import { formatMoneyWhole } from "../src/finance/format";
+import { findOccurrence } from "../src/finance/occurrence";
+import { OccurrenceCard } from "../src/finance/components/OccurrenceCard";
 import { InlineNumberInput } from "../src/finance/components/FinancialUi";
 import {
   FinancialEditorModal,
@@ -124,6 +128,18 @@ function createFakeBridge(initial: FinancialDocument, options: FakeOptions = {})
       if (options.failWrites || locked.has(id)) return false;
       if (!doc.items.some((i) => i.id === id)) return false;
       commit({ ...doc, items: doc.items.filter((i) => i.id !== id) });
+      return true;
+    }),
+    occurrenceAt: (clipId: string, beat: number) => {
+      const item = doc.items.find((i) => i.id === clipId);
+      return item ? findOccurrence(doc, projection, item, addDays(doc.startDate, Math.floor(beat))) : null;
+    },
+    editOccurrence: vi.fn((itemId: string, request: OccurrenceEditRequest) => {
+      const item = doc.items.find((i) => i.id === itemId);
+      if (!item || options.failWrites || locked.has(itemId)) return false;
+      const next = editItemOccurrence(item, request);
+      if (next === item) return false;
+      commit({ ...doc, items: doc.items.map((i) => (i.id === itemId ? next : i)) });
       return true;
     }),
     isItemLocked: (id: string) => locked.has(id),
@@ -1641,5 +1657,132 @@ describe("InlineNumberInput: useField + a shared schema, never dropped silently"
     typeInto(input, "-1,500");
     pressKey(input, "Enter");
     expect(onCommit).toHaveBeenCalledWith(-1500);
+  });
+});
+
+// --- OccurrenceCard: one payment of an item --------------------------------------
+
+describe("OccurrenceCard", () => {
+  const gasDoc = (): FinancialDocument => ({
+    id: "occ",
+    name: "occ",
+    startDate: "2026-11-21",
+    initialCash: 5000,
+    minimumCashReserve: 0,
+    horizonMonths: 3,
+    items: [
+      {
+        id: "gas",
+        kind: "expense",
+        name: "Gas",
+        amount: 800,
+        recurrence: { frequency: "weekly", startDate: "2026-11-27" },
+      },
+    ],
+  });
+  // 4 dic is beat 13 (21 nov = 0); a click on 6 dic lands in that cell.
+  const target = { clipId: "gas", beat: 15.5, clientX: 100, clientY: 100 };
+
+  function open(bridge: FinancialBridgeApi, onOpenEditor = vi.fn()) {
+    const onClose = vi.fn();
+    mount(h(OccurrenceCard, { bridge, target, onClose, onOpenEditor }));
+    return { onClose, onOpenEditor, card: document.querySelector(".fin-occ") as HTMLElement };
+  }
+
+  it("opens on the payment of the cell, its amount ready to type over", () => {
+    const { bridge } = createFakeBridge(gasDoc());
+    const { card } = open(bridge);
+    expect(card.textContent).toContain("Gas");
+    expect(card.textContent).toContain("vie 4 dic 2026 · pago 2 de");
+    const input = card.querySelector<HTMLInputElement>(".fin-occ__input")!;
+    expect(input.value).toBe("800");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("'Solo este pago' (Enter) changes only that payment, one item", () => {
+    const { bridge } = createFakeBridge(gasDoc());
+    const { card, onClose } = open(bridge);
+    const input = card.querySelector<HTMLInputElement>(".fin-occ__input")!;
+    typeInto(input, "400");
+    pressKey(input, "Enter");
+    expect(bridge.editOccurrence).toHaveBeenCalledWith("gas", { date: "2026-12-04", scope: "this", amount: 400 });
+    expect(bridge.getDocument().items).toHaveLength(1);
+    expect(bridge.getItem("gas")!.occurrenceEdits).toEqual([{ date: "2026-12-04", amount: 400 }]);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("‹ › and Alt+← / Alt+→ walk to the previous / next payment (none before the first)", () => {
+    const { bridge } = createFakeBridge(gasDoc());
+    const onNavigate = vi.fn();
+    mount(h(OccurrenceCard, { bridge, target, onClose: vi.fn(), onOpenEditor: vi.fn(), onNavigate }));
+    const card = document.querySelector(".fin-occ") as HTMLElement;
+    const named = (label: string) => card.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+    click(named("Pago siguiente"));
+    // 4 dic → 11 dic: beat 20 (21 nov = 0).
+    expect(onNavigate).toHaveBeenLastCalledWith({ ...target, beat: 20 });
+    pressKey(card.querySelector<HTMLInputElement>(".fin-occ__input")!, "ArrowLeft", { altKey: true });
+    expect(onNavigate).toHaveBeenLastCalledWith({ ...target, beat: 6 });
+    // On the first payment (27 nov) there is nothing before.
+    unmount();
+    document.body.innerHTML = "";
+    mount(h(OccurrenceCard, { bridge, target: { ...target, beat: 6 }, onClose: vi.fn(), onOpenEditor: vi.fn(), onNavigate }));
+    const first = document.querySelector(".fin-occ") as HTMLElement;
+    expect(first.querySelector<HTMLButtonElement>('button[aria-label="Pago anterior"]')!.disabled).toBe(true);
+  });
+
+  it("text that is not an amount says so; Enter keeps the card open and changes nothing", () => {
+    const { bridge } = createFakeBridge(gasDoc());
+    const { card, onClose } = open(bridge);
+    const input = card.querySelector<HTMLInputElement>(".fin-occ__input")!;
+    typeInto(input, "gasolina");
+    expect(card.querySelector(".fin-occ__error")!.textContent).toBe("Escribe un monto válido");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    pressKey(input, "Enter");
+    expect(bridge.editOccurrence).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.querySelector(".fin-occ")).not.toBeNull();
+  });
+
+  it("another cadence switches to 'Este y los siguientes' and changes the rule from there", () => {
+    const { bridge } = createFakeBridge(gasDoc());
+    const { card } = open(bridge);
+    expect(card.querySelector(".fin-repeat")).toBeNull();
+    click(mustButton(card, "Este y los siguientes"));
+    click(mustButton(card, "Cada quincena"));
+    expect(mustButton(card, "Solo este pago").disabled).toBe(true);
+    typeInto(card.querySelector<HTMLInputElement>(".fin-occ__input")!, "1500");
+    click(mustButton(card, "Aplicar"));
+    expect(bridge.getItem("gas")!.ruleChanges).toEqual([{ from: "2026-12-04", amount: 1500, frequency: "semimonthly" }]);
+  });
+
+  it("an edited payment offers to go back to the rule", () => {
+    const doc = gasDoc();
+    (doc.items[0] as FinancialItem).occurrenceEdits = [{ date: "2026-12-04", amount: 0 }];
+    const { bridge } = createFakeBridge(doc);
+    const { card } = open(bridge);
+    expect(card.textContent).toContain("Ajustaste este pago");
+    click(mustButton(card, "Volver a $800"));
+    expect(bridge.getItem("gas")!.occurrenceEdits).toBeUndefined();
+  });
+
+  it("an MSI installment is read-only and offers the form", () => {
+    const doc = gasDoc();
+    doc.items = [
+      {
+        id: "gas",
+        kind: "installment-plan",
+        name: "Laptop",
+        originalAmount: 12000,
+        installmentsTotal: 12,
+        installmentsPaid: 0,
+        recurrence: { frequency: "monthly", startDate: "2026-12-04" },
+      },
+    ];
+    const { bridge } = createFakeBridge(doc);
+    const { card, onOpenEditor } = open(bridge);
+    expect(card.querySelector(".fin-occ__input")).toBeNull();
+    expect(card.textContent).toContain("meses sin intereses");
+    click(mustButton(card, "Editar objeto…"));
+    expect(onOpenEditor).toHaveBeenCalledWith("gas");
   });
 });

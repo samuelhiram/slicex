@@ -6,16 +6,24 @@
 import {
   accountActivity,
   cardCycleDates,
+  itemRuleAmount,
+  occurrenceEditAmounts,
+  ruleOccurrenceDates,
+  ruleSegmentAt,
+  ruleSegments,
+  sortedRuleChanges,
   summarizeProjection,
   toDayNumber,
   type DebtPayoffEstimate,
   type FinancialDocument,
+  type FinancialEventType,
   type FinancialItem,
   type FinancialProjection,
   type ISODate,
   type LiquidityWarning,
 } from "@slicex/core";
 import type {
+  PlaylistClipCells,
   PlaylistClipContent,
   PlaylistDragAnnotation,
   PlaylistOverviewAnnotation,
@@ -376,8 +384,22 @@ function sameNumbers(a: readonly number[], b: readonly number[]): boolean {
 
 const NO_MARKS: readonly number[] = [];
 
+function sameCells(a: PlaylistClipCells | undefined, b: PlaylistClipCells | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (!sameNumbers(a.beats, b.beats) || a.labels.length !== b.labels.length) return false;
+  for (let i = 0; i < a.labels.length; i += 1) if (a.labels[i] !== b.labels[i]) return false;
+  const sa = a.strong;
+  const sb = b.strong;
+  if (sa === sb) return true;
+  if (!sa || !sb || sa.length !== sb.length) return false;
+  for (let i = 0; i < sa.length; i += 1) if (sa[i] !== sb[i]) return false;
+  return true;
+}
+
 function sameContent(a: PlaylistClipContent, b: PlaylistClipContent): boolean {
   if (!sameNumbers(a.marks ?? NO_MARKS, b.marks ?? NO_MARKS)) return false;
+  if (!sameCells(a.cells, b.cells)) return false;
   if (a.accent !== b.accent) return false;
   if (a.kind === "events" && b.kind === "events") {
     return (
@@ -507,11 +529,185 @@ export function buildClipContents(
     contents.set(id, content);
   }
 
+  // Payments set to 0 one by one ("este no lo pago"): the cell stays, its
+  // mark dashed like a guide (the projection has no point for them). Not on
+  // cards: their guide marks are the billing cuts.
+  for (const item of doc.items) {
+    const edits = item.occurrenceEdits;
+    if (!edits || edits.length === 0 || item.kind === "credit-card" || item.recurrence.frequency === "once") continue;
+    let skipped: number[] | null = null;
+    for (const edit of edits) {
+      if (!edit || edit.amount !== 0 || edit.date < projection.startDate || edit.date > projection.endDate) continue;
+      if (ruleOccurrenceDates(item, { from: edit.date, to: edit.date }).length === 0) continue;
+      (skipped ??= []).push(beatAt(edit.date) + EVENT_DAY_OFFSET);
+    }
+    if (skipped === null) continue;
+    skipped.sort((a, b) => a - b);
+    const content = contents.get(item.id);
+    if (content) {
+      const marks = content.marks ? [...content.marks, ...skipped].sort((a, b) => a - b) : skipped;
+      contents.set(item.id, { ...content, marks });
+    } else {
+      const fresh: PlaylistClipContent = { kind: "events", beats: [], values: [], marks: skipped };
+      if (KIND_ACCENT[item.kind] !== "solid") fresh.accent = KIND_ACCENT[item.kind];
+      contents.set(item.id, fresh);
+    }
+  }
+
+  // Each payment's amount written in its cell ("−$550"), see buildCells.
+  for (const [id, cells] of buildCells(doc, projection, beatAt, itemById)) {
+    const content = contents.get(id);
+    if (content) {
+      contents.set(id, { ...content, cells });
+      continue;
+    }
+    // A recurring card purchase books on its card: its own clip gets a mark
+    // per charge with its amount.
+    const item = itemById.get(id);
+    const fresh: PlaylistClipContent = {
+      kind: "events",
+      beats: cells.beats,
+      values: cells.beats.map(() => -0.6),
+      cells,
+    };
+    if (item && KIND_ACCENT[item.kind] !== "solid") fresh.accent = KIND_ACCENT[item.kind];
+    contents.set(id, fresh);
+  }
+
   for (const [id, content] of contents) {
     const old = previous.get(id);
     if (old && sameContent(old, content)) contents.set(id, old);
   }
   return contents;
+}
+
+/** Event types that are an item's own payments / charges: one cell each. */
+const CELL_TYPES: ReadonlySet<FinancialEventType> = new Set<FinancialEventType>([
+  "income",
+  "expense",
+  "loan-payment",
+  "credit-card-payment",
+  "credit-card-purchase",
+  "installment-payment",
+]);
+
+/** "+$11,000" / "−$550" / "$0" by signed whole pesos (amounts repeat: cached). */
+const cellLabelCache = new Map<number, string>();
+function cellLabel(signed: number): string {
+  const key = Math.round(signed);
+  let label = cellLabelCache.get(key);
+  if (label === undefined) {
+    if (cellLabelCache.size > 4096) cellLabelCache.clear();
+    label = key === 0 ? "$0" : `${key > 0 ? "+" : "−"}${formatMoneyWhole(Math.abs(key))}`;
+    cellLabelCache.set(key, label);
+  }
+  return label;
+}
+
+/**
+ * Cells of every recurring item: one per payment / charge the projection
+ * applied (what really moves: a loan's last payment capped at what is owed,
+ * a "statement" card's statement), signed by direction, plus the payments
+ * set to 0 one by one ("$0"). Emphasised: the payments that differ from
+ * their rule — a one-off edit — and the first payment of a rule change. A
+ * one-time item has no cells (its label carries its amount).
+ */
+function buildCells(
+  doc: FinancialDocument,
+  projection: FinancialProjection,
+  beatAt: (date: ISODate) => number,
+  itemById: ReadonlyMap<string, FinancialItem>,
+): Map<string, PlaylistClipCells> {
+  const beatsBy = new Map<string, number[]>();
+  const amountsBy = new Map<string, number[]>();
+  const datesBy = new Map<string, ISODate[]>();
+  for (const point of projection.points) {
+    if (!CELL_TYPES.has(point.type)) continue;
+    const item = itemById.get(point.itemId);
+    if (!item || isOneTime(item)) continue;
+    const signed = point.cashDelta !== 0 ? point.cashDelta : -Math.abs(point.debtDelta);
+    const beat = beatAt(point.date) + EVENT_DAY_OFFSET;
+    let beats = beatsBy.get(item.id);
+    let amounts = amountsBy.get(item.id);
+    let dates = datesBy.get(item.id);
+    if (!beats || !amounts || !dates) {
+      beats = [];
+      amounts = [];
+      dates = [];
+      beatsBy.set(item.id, beats);
+      amountsBy.set(item.id, amounts);
+      datesBy.set(item.id, dates);
+    }
+    // Two events of one item on one day (rare): one cell, their sum.
+    if (beats.length > 0 && beats[beats.length - 1] === beat) {
+      amounts[amounts.length - 1] += signed;
+    } else {
+      beats.push(beat);
+      amounts.push(signed);
+      dates.push(point.date);
+    }
+  }
+
+  const out = new Map<string, PlaylistClipCells>();
+  for (const item of doc.items) {
+    if (isOneTime(item)) continue;
+    let beats = beatsBy.get(item.id) ?? [];
+    let amounts = amountsBy.get(item.id) ?? [];
+    let dates = datesBy.get(item.id) ?? [];
+    const edits = occurrenceEditAmounts(item);
+    const changes = sortedRuleChanges(item);
+    // Payments set to 0: no point in the projection, still a cell.
+    if (edits !== null && item.kind !== "credit-card") {
+      const skipped: ISODate[] = [];
+      for (const [date, amount] of edits) {
+        if (amount !== 0 || date < projection.startDate || date > projection.endDate) continue;
+        if (ruleOccurrenceDates(item, { from: date, to: date }).length === 0) continue;
+        skipped.push(date);
+      }
+      if (skipped.length > 0) {
+        const merged = dates.map((date, i) => ({ date, beat: beats[i]!, amount: amounts[i]! }));
+        for (const date of skipped) merged.push({ date, beat: beatAt(date) + EVENT_DAY_OFFSET, amount: 0 });
+        merged.sort((a, b) => a.beat - b.beat);
+        beats = merged.map((m) => m.beat);
+        amounts = merged.map((m) => m.amount);
+        dates = merged.map((m) => m.date);
+      }
+    }
+    if (beats.length === 0) continue;
+    const labels = amounts.map(cellLabel);
+    const cells: PlaylistClipCells = { beats, labels };
+    if (edits !== null || changes.length > 0) {
+      const marked = new Set<ISODate>();
+      if (edits !== null) for (const date of edits.keys()) marked.add(date);
+      for (const change of changes) marked.add(change.from);
+      if (marked.size > 0) cells.strong = dates.map((date) => marked.has(date));
+    }
+    out.set(item.id, cells);
+  }
+  return out;
+}
+
+/** A one-time income / expense / purchase / loan payment (cards and MSI repeat by definition). */
+function isOneTime(item: FinancialItem): boolean {
+  return item.recurrence.frequency === "once" && item.kind !== "credit-card" && item.kind !== "installment-plan";
+}
+
+/**
+ * The amount and cadence in force on `date` ("+$9,000 /quincena"), and the
+ * next rule change after it when there is one ("→ $12,000 (12 dic)").
+ */
+function ruleText(item: FinancialItem, date: ISODate, sign: "+" | "−"): string {
+  const segment = ruleSegmentAt(item, date);
+  const amount = segment.amount ?? itemRuleAmount(item) ?? 0;
+  let text = `${sign}${formatMoney(amount)} ${frequencyShort(segment.recurrence)}`;
+  const next = ruleSegments(item).find((candidate) => candidate.from > date && candidate.change !== undefined);
+  if (next) {
+    const nextAmount = next.amount ?? amount;
+    const cadence = next.recurrence.frequency !== segment.recurrence.frequency || next.recurrence.interval !== segment.recurrence.interval;
+    const what = cadence ? `${sign}${formatMoney(nextAmount)} ${frequencyShort(next.recurrence)}` : `${sign}${formatMoney(nextAmount)}`;
+    text += ` → ${what} (${formatDateShort(next.from)})`;
+  }
+  return text;
 }
 
 // --- playhead-aware clip detail -------------------------------------------
@@ -523,7 +719,6 @@ export function describeItemAt(
   date: ISODate,
   debtAt: ReadonlyMap<string, number>,
 ): string {
-  const freq = frequencyShort(item.recurrence);
   // A one-time event is a narrow card: just the amount, whole pesos (the
   // editor shows the cents), so it fits instead of being cut.
   const once = item.recurrence.frequency === "once";
@@ -533,25 +728,21 @@ export function describeItemAt(
   const At = at ? `Al ${formatDateShort(date)}: ` : "";
   switch (item.kind) {
     case "income":
-      return once
-        ? `+${formatMoneyWhole(item.amount)}`
-        : `+${formatMoney(item.amount)} ${freq}`;
+      return once ? `+${formatMoneyWhole(item.amount)}` : ruleText(item, date, "+");
     case "expense":
-      return once
-        ? `−${formatMoneyWhole(item.amount)}`
-        : `−${formatMoney(item.amount)} ${freq}`;
+      return once ? `−${formatMoneyWhole(item.amount)}` : ruleText(item, date, "−");
     case "card-purchase": {
       // An outflow too: "−", and the card it is charged to.
       const card = doc.items.find((candidate) => candidate.id === item.cardId);
+      const amount = once ? item.amount : (ruleSegmentAt(item, date).amount ?? item.amount);
       return card
-        ? `−${formatMoney(item.amount)} con ${card.name}`
-        : `−${formatMoney(item.amount)} (sin tarjeta)`;
+        ? `−${formatMoney(amount)} con ${card.name}`
+        : `−${formatMoney(amount)} (sin tarjeta)`;
     }
     case "loan": {
       const debt = debtAt.get(item.id);
-      return debt !== undefined && debt > 0
-        ? `−${formatMoney(item.paymentAmount)} ${freq} · ${at}resta ${formatMoneyWhole(debt)}`
-        : `−${formatMoney(item.paymentAmount)} ${freq}`;
+      const rule = ruleText(item, date, "−");
+      return debt !== undefined && debt > 0 ? `${rule} · ${at}resta ${formatMoneyWhole(debt)}` : rule;
     }
     case "credit-card": {
       const debt = debtAt.get(item.id) ?? item.balance;
@@ -569,7 +760,7 @@ export function describeItemAt(
       if (debt <= 0.5) return `${At ? `${At}liquidada` : "Liquidada"} · tasa ${item.annualRate}%`;
       // Of a typical monthly payment, how much only feeds the interest
       // (a month of interest on today's balance, same 360-day basis).
-      const payment = item.paymentAmount ?? item.minimumPayment;
+      const payment = ruleSegmentAt(item, date).amount ?? item.paymentAmount ?? item.minimumPayment;
       const monthlyInterest = (debt * item.annualRate) / 100 / 12;
       let interest = "";
       if (payment > 0 && monthlyInterest > 0) {

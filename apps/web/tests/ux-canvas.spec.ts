@@ -24,6 +24,7 @@ import {
   type PlaylistRendererCallbacks,
 } from "@slicex/canvas";
 import { FinancialBridge, levelText } from "../src/finance/financial-bridge";
+import { formatDateShort } from "../src/finance/format";
 import { createFinancialPlaylistState, beatOf } from "../src/finance/mapping";
 import { KIND_ACCENT, KIND_COLORS, derivedRowTitle } from "../src/finance/labels";
 import {
@@ -227,6 +228,24 @@ describe("UX-25 — the info card's lines (cached per revision and day)", () => 
     expect(nu).toMatch(/Libre en|No se liquida/);
     bridge.destroy();
   });
+
+  it("with the beat under the pointer it names that payment, right under the kind line", () => {
+    const doc = createDemoFinancialDocument(TODAY);
+    const core = createPlaylistCore(createFinancialPlaylistState(doc));
+    const bridge = new FinancialBridge(core, doc);
+    const cells = bridge.getClipContent("fin-sueldo")!.cells!;
+    const beat = cells.beats[1]! + 1;
+    const info = bridge.getClipInfo("fin-sueldo", beat)!;
+    const lines = info.split("\n");
+    expect(lines[1]).toBe(
+      `Pago del ${formatDateShort(bridge.dateAtBeat(cells.beats[1]!))}: ${cells.labels[1]} · clic para cambiarlo`,
+    );
+    // The same cell: the same string; no beat: the plain card.
+    expect(bridge.getClipInfo("fin-sueldo", beat + 0.5)).toBe(info);
+    expect(bridge.getClipInfo("fin-sueldo", null)).toBe(bridge.getClipInfo("fin-sueldo"));
+    expect(bridge.getClipInfo("fin-sueldo", null)!.includes("Pago del")).toBe(false);
+    bridge.destroy();
+  });
 });
 
 describe("UX-44 — rows are titled after what they hold (live, never stored)", () => {
@@ -396,7 +415,7 @@ describe("UX-04 — keyboard only: open Sueldo, change it, save; delete Gasto", 
     act(() => save.click());
     expect(document.querySelector(".fin-editor")).toBeNull();
     // Saved: the clip's info card (the bridge, through the renderer) says so.
-    const info = hoisted.rendererCallbacks.at(-1)!.getClipInfo!("fin-sueldo")!;
+    const info = hoisted.rendererCallbacks.at(-1)!.getClipInfo!("fin-sueldo", null)!;
     expect(info.split("\n")[0]).toMatch(/^Ingreso · \+\$21,000/);
     // Back on the canvas: walk to Gasto and delete it with Supr.
     act(() => host.focus());
@@ -513,6 +532,23 @@ describe("UX-16 / UX-57 / UX-60 — tools, their mode and the single-key shortcu
     act(() => host.focus());
     press(host, "/");
     expect(document.querySelector(".fin-command")).not.toBeNull();
+  });
+
+  it("the object's menu offers its payment there ('Cambiar el pago del …'): the keyboard's way to the card", async () => {
+    const { core, host } = await mountShell();
+    act(() => host.focus());
+    press(host, "ArrowRight", { altKey: true });
+    expect(selected(core)).not.toBeNull();
+    press(host, "ContextMenu");
+    const item = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) =>
+      /^(Cambiar|Ver) el pago del \d{1,2} [a-z]{3}…$/.test(b.textContent?.trim() ?? ""),
+    );
+    expect(item).toBeDefined();
+    act(() => item!.click());
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    const card = document.querySelector<HTMLElement>(".fin-occ")!;
+    expect(card).not.toBeNull();
+    expect(card.textContent).toMatch(/pago \d+ de \d+/);
   });
 
   it("'Ver mi año sin esto' from the menu stays until Listo, the plan untouched", async () => {

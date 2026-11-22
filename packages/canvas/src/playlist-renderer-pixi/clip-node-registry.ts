@@ -247,6 +247,29 @@ interface ClipNode {
   periodBgKey: number;
   periodMeasured: string;
   periodTextWidth: number;
+  // Cell labels (content.cells): pooled Text, created on demand and never
+  // destroyed (same rule as the other labels); the first `cellsUsed` show.
+  cellTexts: Text[];
+  // Each cell label's halo colour (the card's fill): a line drawn through
+  // the bar (a debt's balance) never crosses the amount.
+  cellHalos: number[];
+  cellsUsed: number;
+  // What the cells were last laid out for: the content, the clip's screen x
+  // / start / width / height and the visible span. A frame with the same
+  // values does nothing (a vertical scroll only moves the container).
+  cellsContent: PlaylistClipContent | null;
+  cellsX: number;
+  cellsStart: number;
+  cellsWidth: number;
+  cellsHeight: number;
+  cellsLeft: number;
+  cellsRight: number;
+  cellsMuted: boolean;
+  // The cell under the pointer (-1: none) and its glow: its own Graphics,
+  // created the first time a cell of this clip is hovered, just above the
+  // body (under the outline and the labels).
+  cellsHover: number;
+  cellGlow: Graphics | null;
   // Visual hash captures everything that would force a redraw. Position and
   // size are kept separate so we can skip a redraw when only x/y changed.
   hash: string;
@@ -1250,6 +1273,53 @@ function hideText(t: Text | null): void {
   if (t) t.visible = false;
 }
 
+// Cell labels (content.cells): type size by the bar's height, the room a
+// label needs per character (a cheap estimate: no measuring per frame), and
+// the bar height under which none is written.
+const CELL_FONT_SIZE = 12;
+const CELL_FONT_SIZE_SMALL = 11;
+const CELL_TALL_BAND = 28;
+const CELL_MIN_BAND = 12;
+const CELL_CHAR_RATIO = 0.6;
+const CELL_PAD_X = 4;
+const CELL_PAD_Y = 1;
+// A plain cell's label is quieter than an emphasised one.
+const CELL_TEXT_ALPHA = 0.78;
+// Halo of a cell label (the card's fill, 2 px out): wide enough to bridge
+// the gaps between glyphs, so a balance line under the amount never reads
+// as a strike-through.
+const CELL_HALO_WIDTH = 4;
+
+// The hovered cell's glow: a wash of the clip's colour over the cell's span
+// plus a brighter line on its mark; its label is written at full strength.
+const CELL_GLOW_ALPHA = 0.22;
+const CELL_GLOW_MARK_WIDTH = 3;
+
+/** Hides the cell labels from `from` on (the ones shown last frame). */
+function hideCells(node: ClipNode, from: number): void {
+  for (let i = from; i < node.cellsUsed; i += 1) node.cellTexts[i]!.visible = false;
+  node.cellsUsed = from;
+}
+
+function hideCellGlow(node: ClipNode): void {
+  node.cellsHover = -1;
+  if (node.cellGlow) node.cellGlow.visible = false;
+}
+
+/**
+ * The cell of `beats` holding `time` (the last one starting at or before
+ * it), or -1: no time, or before the first cell / past the clip's end.
+ */
+export function cellIndexAt(
+  beats: readonly number[],
+  time: number | null,
+  clipStart: number,
+  clipEnd: number,
+): number {
+  if (time === null || time < clipStart || time >= clipEnd) return -1;
+  return sortedUpperBound(beats, time + 1e-9) - 1;
+}
+
 function applyText(
   text: Text,
   value: string,
@@ -1268,7 +1338,18 @@ function applyText(
 export interface ClipNodeRegistry {
   // `stickyLeft`: screen x of the visible timeline's left edge; titles of
   // clips starting before it stick to it (default: no sticking).
-  syncFrame(parent: Container, views: PlaylistClipPresentation[], stickyLeft?: number): void;
+  // `visibleRight`: screen x of its right edge (cell labels are only laid
+  // out inside [stickyLeft, visibleRight]; default: no limit).
+  // `hoverClipId` / `hoverTime`: the clip and the beat under the pointer;
+  // the cell of that clip holding that beat glows (none: null).
+  syncFrame(
+    parent: Container,
+    views: PlaylistClipPresentation[],
+    stickyLeft?: number,
+    visibleRight?: number,
+    hoverClipId?: string | null,
+    hoverTime?: number | null,
+  ): void;
   // Screen rect of the lock button drawn on `clipId` in the last frame
   // (fills `out`), or null when it shows none (off-screen, too narrow, no
   // providers.timeLock). O(1). The controller's clipTimeLock.rectOf.
@@ -1994,16 +2075,185 @@ export function createClipNodeRegistry(
       periodMeasured: "",
       periodTextWidth: 0,
 
+      cellTexts: [],
+      cellHalos: [],
+      cellsUsed: 0,
+      cellsContent: null,
+      cellsX: Number.NaN,
+      cellsStart: Number.NaN,
+      cellsWidth: -1,
+      cellsHeight: -1,
+      cellsLeft: Number.NaN,
+      cellsRight: Number.NaN,
+      cellsMuted: false,
+      cellsHover: -1,
+      cellGlow: null,
+
       hash: "",
       width: 0,
       height: 0,
     };
   }
 
+  // Cell labels (content.cells): the amount of each payment written at the
+  // top of its cell, right of its mark. Only the cells inside the visible
+  // span are laid out (binary search to the first one), each only when its
+  // label fits before the next mark; the label of a cell whose start is
+  // scrolled out sticks to the visible left edge. Pooled Text, no
+  // allocation in steady frames: a frame whose inputs match the last
+  // layout returns at once.
+  function placeCells(
+    node: ClipNode,
+    view: PlaylistClipPresentation,
+    content: PlaylistClipContent | null,
+    bodyTop: number,
+    visibleLeft: number,
+    visibleRight: number,
+    // The beat under the pointer when this clip is the hovered one.
+    hoverTime: number | null,
+  ): void {
+    const cells = content?.cells;
+    const width = view.rect.width;
+    const height = view.rect.height;
+    const bandHeight = height - bodyTop;
+    const inset = bandHeight >= 16 ? CLIP_ACCENT_INSET : 1;
+    const band = bandHeight - inset * 2;
+    if (!cells || cells.beats.length === 0 || band < 4 || width < 24) {
+      hideCells(node, 0);
+      hideCellGlow(node);
+      node.cellsContent = null;
+      return;
+    }
+    const x = node.container.x;
+    const muted = view.effectivelyMuted;
+    const start = view.clip.start;
+    const beats = cells.beats;
+    const hover = cellIndexAt(beats, hoverTime, start, start + view.clip.duration);
+    if (
+      node.cellsContent === content &&
+      node.cellsX === x &&
+      node.cellsStart === start &&
+      node.cellsWidth === width &&
+      node.cellsHeight === height &&
+      node.cellsLeft === visibleLeft &&
+      node.cellsRight === visibleRight &&
+      node.cellsMuted === muted &&
+      node.cellsHover === hover
+    ) {
+      return;
+    }
+    node.cellsContent = content;
+    node.cellsX = x;
+    node.cellsStart = start;
+    node.cellsWidth = width;
+    node.cellsHeight = height;
+    node.cellsLeft = visibleLeft;
+    node.cellsRight = visibleRight;
+    node.cellsMuted = muted;
+    node.cellsHover = hover;
+
+    const labels = cells.labels;
+    const strong = cells.strong;
+    const count = Math.min(beats.length, labels.length);
+    const pxPerBeat = width / Math.max(view.clip.duration, 1e-9);
+    const contentLeft = contentLeftPx(width, bandHeight);
+    // An emphasised label takes the clip's own colour (cardFillOf keeps it).
+    cardFillOf(node, view);
+    const ink = node.clipHue;
+    const bandTop = bodyTop + inset;
+    // The hovered cell's glow (drawn even where its label does not fit).
+    if (hover >= 0 && hover < beats.length) {
+      const cellX = Math.max(contentLeft, (beats[hover]! - start) * pxPerBeat);
+      const nextX =
+        hover + 1 < beats.length ? Math.min(width, (beats[hover + 1]! - start) * pxPerBeat) : width;
+      let glow = node.cellGlow;
+      if (!glow) {
+        glow = new Graphics();
+        glow.eventMode = "none";
+        glow.label = "clip-cell-glow";
+        node.cellGlow = glow;
+        node.container.addChildAt(glow, node.container.getChildIndex(node.body) + 1);
+      }
+      glow.clear();
+      const left = Math.round(cellX);
+      const right = Math.round(Math.min(width - 1, nextX));
+      if (right > left) {
+        glow.rect(left, bandTop, right - left, band).fill({ color: ink, alpha: CELL_GLOW_ALPHA });
+        // The cell's own event mark, thicker (not on the accent bar, which
+        // already marks a payment on the start day).
+        const center = (beats[hover]! - start) * pxPerBeat;
+        const markX = Math.min(width - CELL_GLOW_MARK_WIDTH - 1, Math.round(center - CELL_GLOW_MARK_WIDTH / 2));
+        if (content!.kind === "events" && markX >= contentLeft) {
+          glow.rect(markX, bandTop, CELL_GLOW_MARK_WIDTH, band).fill({ color: ink, alpha: muted ? 0.45 : 1 });
+        }
+      }
+      glow.visible = true;
+    } else {
+      hideCellGlow(node);
+    }
+    if (band < CELL_MIN_BAND) {
+      hideCells(node, 0);
+      return;
+    }
+    // The visible span in local px (the whole clip when unbounded).
+    const localLeft = Math.max(0, visibleLeft - x);
+    const localRight = Math.min(width, visibleRight - x);
+    const size = band >= CELL_TALL_BAND ? CELL_FONT_SIZE : CELL_FONT_SIZE_SMALL;
+    const charPx = size * CELL_CHAR_RATIO;
+    const y = bandTop + CELL_PAD_Y;
+    const alpha = muted ? 0.45 : 1;
+    const halo = node.cardFill;
+    // The cell holding the visible left edge (or the first one).
+    let index = Math.max(0, sortedUpperBound(beats, start + localLeft / pxPerBeat) - 1);
+    let used = 0;
+    for (; index < count; index += 1) {
+      const cellX = (beats[index]! - start) * pxPerBeat;
+      if (cellX >= localRight) break;
+      const nextX = index + 1 < count ? Math.min(width, (beats[index + 1]! - start) * pxPerBeat) : width;
+      if (nextX <= localLeft) continue;
+      const label = labels[index]!;
+      if (label.length === 0) continue;
+      const textX = Math.max(cellX + CELL_PAD_X, contentLeft + CELL_PAD_X, localLeft + CELL_PAD_X);
+      if (label.length * charPx > nextX - CELL_PAD_X - textX) continue;
+      let text = node.cellTexts[used];
+      if (!text) {
+        text = new Text({
+          text: label,
+          style: {
+            fill: palette.text,
+            fontFamily: CANVAS_FONT_FAMILY,
+            fontSize: size,
+            fontWeight: "500" as any,
+          },
+        });
+        text.eventMode = "none";
+        text.label = "clip-cell";
+        node.container.addChild(text);
+        node.cellTexts.push(text);
+        node.cellHalos.push(-1);
+      }
+      if (node.cellHalos[used] !== halo) {
+        text.style.stroke = { color: halo, width: CELL_HALO_WIDTH, join: "round" };
+        node.cellHalos[used] = halo;
+      }
+      const emphasised = strong !== undefined && strong[index] === true;
+      applyText(text, label, emphasised ? ink : palette.text, size, emphasised ? "700" : "500");
+      // The hovered cell's label at full strength.
+      text.alpha = alpha * (emphasised || index === hover ? 1 : CELL_TEXT_ALPHA);
+      text.x = Math.round(textX);
+      text.y = Math.round(y);
+      used += 1;
+    }
+    hideCells(node, used);
+  }
+
   function syncFrame(
     parent: Container,
     views: PlaylistClipPresentation[],
     stickyLeft: number = Number.NEGATIVE_INFINITY,
+    visibleRight: number = Number.POSITIVE_INFINITY,
+    hoverClipId: string | null = null,
+    hoverTime: number | null = null,
   ): void {
     const seen = new Set<string>();
     for (const view of views) {
@@ -2119,6 +2369,15 @@ export function createClipNodeRegistry(
           hidePeriod(node);
         }
       }
+      placeCells(
+        node,
+        view,
+        content,
+        folderTop(view),
+        stickyLeft,
+        visibleRight,
+        hoverClipId !== null && view.clip.id === hoverClipId ? hoverTime : null,
+      );
     }
     // Hide nodes whose clips are off-screen this frame. We keep them
     // parented so future frames can show them again in O(1) — only
@@ -2155,6 +2414,8 @@ export function createClipNodeRegistry(
         if (node.offsetBadge) node.offsetBadge.removeFromParent();
         if (node.detail) node.detail.removeFromParent();
         if (node.period) node.period.removeFromParent();
+        for (const cell of node.cellTexts) cell.removeFromParent();
+        node.cellGlow?.destroy();
       } catch {
         // noop — best-effort cleanup
       }
@@ -2173,6 +2434,8 @@ export function createClipNodeRegistry(
       node.iconTint = -1;
       // The palette changed: the card's fill is mixed again.
       node.cardColorSource = "";
+      // ... and the cell labels take its text colour again.
+      node.cellsContent = null;
     }
   }
 
@@ -2185,6 +2448,7 @@ export function createClipNodeRegistry(
       node.offsetBadge?.style.update();
       node.detail?.style.update();
       node.period?.style.update();
+      for (const cell of node.cellTexts) cell.style.update();
       // Re-measured with the fonts available now.
       node.periodMeasured = "";
       node.labelMeasured = "";

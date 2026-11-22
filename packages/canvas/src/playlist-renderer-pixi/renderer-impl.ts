@@ -97,7 +97,9 @@ export interface PlaylistRendererCallbacks {
   // Lines of a clip's info card (a "clip" tooltip, see the interaction
   // controller's hoverCardDelayMs), "\n"-separated. Called once per frame
   // while the card shows: O(1) cached, the SAME string while unchanged.
-  getClipInfo?: (clipId: string) => string | null;
+  // `beat`: the beat under the pointer while it rests on that clip's body
+  // (the card can name the cell there), else null.
+  getClipInfo?: (clipId: string, beat: number | null) => string | null;
   // Show the FL slip / stretch badges ("↻ offset", "×ratio") on clips.
   // Default true; a host whose clips have no such meaning turns them off.
   // Read once.
@@ -441,10 +443,24 @@ export function createPlaylistRenderer(
     // Per-clip cached scene graph: each clip is a Container with its own
     // Graphics + Text drawn once in local coords. Frame-to-frame work is
     // just transform updates unless the clip's visual hash changed.
+    // The cell under the pointer glows where a quick click opens it: over
+    // a clip's body (not its edges / lock), with the tools that click
+    // clips (select, draw).
+    const cellHover = presentation.state.hover;
+    const cellTool = presentation.state.tool;
+    const cellHoverClipId =
+      cellHover !== null &&
+      cellHover.kind === "clip" &&
+      (cellTool === "select" || cellTool === "draw")
+        ? cellHover.clipId
+        : null;
     clipNodeRegistry.syncFrame(
       clipsLayer,
       presentation.visibleClipViews,
       presentation.metrics.trackHeaderWidth,
+      layout.timelineRect.x + layout.timelineRect.width,
+      cellHoverClipId,
+      presentation.state.hoverTime ?? null,
     );
     drawTimelineOverlay(overlayGraphics, presentation);
     if (levelGrip) drawLevelGrips(presentation);
@@ -511,7 +527,13 @@ export function createPlaylistRenderer(
       ? null
       : tooltipView.kind === "clip"
         ? tooltipView.clipId && getClipInfo
-          ? getClipInfo(tooltipView.clipId)
+          ? getClipInfo(
+              tooltipView.clipId,
+              presentation.state.hover?.kind === "clip" &&
+                presentation.state.hover.clipId === tooltipView.clipId
+                ? (presentation.state.hoverTime ?? null)
+                : null,
+            )
           : null
         : tooltipView.time !== null && getTooltipDetail
           ? getTooltipDetail(tooltipView.time)

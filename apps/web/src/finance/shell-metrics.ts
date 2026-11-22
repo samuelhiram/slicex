@@ -52,11 +52,26 @@ export function shellDensityFor(viewportHeight: number): ShellDensity {
   return viewportHeight > SHORT_MAX_HEIGHT ? "tight" : "short";
 }
 
-export function financeShellMetrics(density: ShellDensity): PlaylistMetrics {
+/**
+ * Window widths (CSS px) under which the header column (the event lines'
+ * names) narrows: on a phone the full 216 px left the timeline ~150 px.
+ */
+export const NARROW_MAX_WIDTH = 639;
+/** The header column on narrow windows: an 11-character name, its yearly impact. */
+export const NARROW_HEADER_WIDTH = 132;
+
+export function financeShellMetrics(
+  density: ShellDensity,
+  viewportWidth: number = Number.POSITIVE_INFINITY,
+): PlaylistMetrics {
   return {
     ...FINANCE_PLAYLIST_METRICS,
     trackHeight: TRACK_HEIGHT[density],
     overviewLaneHeight: LANE_HEIGHT[density],
+    trackHeaderWidth:
+      Number.isFinite(viewportWidth) && viewportWidth <= NARROW_MAX_WIDTH
+        ? NARROW_HEADER_WIDTH
+        : FINANCE_PLAYLIST_METRICS.trackHeaderWidth,
   };
 }
 

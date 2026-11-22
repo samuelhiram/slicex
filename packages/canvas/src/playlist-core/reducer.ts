@@ -45,6 +45,8 @@ function tooltipsEqual(
     a.text === b.text &&
     a.time === b.time &&
     a.clipId === b.clipId &&
+    a.avoidTop === b.avoidTop &&
+    a.avoidBottom === b.avoidBottom &&
     a.anchor.x === b.anchor.x &&
     a.anchor.y === b.anchor.y
   );

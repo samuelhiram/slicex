@@ -25,7 +25,9 @@ import type {
  * Internal: loan debt tracked by the projection (see LoanItem doc). Without
  * a balance, every scheduled payment from `range.from` (the document start)
  * to the loan endDate counts, past the horizon too. O(1): the payments are
- * counted arithmetically, never expanded.
+ * counted arithmetically, never expanded. Always the BASE rule (recurrence +
+ * paymentAmount): rule changes and one-payment edits (rules.ts) change when
+ * the loan is paid off, not what is owed.
  */
 export function loanOpeningDebt(loan: LoanItem, range: { from: ISODate; to: ISODate }): number {
   if (loan.balance !== undefined && Number.isFinite(loan.balance)) return positiveMoney(loan.balance);

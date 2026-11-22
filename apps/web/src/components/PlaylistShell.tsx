@@ -4,6 +4,7 @@ import {
   createPlaylistCore,
   createPlaylistInteractionController,
   createPlaylistRenderer,
+  screenXToTime,
   type PlaylistContextMenu,
   type PlaylistCore,
   type PlaylistCreateRequest,
@@ -12,6 +13,7 @@ import {
   type PlaylistMetrics,
   type PlaylistNudgeInfo,
   type PlaylistPendingClips,
+  type PlaylistPoint,
   type PlaylistSnapMode,
   type PlaylistToolId,
   type ViewportNavigator,
@@ -65,6 +67,7 @@ import {
 } from "../finance/records-panel-state";
 import { StatementDialog } from "../finance/components/StatementDialog";
 import { ValleyCard } from "../finance/components/ValleyCard";
+import { OccurrenceCard, type OccurrenceTarget } from "../finance/components/OccurrenceCard";
 import { NavHelp } from "../finance/components/NavControls";
 import { ZoomPad } from "../finance/components/ZoomPad";
 import { TimelineCell } from "../finance/components/TimelineCell";
@@ -97,7 +100,7 @@ import { FinancialEditorModal } from "../finance/components/FinancialEditorModal
 import { FinancialSidePanel } from "../finance/components/FinancialSidePanel";
 import { SlicexMantineProvider } from "../mantine";
 import { useTheme } from "../theme";
-import { AnnouncerProvider, type AnnounceFn } from "../ui/announcer";
+import { AnnouncerProvider, type AnnounceFn, type AnnouncerHistory } from "../ui/announcer";
 import { useFitInViewport } from "../ui/fit-in-viewport";
 import { focusIfPossible, useEscapeLayer, useOverlay } from "../ui/use-overlay";
 import { useWheelScrollX } from "../ui/wheel-scroll-x";
@@ -346,6 +349,14 @@ interface MenuActions {
   editItem(clipId: string): void;
   /** "Ver mi año sin esto": the what-if without it, until "Listo" / Esc. */
   peekWithout(clipId: string): void;
+  /**
+   * The payment of `clipId` under canvas point `point` (the menu's spot: the
+   * pointer, or the clip's visible start when opened from the keyboard):
+   * its date, and whether it can be changed. Null: none there.
+   */
+  paymentAt(clipId: string, point: PlaylistPoint): { date: string; editable: boolean } | null;
+  /** Open that payment's card (OccurrenceCard) at the menu's spot. */
+  openPayment(clipId: string, point: PlaylistPoint): void;
   /** Say what a menu just changed, with "Deshacer" (UX-26). */
   announceEdit(message: string): void;
 }
@@ -527,11 +538,26 @@ function buildClipMenuItems(
   core: PlaylistCore,
   clipId: string,
   actions: MenuActions,
+  position: PlaylistPoint,
 ): MenuItemDef[] {
   const state = core.getState();
   const clip = state.clips.find((c) => c.id === clipId);
   if (!clip) return [];
   const close = () => core.closeContextMenu();
+  // The payment where the menu opened: "Cambiar el pago del 23 dic…" (the
+  // keyboard's way to the payment card; ‹ › there walk the others).
+  const payment = actions.paymentAt(clip.id, position);
+  const paymentItems: MenuItemDef[] = payment
+    ? [
+        {
+          label: `${payment.editable ? "Cambiar" : "Ver"} el pago del ${formatDateShort(payment.date)}…`,
+          onSelect: () => {
+            close();
+            actions.openPayment(clip.id, position);
+          },
+        },
+      ]
+    : [];
   const row = state.tracks.findIndex((track) => track.id === clip.trackId);
   const moveTo = (target: number) => () => {
     core.setClipSelection([clip.id]);
@@ -547,6 +573,7 @@ function buildClipMenuItems(
         actions.editItem(clip.id);
       },
     },
+    ...paymentItems,
     {
       label: clip.muted ? "Incluir en tus cifras" : "Excluir de tus cifras",
       onSelect: () => {
@@ -835,7 +862,7 @@ function PlaylistContextMenuOverlay({
   if (menu.kind === "track") {
     items = buildTrackMenuItems(core, menu.trackIndex, actions);
   } else if (menu.kind === "clip") {
-    items = buildClipMenuItems(core, menu.clipId, actions);
+    items = buildClipMenuItems(core, menu.clipId, actions, menu.position);
   } else if (menu.kind === "background") {
     items = buildBackgroundMenuItems(core, menu.time, menu.trackIndex, actions);
   } else if (menu.kind === "create") {
@@ -1098,7 +1125,7 @@ function selectHintSeen(): boolean {
   }
 }
 
-function ToolModePill({ core }: { core: PlaylistCore | null }) {
+function ToolModePill({ core, quiet = false }: { core: PlaylistCore | null; quiet?: boolean }) {
   const [tool, setTool] = React.useState<PlaylistToolId>("select");
   const [selected, setSelected] = React.useState(false);
   const [hint, setHint] = React.useState<"pending" | "show" | "done">(() =>
@@ -1141,14 +1168,14 @@ function ToolModePill({ core }: { core: PlaylistCore | null }) {
       </div>
     );
   }
-  if (hint === "show") {
+  if (hint === "show" && !quiet) {
     return (
       <div className="fin-mode fin-mode--hint" role="status">
         <span className="fin-mode__text">
-          <strong>Con un objeto:</strong> arrástralo a otro día o línea (con el candado cerrado
-          solo cambia de línea; clic en el candado lo abre o cierra) · su borde derecho cambia
-          cuándo termina · la barrita de arriba, el monto · doble clic o Enter lo abre · Supr lo
-          borra
+          <strong>Con un objeto:</strong> clic en un pago para cambiar solo ese o desde ahí ·
+          arrástralo a otro día o línea (con el candado cerrado solo cambia de línea) · su borde
+          derecho cambia cuándo termina · la barrita de arriba, el monto · doble clic o Enter lo
+          abre · Supr lo borra
         </span>
         <button type="button" className="fin-mode__exit" onClick={dismissHint}>
           Entendido
@@ -1274,7 +1301,14 @@ export function PlaylistShell() {
   // through CSS variables, so they open BELOW the ruler + money lane. Both
   // objects keep their identity: React never re-applies the style.
   const [density] = React.useState(initialShellDensity);
-  const metrics = React.useMemo<PlaylistMetrics>(() => financeShellMetrics(density), [density]);
+  // The header column narrows on a phone-width window (picked at mount too).
+  const [mountWidth] = React.useState(() =>
+    typeof window === "undefined" ? Number.POSITIVE_INFINITY : window.innerWidth,
+  );
+  const metrics = React.useMemo<PlaylistMetrics>(
+    () => financeShellMetrics(density, mountWidth),
+    [density, mountWidth],
+  );
   const layoutStyle = React.useMemo(() => shellLayoutStyle(metrics), [metrics]);
   // The tool bar scrolls sideways when it can't fit: the wheel moves it.
   const toolBarRef = useWheelScrollX();
@@ -1287,6 +1321,21 @@ export function PlaylistShell() {
     typeof createPlaylistRenderer
   > | null>(null);
   const [core, setCore] = React.useState<PlaylistCore | null>(null);
+  // The undo stack the notices' "Deshacer" acts on: once it moves past the
+  // change a notice offered to undo (Ctrl+Z, another edit), the offer goes.
+  const announcerHistory = React.useMemo<AnnouncerHistory | null>(
+    () =>
+      core
+        ? {
+            token: () => core.historyToken(),
+            subscribe: (listener) => {
+              const sub = core.subscribe(() => listener());
+              return () => sub.unsubscribe();
+            },
+          }
+        : null,
+    [core],
+  );
   const [bridge, setBridge] = React.useState<FinancialBridgeApi | null>(null);
   const [futures, setFutures] = React.useState<Futures | null>(null);
   const [navigator, setNavigator] = React.useState<ViewportNavigator | null>(null);
@@ -1306,6 +1355,9 @@ export function PlaylistShell() {
   // the controller; the shell opens the financial editor for that item
   // (item.id === clip.id). "Nuevo" opens it on a draft.
   const [editor, setEditor] = React.useState<EditorState>(null);
+  // A quick click on a clip opens the payment (cell) under the pointer:
+  // change only that one, or that one and the following (OccurrenceCard).
+  const [occurrence, setOccurrence] = React.useState<OccurrenceTarget | null>(null);
   // "Registrar" (G): what really happened. The records panel (F, right of
   // the timeline): every money record, searchable — open by default, its
   // open / folded state remembered by the browser, its view by the tab.
@@ -1386,6 +1438,25 @@ export function PlaylistShell() {
       },
       // Set once the peeks exist (below): "Ver mi año sin esto".
       peekWithout: (clipId) => menuPeekRef.current(clipId),
+      paymentAt: (clipId, point) => {
+        if (!bridge?.getItem(clipId)) return null;
+        const playlist = bridge.core;
+        const beat = screenXToTime(playlist.getState(), point.x, playlist.metrics);
+        const info = bridge.occurrenceAt(clipId, beat);
+        return info ? { date: info.date, editable: info.editable } : null;
+      },
+      openPayment: (clipId, point) => {
+        const host = hostRef.current;
+        if (!bridge || !host) return;
+        const playlist = bridge.core;
+        const rect = host.getBoundingClientRect();
+        setOccurrence({
+          clipId,
+          beat: screenXToTime(playlist.getState(), point.x, playlist.metrics),
+          clientX: rect.left + point.x,
+          clientY: rect.top + point.y,
+        });
+      },
       announceEdit: (message) => {
         const playlist = bridge?.core;
         announceRef.current?.({ message, undo: playlist ? () => playlist.undo() : undefined });
@@ -1583,6 +1654,12 @@ export function PlaylistShell() {
         },
         trackButtonSlop: 4,
         onClipFocus: (clipId) => setFocusText(describeFocusedClip(instance, clipId, bridgeInstance)),
+        // Click + release (no drag) on an item: its payment under the pointer.
+        onClipTap: ({ clipId, time, point }) => {
+          if (!bridgeInstance.getItem(clipId)) return;
+          const rect = host.getBoundingClientRect();
+          setOccurrence({ clipId, beat: time, clientX: rect.left + point.x, clientY: rect.top + point.y });
+        },
         // Length by hand: the selected item's grabber, at the centre of the
         // screen, moves its end (goal-seek for debts that end at payoff).
         clipExtend: (clipId) => bridgeInstance.canExtend(clipId),
@@ -1664,7 +1741,7 @@ export function PlaylistShell() {
         // The cash that day + that day's movements under every date tooltip.
         getTooltipDetail: (beat) => bridgeInstance.getDayDetail(beat),
         // UX-25: the info card of a hovered / tapped clip.
-        getClipInfo: (clipId) => bridgeInstance.getClipInfo(clipId),
+        getClipInfo: (clipId, beat) => bridgeInstance.getClipInfo(clipId, beat),
         // UX-09: no FL slip / stretch badges ("↻42") on financial clips.
         clipBadges: false,
       });
@@ -1757,6 +1834,8 @@ export function PlaylistShell() {
     const handleClipOpen = (event: Event) => {
       const detail = (event as CustomEvent<{ clipId: string }>).detail;
       if (detail?.clipId) {
+        // The first press of the double-click opened the payment: the form wins.
+        setOccurrence(null);
         setEditor({ mode: "edit", id: detail.clipId });
       }
     };
@@ -2217,7 +2296,6 @@ export function PlaylistShell() {
         <p id="fin-canvas-focus" className="fin-sr-only" role="status" aria-live="polite">
           {focusText}
         </p>
-        <ToolModePill core={core} />
         <PlaylistContextMenuOverlay core={core} actions={menuActions} fallbackFocus={getHost} />
         {error ? (
           <div className="playlist-shell__status" role="alert">
@@ -2227,6 +2305,16 @@ export function PlaylistShell() {
         ) : null}
         {bridge && !commandOpen ? (
           <ValleyCard bridge={bridge} hoverDay={hoverDay} fallbackFocus={getHost} />
+        ) : null}
+        {bridge && !commandOpen && editor === null ? (
+          <OccurrenceCard
+            bridge={bridge}
+            target={occurrence}
+            onClose={() => setOccurrence(null)}
+            onOpenEditor={(id) => setEditor({ mode: "edit", id })}
+            onNavigate={setOccurrence}
+            fallbackFocus={getHost}
+          />
         ) : null}
         {bridge && commandOpen ? (
           // UX-27: the bar gives the focus back to whoever opened it (the
@@ -2259,6 +2347,9 @@ export function PlaylistShell() {
         ) : null}
         <PlaylistInspector core={core} fallbackFocus={getHost} />
         <div className="fin-banners">
+          {/* First: a row above the banners (never over them). Quiet while
+              a payment's card is open (its first click selects too). */}
+          <ToolModePill core={core} quiet={occurrence !== null} />
           {navHint && navigator && onboarding !== "banner" && !rec ? (
             <section
               ref={navHintRef}
@@ -2492,7 +2583,12 @@ export function PlaylistShell() {
   // while a dialog is open.
   return (
     <SlicexMantineProvider theme={theme}>
-      <AnnouncerProvider fallbackFocus={getHost} inert={editorOpen} announceRef={announceRef}>
+      <AnnouncerProvider
+        fallbackFocus={getHost}
+        inert={editorOpen}
+        announceRef={announceRef}
+        history={announcerHistory}
+      >
         {shell}
       </AnnouncerProvider>
     </SlicexMantineProvider>

@@ -345,3 +345,35 @@ describe("the end tooltip names the last covered unit (axis.formatEnd)", () => {
     controller.destroy();
   });
 });
+
+describe("double-click over the grabber", () => {
+  it("the first click selects the clip and brings the grabber under the pointer; the second still opens the clip", () => {
+    const core = setup({ start: 2, duration: 500 });
+    core.setSelection({ clipIds: [] });
+    const { host, listeners } = createHost();
+    const opened: string[] = [];
+    (host as unknown as { dispatchEvent: (event: Event) => boolean }).dispatchEvent = (event) => {
+      if (event.type === "playlist-clip-open") opened.push((event as CustomEvent).detail.clipId);
+      return true;
+    };
+    const controller = createPlaylistInteractionController(host, core, { clipExtend: () => true });
+    // Where the grabber will be once c0 is selected.
+    core.setSelection({ clipIds: ["c0"] });
+    const handle = handleOf(core)!;
+    core.setSelection({ clipIds: [] });
+    const y = handle.pillRect.y + handle.pillRect.height / 2;
+    const at = (detail: number) => ({ ...pointer(CENTRE, y), detail }) as PointerEvent;
+    listeners.get("pointerdown")!(at(1));
+    listeners.get("pointerup")!(at(1));
+    expect(core.getState().selection.clipIds).toEqual(["c0"]);
+    expect(hitTestPlaylist(core.getPresentation(), { x: CENTRE, y }, M, { clipExtend: () => true }).kind).toBe(
+      "clip-extend",
+    );
+    const end = endOf(core);
+    listeners.get("pointerdown")!(at(2));
+    listeners.get("pointerup")!(at(2));
+    controller.destroy();
+    expect(opened).toEqual(["c0"]);
+    expect(endOf(core)).toBe(end);
+  });
+});

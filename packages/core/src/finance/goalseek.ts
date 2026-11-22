@@ -14,6 +14,7 @@ import { positiveMoney } from "./money";
 import { estimateDebtPayoffs } from "./payoff";
 import { loanOpeningDebt } from "./projection";
 import { countRecurrence, expandRecurrence } from "./recurrence";
+import { scheduledTotal } from "./rules";
 import type {
   CardPurchaseItem,
   CreditCardItem,
@@ -103,7 +104,7 @@ function solveCard(doc: FinancialDocument, card: CreditCardItem, target: ISODate
   const capTo = addMonths(start, months);
   let charges = 0;
   for (const purchase of purchases) {
-    charges += positiveMoney(purchase.amount) * countRecurrence(purchase.recurrence, { from: start, to: capTo });
+    charges += scheduledTotal(purchase, { from: start, to: capTo });
   }
   if (opening === 0 && charges === 0) return null; // nothing owed
   const payStart = card.recurrence.startDate;

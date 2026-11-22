@@ -107,6 +107,8 @@ function createFakeBridge(initial: FinancialDocument) {
       commit({ ...doc, items: doc.items.filter((i) => i.id !== id) });
       return true;
     }),
+    occurrenceAt: () => null,
+    editOccurrence: vi.fn(() => false),
     isItemLocked: () => false,
     createDraftItem: vi.fn((kind: FinancialItemKind) =>
       createDefaultFinancialItem(kind, `draft-${kind}`, doc.startDate, doc),

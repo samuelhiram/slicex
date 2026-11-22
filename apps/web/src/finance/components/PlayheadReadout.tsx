@@ -99,7 +99,15 @@ export function PlayheadReadout({ bridge, className, keyboardIntentRef, followHo
       </span>
       <span className="fin-readout__cell">
         <span className="fin-readout__swatch fin-readout__swatch--cash" aria-hidden="true" />
-        <span className="fin-readout__label">Caja</span>
+        <span className="fin-readout__label">
+          Caja
+          {/* Where the date block gives way (narrow headers), the label
+              names the day the figures are for. */}
+          <span className="fin-readout__label-day">
+            {" · "}
+            {dayNumber} {month}
+          </span>
+        </span>
         <span className="fin-readout__cash">
           {formatMoneyWhole(view.snapshot.cash)}
         </span>

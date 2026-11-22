@@ -14,6 +14,27 @@ export {
 export { expandRecurrence, MAX_RECURRENCE_INTERVAL, recurrenceInterval } from "./recurrence";
 export { expandFinancialEvents, getProjectionRange } from "./events";
 export {
+  canChangeCadence,
+  canEditOccurrences,
+  clearOccurrenceEdit,
+  editItemOccurrence,
+  hasRuleEdits,
+  isScheduledOn,
+  itemRuleAmount,
+  occurrenceAmount,
+  occurrenceEditAmounts,
+  removeRuleChange,
+  ruleOccurrenceDates,
+  ruleSegmentAt,
+  ruleSegments,
+  scheduledTotal,
+  shiftItemRules,
+  sortedRuleChanges,
+  withAmountInForce,
+  withRuleAmount,
+} from "./rules";
+export type { OccurrenceEditRequest, OccurrenceScope, RuleSegment } from "./rules";
+export {
   buildProjectionAccounts,
   projectFinancialDocument,
   projectFinancialTimeline,

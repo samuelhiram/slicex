@@ -6,6 +6,8 @@ import {
   COMFORTABLE_MIN_HEIGHT,
   COMPACT_MIN_HEIGHT,
   financeShellMetrics,
+  NARROW_HEADER_WIDTH,
+  NARROW_MAX_WIDTH,
   shellDensityFor,
   shellLayoutStyle,
 } from "../src/finance/shell-metrics";
@@ -63,5 +65,18 @@ describe("shellLayoutStyle", () => {
     expect(style["--pl-ruler-h"]).toBe(`${FINANCE_PLAYLIST_METRICS.rulerHeight}px`);
     expect(style["--pl-lane-h"]).toBe("72px");
     expect(style["--pl-header-w"]).toBe(`${FINANCE_PLAYLIST_METRICS.trackHeaderWidth}px`);
+  });
+});
+
+describe("the header column on narrow windows", () => {
+  it("a phone-width window narrows it (the timeline keeps room); wider ones keep 216 px", () => {
+    expect(financeShellMetrics("comfortable", 390).trackHeaderWidth).toBe(NARROW_HEADER_WIDTH);
+    expect(financeShellMetrics("comfortable", NARROW_MAX_WIDTH).trackHeaderWidth).toBe(NARROW_HEADER_WIDTH);
+    expect(financeShellMetrics("comfortable", NARROW_MAX_WIDTH + 1).trackHeaderWidth).toBe(
+      FINANCE_PLAYLIST_METRICS.trackHeaderWidth,
+    );
+    expect(financeShellMetrics("comfortable").trackHeaderWidth).toBe(FINANCE_PLAYLIST_METRICS.trackHeaderWidth);
+    // The overlays follow it.
+    expect((shellLayoutStyle(financeShellMetrics("tight", 390)) as Record<string, string>)["--pl-header-w"]).toBe(`${NARROW_HEADER_WIDTH}px`);
   });
 });

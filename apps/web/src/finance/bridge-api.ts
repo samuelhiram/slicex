@@ -17,6 +17,7 @@ import type {
   ISODate,
   LiquidityWarning,
   MovementEffect,
+  OccurrenceEditRequest,
   UpcomingPayment,
   ValleyExplanation,
   ValleyFix,
@@ -32,6 +33,7 @@ import type {
   PlaylistTrackMeta,
 } from "@slicex/canvas";
 import type { FinancialTrackLayout } from "./mapping";
+import type { OccurrenceInfo } from "./occurrence";
 import type { OverviewView } from "./visuals";
 
 /** A what-if shown on the money lane without touching the plan. */
@@ -97,6 +99,18 @@ export interface FinancialBridgeApi {
    * false when nothing was deleted (missing item or locked track).
    */
   deleteItem(id: string): boolean;
+  /**
+   * The payment of the clip's item whose cell holds `beat` (a quick click on
+   * the clip: occurrence.ts), or null (no item / no payment in range).
+   */
+  occurrenceAt(clipId: string, beat: number): OccurrenceInfo | null;
+  /**
+   * A change to one payment of an item — only that one, or that one and the
+   * following (core rules.ts `editItemOccurrence`): the item stays ONE item.
+   * One undo entry, like an editor save. False when nothing changed, or the
+   * item is missing or on a locked line.
+   */
+  editOccurrence(itemId: string, request: OccurrenceEditRequest): boolean;
   /** True when the item's clip sits on a locked track (read-only). */
   isItemLocked(id: string): boolean;
   /**
@@ -158,8 +172,10 @@ export interface FinancialBridgeApi {
 "-separated; cached per
    * revision and playhead day (the SAME string while unchanged). Optional:
    * a host without info cards (test doubles) may leave it out.
+   * `beat` (the beat under the pointer on that clip): the card also names
+   * the payment there — "Pago del 23 dic: −$550 · clic para cambiarlo".
    */
-  getClipInfo?(clipId: string): string | null;
+  getClipInfo?(clipId: string, beat?: number | null): string | null;
   /**
    * Lines under the date of a time tooltip: "Caja $12,000" (end of that
    * day) and that day's movements ("+$9,000 Sueldo", "−$7,500 Préstamo"),

@@ -4172,14 +4172,22 @@ kbd {
 .fin-banners {
   position: absolute;
   left: calc(var(--pl-header-w, 216px) + 16px);
+  right: 56px;
   bottom: calc(var(--pl-hbar-h, 20px) + 8px);
   /* Passive hints: under any panel the person opens (side panel,
      inspector, menus), never over its controls. */
   z-index: 5;
   display: grid;
   gap: 8px;
-  max-width: min(640px, calc(100% - 320px));
   pointer-events: none;
+}
+
+/* Banners on the left; the tool's mode / first-selection hint (.fin-mode)
+   on the right, one row above them: the stack never lets them overlap,
+   however narrow the canvas gets. */
+.fin-banners > .fin-banner {
+  justify-self: start;
+  max-width: min(640px, calc(100% - 32px));
 }
 
 .fin-banner {
@@ -5256,12 +5264,21 @@ kbd {
   }
 
   .playlist-shell--finance .fin-banners {
-    position: static;
+    position: relative;
+    inset: auto;
     flex: none;
     order: 2;
     max-width: none;
     padding: 4px;
     pointer-events: auto;
+  }
+
+  /* The strip is in the flow: the mode floats over the canvas above it
+     (a tool switch does not move the layout). */
+  .playlist-shell--finance .fin-banners > .fin-mode {
+    position: absolute;
+    right: 8px;
+    bottom: calc(100% + 8px);
   }
 
   .playlist-shell--finance .fin-banner {
@@ -5389,17 +5406,14 @@ kbd {
 
 /* UX-16: the mode of a tool other than Select, on the canvas, with its way
    out; UX-45: the first-selection hint uses the same place. Bottom right
-   of the canvas, over the navigator: it never covers the clips you aim at
-   (top) nor the banners (bottom left). */
+   of the canvas, over the navigator, in the banners' stack (a row above
+   them): it never covers the clips you aim at (top) nor the banners. */
 .fin-mode {
-  position: absolute;
-  right: 56px;
-  bottom: calc(var(--pl-hbar-h, 20px) + 20px);
-  z-index: 7;
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: min(640px, calc(100% - var(--pl-header-w, 216px) - 72px));
+  max-width: min(640px, 100%);
   padding: 6px 6px 6px 14px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-full);
@@ -7874,9 +7888,22 @@ input[type="number"]::-webkit-outer-spin-button {
   }
 }
 
+/* The day in the label: only where the date block is hidden (below). */
+.fin-readout__label-day {
+  display: none;
+}
+
+.fin-readout[data-source="hover"] .fin-readout__label-day {
+  color: var(--accent);
+}
+
 @media (max-width: 1669px) {
   .fin-readout--header .fin-readout__date {
     display: none;
+  }
+
+  .fin-readout--header .fin-readout__label-day {
+    display: inline;
   }
 
   .fin-readout--header .fin-readout__date + .fin-readout__cell {
@@ -8757,4 +8784,289 @@ input[type="number"]::-webkit-outer-spin-button {
     width: 36px;
     height: 36px;
   }
+}
+
+/* --- One payment of an item (OccurrenceCard, 2026-11-21) -------------------
+   A quick click on a clip opens the payment (cell) under the pointer: change
+   only that one or that one and the following. Fixed at the pointer (fitted
+   into the viewport by useFitInViewport), Soft UI card, the item's colour on
+   its name. */
+.fin-occ {
+  position: fixed;
+  z-index: 30;
+  display: grid;
+  gap: 12px;
+  width: min(360px, calc(100vw - 16px));
+  padding: 14px 16px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.fin-occ__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.fin-occ__icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+
+.fin-occ__icon:empty {
+  display: none;
+}
+
+.fin-occ__heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.fin-occ__title {
+  margin: 0;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fin-occ__date {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fin-occ__close {
+  width: 32px;
+  height: 32px;
+  font-size: 18px;
+}
+
+.fin-occ__nowrap {
+  white-space: nowrap;
+}
+
+/* ‹ › — the previous / next payment, beside ×. */
+.fin-occ__nav {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+}
+
+.fin-occ__nav .fin-icon-button {
+  width: 32px;
+  height: 32px;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.fin-occ__nav .fin-icon-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.fin-occ__field,
+.fin-occ__cadence {
+  display: grid;
+  gap: 6px;
+}
+
+.fin-occ__label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fin-occ__amount {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  box-shadow: var(--field-shadow);
+}
+
+.fin-occ__amount:hover {
+  border-color: var(--field-border-hover);
+}
+
+.fin-occ__amount:focus-within {
+  box-shadow: var(--focus-ring);
+}
+
+.fin-occ__currency {
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.fin-occ__input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 0 0 4px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-occ__error {
+  color: var(--fin-negative-text);
+  font-size: 12px;
+}
+
+.fin-occ__scope {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.fin-occ__scope-option {
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fin-occ__scope-option[data-checked] {
+  background: var(--raised);
+  box-shadow: var(--shadow-1);
+  color: var(--text);
+}
+
+.fin-occ__scope-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.fin-occ__scope-option:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.fin-occ__note,
+.fin-occ__readonly {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.fin-occ__readonly strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.fin-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fin-link:hover {
+  text-decoration: underline;
+}
+
+.fin-occ__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.fin-occ__actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* "En tu plan": what changes an item's payments (rule changes, one-off
+   payments), in the accent so it is not missed. */
+.fin-records__piece {
+  white-space: nowrap;
+}
+
+.fin-records__changes {
+  display: block;
+  overflow: hidden;
+  color: var(--accent);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Item form: "Cambios en tus pagos" (PaymentChanges). */
+.fin-changes__hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fin-changes__list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fin-changes__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 4px 0 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.fin-changes__when {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.fin-changes__what {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-changes__remove {
+  height: 28px;
+  padding: 0 10px;
 }

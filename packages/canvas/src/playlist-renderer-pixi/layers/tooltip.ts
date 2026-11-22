@@ -27,6 +27,8 @@ export const TOOLTIP_PADDING_X = 9;
 export const TOOLTIP_CHAR_WIDTH = 6.5; // approximate advance for size-11 / 600 Inter
 // Extra height of each detail line (e.g. "Caja $12,000", "+$9,000 Sueldo").
 export const TOOLTIP_DETAIL_HEIGHT = 15;
+// Gap between a card and the band it keeps clear (avoidTop / avoidBottom).
+export const TOOLTIP_AVOID_GAP = 6;
 
 // The detail's lines, split once per distinct string (providers return the
 // SAME string while unchanged, so steady frames never split again).
@@ -70,6 +72,13 @@ export function drawTooltip(
     x = Math.round(view.x - TOOLTIP_OFFSET_X - pillWidth);
   }
   let y = Math.round(view.y + TOOLTIP_OFFSET_Y);
+  if (view.avoidTop !== undefined && view.avoidBottom !== undefined) {
+    // Under the band to keep clear (a clip card: its row), else over it.
+    const below = Math.round(view.avoidBottom + TOOLTIP_AVOID_GAP);
+    const above = Math.round(view.avoidTop - TOOLTIP_AVOID_GAP - height);
+    if (below + height <= viewport.height - 4) y = below;
+    else if (above >= 2) y = above;
+  }
   if (y + height > viewport.height - 4) y = Math.round(viewport.height - 4 - height);
   if (y < 2) y = 2;
   // High-contrast chip (inverse of the surface), like a native tooltip.

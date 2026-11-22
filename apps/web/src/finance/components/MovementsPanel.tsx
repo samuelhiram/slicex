@@ -24,7 +24,9 @@
 import * as React from "react";
 import { MoneySchema } from "@slicex/contracts";
 import {
+  canEditOccurrences,
   filterMovements,
+  occurrenceAmount,
   summarizeMovements,
   totalsByCategory,
   UNCATEGORIZED,
@@ -40,6 +42,7 @@ import { formatDateShort, formatMoneyWhole, formatSignedMoneyWhole } from "../fo
 import { frequencyShort, KIND_COLORS, KIND_LABELS } from "../labels";
 import { iconDef } from "../icons";
 import { itemColor } from "../mapping";
+import { ruleEditsSummary } from "../occurrence";
 import { ItemIcon } from "./ItemIcon";
 import {
   dayLabel,
@@ -300,12 +303,12 @@ export function MovementsPanel(props: MovementsPanelProps) {
   const commitAmount = (item: FinancialItem, amount: number) => {
     const current = bridge.getItem(item.id);
     if (!current) return;
-    if (!bridge.replaceItem(withPlanAmount(current, amount))) {
+    if (!bridge.replaceItem(withPlanAmount(current, amount, today))) {
       announce({ message: `${item.name} está en una línea bloqueada: no se cambió.` });
       return;
     }
     announce({
-      message: `${item.name}: ${formatMoneyWhole(planAmountOf(current) ?? 0)} → ${formatMoneyWhole(amount)}`,
+      message: `${item.name}: ${formatMoneyWhole(planAmountOf(current, today) ?? 0)} → ${formatMoneyWhole(amount)}`,
       undo: () => bridge.core.undo(),
     });
   };
@@ -562,9 +565,15 @@ export function MovementsPanel(props: MovementsPanelProps) {
         ) : (
           <ul className="fin-records__items">
             {planItems.map((item) => {
-              const amount = planAmountOf(item);
+              const amount = planAmountOf(item, today);
+              const changes = ruleEditsSummary(item, today);
               const included = item.enabled !== false;
               const next = upcoming.get(item.id);
+              // What the next payment really is (a one-off edit, a new rule).
+              const nextAmount =
+                next && canEditOccurrences(item) && item.recurrence.frequency !== "once"
+                  ? occurrenceAmount(item, next)
+                  : null;
               const end = endOf(item);
               const label = AMOUNT_LABELS[planTab.id];
               return (
@@ -601,10 +610,38 @@ export function MovementsPanel(props: MovementsPanelProps) {
                       ) : null}
                     </span>
                   </div>
-                  <p className="fin-records__meta">{cadenceOf(item, (id) => cardNames.get(id))}</p>
+                  {/* The cadence and how it ends belong together: "Cada
+                      lunes · Sin fin" (the foot keeps the next payment). */}
+                  <p className="fin-records__meta">
+                    {cadenceOf(item, (id) => cardNames.get(id))}
+                    {end ? (
+                      <>
+                        {" · "}
+                        <span className="fin-records__piece">{end}</span>
+                      </>
+                    ) : null}
+                  </p>
+                  {changes ? (
+                    <p className="fin-records__meta fin-records__changes" title={changes}>
+                      {changes}
+                    </p>
+                  ) : null}
                   <div className="fin-records__foot">
                     <p className="fin-records__meta">
-                      {[next ? `Próximo ${formatDateShort(next)}` : "Sin fechas por venir", end].filter(Boolean).join(" · ")}
+                      {next ? (
+                        <>
+                          {"Próximo "}
+                          {/* The day and its amount stay together. */}
+                          <span className="fin-records__piece">
+                            {formatDateShort(next)}
+                            {nextAmount !== null
+                              ? `: ${item.kind === "income" ? "+" : "−"}${formatMoneyWhole(nextAmount)}`
+                              : ""}
+                          </span>
+                        </>
+                      ) : (
+                        "Sin fechas por venir"
+                      )}
                     </p>
                     <label className="fin-records__toggle" title="Si cuenta en tus cifras y en la gráfica">
                       <input

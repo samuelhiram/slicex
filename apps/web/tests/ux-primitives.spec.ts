@@ -525,6 +525,35 @@ describe("AnnouncerProvider + useAnnounce", () => {
     expect(region()!.textContent).toBe("Registrado");
   });
 
+  it("with a history, 'Deshacer' goes away once the stack moves past the change (Ctrl+Z, another edit)", () => {
+    let mark = 1;
+    const listeners = new Set<() => void>();
+    const history = {
+      token: () => mark,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const move = (next: number) =>
+      act(() => {
+        mark = next;
+        for (const listener of listeners) listener();
+      });
+    render(h(AnnouncerProvider, { history, children: h(Child) }));
+    act(() => announce({ message: "Gas: −$400 desde el 23 dic", undo: () => {} }));
+    expect(buttonNamed("Deshacer")).not.toBeNull();
+    // A change that records nothing (hover, scroll): the offer stays.
+    move(1);
+    expect(buttonNamed("Deshacer")).not.toBeNull();
+    // Ctrl+Z elsewhere: the stack moved; the message stays, the offer goes.
+    move(0);
+    expect(buttonNamed("Deshacer")).toBeNull();
+    expect(notice()!.textContent).toContain("Gas: −$400 desde el 23 dic");
+    // Nothing listens once there is no offer.
+    expect(listeners.size).toBe(0);
+  });
+
   it("outside a provider useAnnounce is a no-op", () => {
     let outsideAnnounce: AnnounceFn | null = null;
     function Lone() {

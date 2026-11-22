@@ -302,6 +302,11 @@ export interface PlaylistTooltip {
   time?: number;
   // Clip a "clip" tooltip describes.
   clipId?: string;
+  // Screen band [top, bottom] the card keeps clear (a "clip" card: the
+  // clip's own row, so it never covers the cells the pointer reads): it
+  // sits under the band, or over it when there is no room below.
+  avoidTop?: number;
+  avoidBottom?: number;
 }
 
 export interface PlaylistTrackContextMenu {
@@ -601,6 +606,20 @@ export interface PlaylistOverviewColors {
 export type PlaylistClipAccent = "solid" | "dashed" | "dotted";
 
 /** Content drawn inside a clip body, positioned at absolute beats. */
+/**
+ * Text written in the cells of a clip — e.g. each payment's amount. Cell i
+ * starts at `beats[i]` (ascending) and runs to the next one (or the clip's
+ * end). The renderer writes `labels[i]` at the top of the cell, right of its
+ * start, only where it fits (and sticks it to the visible left edge while the
+ * cell's start is scrolled out); `strong[i]` emphasises it (e.g. a payment
+ * that differs from its rule).
+ */
+export interface PlaylistClipCells {
+  beats: readonly number[];
+  labels: readonly string[];
+  strong?: readonly boolean[];
+}
+
 export type PlaylistClipContent =
   | {
       kind: "events";
@@ -615,6 +634,7 @@ export type PlaylistClipContent =
       // span is drawn as the card, the rest as a faint tag.
       extent?: number;
       accent?: PlaylistClipAccent;
+      cells?: PlaylistClipCells;
     }
   | {
       kind: "level";
@@ -625,6 +645,7 @@ export type PlaylistClipContent =
       // Optional vertical guide lines at these beats (e.g. a billing cut).
       marks?: readonly number[];
       accent?: PlaylistClipAccent;
+      cells?: PlaylistClipCells;
     };
 
 /** A pill attached to the drag tooltip (e.g. the effect of the gesture). */

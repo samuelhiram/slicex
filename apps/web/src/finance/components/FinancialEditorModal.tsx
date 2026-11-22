@@ -48,6 +48,8 @@ import { KIND_COLORS, KIND_LABELS, KIND_ORDER } from "../labels";
 import { useEscapeLayer, useOverlay } from "../../ui/use-overlay";
 import { EditorSpotlight, useClipSpotlight } from "./EditorSpotlight";
 import { ShapePreview } from "./ShapePreview";
+import { PaymentChanges } from "./PaymentChanges";
+import { ruleEditsSummary } from "../occurrence";
 import { IconPicker } from "./IconPicker";
 import { itemColor } from "../mapping";
 import { useAnnounce } from "../../ui/announcer";
@@ -1203,6 +1205,9 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
     if (formItem.kind === "credit-card") readback = cardSentence(formItem, cardInfo);
     else if (formItem.kind === "installment-plan") readback = planSchedule ? installmentSentence(formItem, planSchedule) : null;
     else readback = scheduleSentence(draft, payments, last);
+    // The changes made payment by payment are part of what will happen.
+    const changes = ruleEditsSummary(formItem, today, 2);
+    if (readback && changes) readback = `${readback} Con cambios: ${changes}.`;
   }
   const purchase =
     formItem?.kind === "card-purchase"
@@ -2013,6 +2018,7 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
                 </div>
               );
             })}
+            <PaymentChanges draft={draft} onChange={(next) => setDraft(next)} />
           </fieldset>
           </FieldErrorsContext.Provider>
 

@@ -13,7 +13,9 @@
 //       `undo`, and × ("Cerrar aviso"). It never closes by itself (WCAG 2.2.1):
 //       the next `announce` replaces it; ×, Escape (from inside it: a scoped
 //       layer of the Escape stack) or "Deshacer" close it. "Deshacer" runs
-//       `undo` and announces "Deshecho".
+//       `undo` and announces "Deshecho". With a `history` (the undo stack),
+//       "Deshacer" goes away as soon as that stack moves past the change it
+//       was offered for (Ctrl+Z, another edit): it would undo something else.
 //
 // Performance: `announce` is stable for the provider's whole life (the
 // context value never changes, consumers never re-render because of it),
@@ -66,12 +68,25 @@ export interface AnnouncerProviderProps {
    * own handlers): `announceRef.current?.({ message })`.
    */
   announceRef?: React.RefObject<AnnounceFn | null>;
+  /**
+   * The undo stack "Deshacer" acts on: its position mark (the same value
+   * while nothing is recorded, undone or redone) and its change feed.
+   * Absent: "Deshacer" stays until the notice closes.
+   */
+  history?: AnnouncerHistory | null;
+}
+
+export interface AnnouncerHistory {
+  token(): unknown;
+  subscribe(listener: () => void): () => void;
 }
 
 interface Notice {
   message: string;
   undo?: () => void;
   undoLabel: string;
+  /** The history mark when it was offered (absent: not tracked). */
+  mark?: unknown;
 }
 
 interface AnnouncerState {
@@ -100,9 +115,12 @@ export function AnnouncerProvider({
   fallbackFocus,
   inert = false,
   announceRef,
+  history = null,
 }: AnnouncerProviderProps) {
   const [state, setState] = React.useState<AnnouncerState>(INITIAL_STATE);
   const seqRef = React.useRef(0);
+  const historyRef = React.useRef(history);
+  historyRef.current = history;
 
   const announce = React.useCallback<AnnounceFn>((announcement) => {
     const message = announcement.message.trim();
@@ -116,9 +134,27 @@ export function AnnouncerProvider({
         message,
         undo: announcement.undo,
         undoLabel: announcement.undoLabel ?? "Deshacer",
+        ...(announcement.undo && historyRef.current ? { mark: historyRef.current.token() } : {}),
       },
     });
   }, []);
+
+  // While a notice offers "Deshacer" for a tracked change: the stack moving
+  // past it (Ctrl+Z, redo, another edit) takes the offer away; the message
+  // stays. One subscription per such notice, none otherwise.
+  const tracked = state.notice !== null && state.notice.undo !== undefined && "mark" in state.notice;
+  React.useEffect(() => {
+    if (!tracked || !history) return undefined;
+    const check = () =>
+      setState((current) => {
+        const notice = current.notice;
+        if (!notice || notice.undo === undefined || !("mark" in notice)) return current;
+        if (history.token() === notice.mark) return current;
+        return { ...current, notice: { message: notice.message, undoLabel: notice.undoLabel } };
+      });
+    check();
+    return history.subscribe(check);
+  }, [tracked, history, state.seq]);
 
   React.useImperativeHandle(announceRef, () => announce, [announce]);
 

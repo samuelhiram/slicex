@@ -567,6 +567,18 @@ export class PlaylistCore {
     return canRedo(this.history);
   }
 
+  /**
+   * Opaque mark of the undo position: the same value while no undo step is
+   * added, undone or redone (hover, viewport, selection and in-gesture
+   * frames never change it). A host that offers "Deshacer" for one change
+   * keeps the mark taken right after it: a different mark later means the
+   * history moved (Ctrl+Z, another edit) and that offer is stale. O(1).
+   */
+  historyToken(): unknown {
+    const past = this.history.past;
+    return past.length > 0 ? past[past.length - 1] : null;
+  }
+
   // Viewport and selection.
   setViewportSize(width: number, height: number): void {
     this.dispatch({ type: "SET_VIEWPORT_SIZE", width, height });

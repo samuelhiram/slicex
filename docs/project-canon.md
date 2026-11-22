@@ -95,6 +95,60 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     (`solveDebtPayment` en `@slicex/core/finance/goalseek.ts`): calcula el pago que te libera en
     esa fecha; al soltar, el clip cae en el día real de liquidación. Préstamos por ventana
     conservan su total y lo reparten.
+  - *Cada pago es una celda (2026-11-21):* un **clic rápido** sobre un objeto (presionar y
+    soltar en ≤ 400 ms sin moverse ni modificadores; `PlaylistInteractionOptions.onClipTap`,
+    `CLIP_TAP_MAX_MS`) abre `OccurrenceCard` en el pago bajo el puntero: la celda entre su marca
+    y la siguiente (`occurrence.ts` `findOccurrence`, `bridge.occurrenceAt`). Presionar y
+    arrastrar sigue moviéndolo; el doble clic sigue abriendo el formulario (cierra la tarjeta).
+    Dos alcances, **sin crear otro objeto** (`@slicex/core/finance/rules.ts`):
+    **"Solo este pago"** = `FinancialItem.occurrenceEdits` (`{ date, amount }`; 0 = no pasa: la
+    celda queda como marca punteada) y **"Este y los siguientes"** = `ruleChanges`
+    (`{ from, amount?, frequency?, interval? }`: monto y/o cada cuánto desde ese pago; en el
+    primer pago cambia la regla base). Cambiar la frecuencia fuerza "y los siguientes" y
+    reinicia el ritmo en ese pago; solo monto conserva los días. El motor expande por tramos
+    (`ruleSegments`) en eventos, liquidación (`payoff.ts`) y búsqueda de objetivo; un préstamo
+    por ventana debe lo de su regla **base** (pagar distinto cambia cuándo terminas, no cuánto
+    debes). Mover el objeto mueve sus cambios (`shiftItemRules`); recortar un borde no. La
+    etiqueta dice la regla vigente en el playhead y el próximo cambio ("−$550 /semana → −$300
+    (23 dic)"). Vista previa en la franja mientras escribes; Aplicar = un paso de deshacer con
+    "Deshacer". Tarjetas totaleras y MSI: solo lectura (botón al formulario). Se guardan en
+    `slicex.plan.v1` (esquemas en `@slicex/contracts`).
+  - *Cada línea dice su monto (2026-11-21):* toda celda de un objeto recurrente lleva escrito el
+    pago que aplicó la proyección ("+$11,000", "−$550", "$0" si no pasa; préstamos, tarjetas y
+    MSI incluidos) arriba de la barra, a la derecha de su marca, solo donde cabe; si el inicio
+    de la celda quedó fuera, el texto se pega al borde visible. Resaltados (negrita, color del
+    objeto) los pagos que difieren de su regla: un ajuste de solo ese pago y el primero de un
+    cambio. Genérico en el motor: `PlaylistClipContent.cells` (`beats`, `labels`, `strong`);
+    el registro de nodos recicla un `Text` por celda visible (`label: "clip-cell"`), recorta a
+    `[stickyLeft, visibleRight]` y no hace nada en un cuadro donde no se movió nada. El host
+    las arma en `buildCells` (`visuals.ts`, textos en caché por monto). En "En tu plan" cada
+    fila muestra (y edita en línea) el monto vigente hoy, "Próximo 9 dic: −$700" y una línea
+    de acento con los cambios ("Desde 23 dic: −$300 /semana · 9 dic: −$700",
+    `ruleEditsSummary`); el formulario los lista en "Cambios en tus pagos" (`PaymentChanges`,
+    "Quitar" en cada uno) y la vista previa los menciona.
+  - *La celda bajo el puntero se ilumina (2026-11-21):* con Seleccionar / Dibujar, sobre el
+    cuerpo de un objeto, la celda que abriría un clic se tiñe del color del objeto, su marca
+    se engrosa y su monto se escribe a fuerza plena (`syncFrame(…, hoverClipId, hoverTime)`,
+    `cellIndexAt`; un `Graphics` por nodo, creado la primera vez, redibujado solo cuando cambia
+    la celda). Los montos llevan un halo del color de la tarjeta: la línea de saldo de una
+    deuda nunca los tacha. La tarjeta flotante (hover) nombra ese pago ("Pago del 18 ene:
+    −$1,200 · clic para cambiarlo"; `getClipInfo(clipId, beat)`) y se coloca bajo la fila del
+    objeto, o sobre ella si no cabe (`PlaylistTooltip.avoidTop/avoidBottom`), sin tapar las
+    celdas que lees. Si la vista se mueve bajo el puntero quieto (rueda, deslizamiento,
+    teclado), el hover y el día se recalculan y la tarjeta se cierra. Teclado: el menú del
+    objeto (tecla Menú / Shift+F10) ofrece "Cambiar el pago del 25 nov…", y en la tarjeta ‹ ›
+    (Alt+← / Alt+→) recorren los pagos. El doble clic abre el objeto aunque el segundo clic
+    caiga en el agarrador que trajo el primero.
+  - *Pulido de usabilidad (2026-11-21):* el "Deshacer" de un aviso desaparece en cuanto el
+    historial se mueve más allá de su cambio (Ctrl+Z, otra edición), porque desharía otra cosa
+    (`AnnouncerProvider history`, `PlaylistCore.historyToken()`); el mensaje queda. Bajo
+    1670 px, donde se oculta el calendario de la lectura del día, el rótulo dice la fecha
+    ("CAJA · 23 ENE", en acento si sigue al puntero). El aviso de herramienta / primera
+    selección vive en la pila de banners (una fila arriba, a la derecha): nunca se enciman; se
+    calla mientras la tarjeta de un pago está abierta. En ventanas ≤ 639 px de ancho la
+    columna de nombres mide 132 px (`NARROW_HEADER_WIDTH`, al montar). La tarjeta de pago
+    rechaza texto que no es monto (antes cerraba sin avisar). En "En tu plan": "Cada lunes ·
+    Sin fin" juntos y "Próximo 23 nov: −$1,200" sin partir fecha y monto.
   - *Monto con la mano:* el borde superior de un clip es un "nivel" genérico del canvas
     (`PlaylistInteractionOptions.onClipLevelDrag`); el bridge lo mapea al monto (`levelDrag`).
     Un arrastre = una entrada de undo; la píldora muestra el efecto.
