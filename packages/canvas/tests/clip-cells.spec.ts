@@ -1,7 +1,8 @@
 // Cell labels (PlaylistClipContent.cells): each payment's amount written at
 // the top of its cell, right of its mark — only the cells inside the visible
-// span, only where the label fits, emphasised ones in the clip's colour and
-// bold; pooled Text, nothing redone on a frame where nothing moved.
+// span, only where the label fits, emphasised ones bold and in the clip's
+// colour made readable on its card, their cell outlined with dashes; pooled
+// Text, nothing redone on a frame where nothing moved.
 import { Container, Graphics, Text } from "pixi.js";
 import { describe, expect, it } from "vitest";
 import {
@@ -12,7 +13,14 @@ import {
   type PlaylistState,
 } from "../src/playlist-core";
 import { cellIndexAt, createClipNodeRegistry } from "../src/playlist-renderer-pixi/clip-node-registry";
-import { COLORS } from "../src/playlist-renderer-pixi/palette";
+import {
+  applyPlaylistTheme,
+  COLORS,
+  contrastRatio,
+  legibleInk,
+  mixColor,
+  PLAYLIST_THEMES,
+} from "../src/playlist-renderer-pixi/palette";
 
 const M = DEFAULT_PLAYLIST_METRICS;
 
@@ -54,6 +62,10 @@ function scene(content: PlaylistClipContent, pxPerBeat = 20, visibleRight = Numb
     (parent.children[0] as Container).children.filter(
       (child): child is Text => child instanceof Text && child.label === "clip-cell" && child.visible,
     );
+  const boxes = () =>
+    (parent.children[0] as Container).children.find(
+      (child): child is Graphics => child instanceof Graphics && child.label === "clip-cell-boxes",
+    ) ?? null;
   const glow = () =>
     (parent.children[0] as Container).children.find(
       (child): child is Graphics => child instanceof Graphics && child.label === "clip-cell-glow",
@@ -62,7 +74,28 @@ function scene(content: PlaylistClipContent, pxPerBeat = 20, visibleRight = Numb
     hover.time = time;
     sync();
   };
-  return { core, sync, cells, glow, hoverAt };
+  return { core, registry, sync, cells, boxes, glow, hoverAt };
+}
+
+// Counts the redraws of a Graphics from now on.
+function countClears(graphics: Graphics): () => number {
+  let cleared = 0;
+  const clear = graphics.clear.bind(graphics);
+  graphics.clear = () => {
+    cleared += 1;
+    return clear();
+  };
+  return () => cleared;
+}
+
+// Hue of a colour in degrees.
+function hueOf(color: number): number {
+  const [r, g, b] = [16, 8, 0].map((shift) => ((color >> shift) & 0xff) / 255) as [number, number, number];
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  if (d === 0) return 0;
+  const h = max === r ? ((g - b) / d + 6) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return h * 60;
 }
 
 const weekly = (strong?: boolean[]): PlaylistClipContent => ({
@@ -81,13 +114,126 @@ describe("cell labels", () => {
     expect(cells()[1]!.x).toBe(284);
   });
 
-  it("emphasised cells take the clip's colour and bold", () => {
+  it("emphasised cells are bold, in the clip's colour made readable on its card", () => {
     const { cells } = scene(weekly([false, true, false, true]));
     const [plain, strong] = cells();
-    expect(strong!.style.fill).toBe(0xe5484d);
+    const card = mixColor(COLORS.background, 0xe5484d, COLORS.clipTint);
+    const ink = strong!.style.fill as number;
+    expect(Math.abs(hueOf(ink) - hueOf(0xe5484d))).toBeLessThan(3);
+    expect(contrastRatio(ink, card)).toBeGreaterThan(contrastRatio(0xe5484d, card));
+    expect(contrastRatio(ink, card)).toBeGreaterThanOrEqual(4.5);
     expect(strong!.style.fontWeight).toBe("700");
+    expect(plain!.style.fill).toBe(COLORS.text);
     expect(plain!.style.fontWeight).toBe("500");
     expect(plain!.alpha).toBeLessThan(strong!.alpha);
+  });
+
+  it("a theme switch re-mixes the emphasised colour: lighter on dark, deeper on light", () => {
+    const { registry, cells, sync } = scene(weekly([false, true, false, true]));
+    const onLight = cells()[1]!.style.fill as number;
+    expect(contrastRatio(onLight, 0xffffff)).toBeGreaterThan(contrastRatio(0xe5484d, 0xffffff));
+    try {
+      applyPlaylistTheme("dark");
+      registry.invalidate();
+      sync();
+      const onDark = cells()[1]!.style.fill as number;
+      expect(contrastRatio(onDark, 0x000000)).toBeGreaterThan(contrastRatio(0xe5484d, 0x000000));
+    } finally {
+      applyPlaylistTheme("light");
+    }
+  });
+
+  it("legibleInk: every hue reads on its own tinted card, in both themes", () => {
+    const hues = [0x18864a, 0xd93d42, 0x8e4ec6, 0x3e63dd, 0xc2520a, 0x2f74b5, 0x888888, 0x000000, 0xffffff];
+    for (const theme of Object.values(PLAYLIST_THEMES)) {
+      for (const hue of hues) {
+        const card = mixColor(theme.background, hue, theme.clipTint);
+        expect(contrastRatio(legibleInk(hue, card, theme.inkContrast), card)).toBeGreaterThanOrEqual(
+          theme.inkContrast,
+        );
+      }
+    }
+    // Readable already: kept as it is.
+    expect(legibleInk(0xffffff, 0x000000, 6)).toBe(0xffffff);
+  });
+
+  it("an emphasised cell is outlined with dashes, clear of the marks at its sides", () => {
+    const { boxes } = scene(weekly([false, true, false, false]));
+    const bounds = boxes()!.getLocalBounds();
+    // Cell 2: 280 → 420 px, 3 px in at each side.
+    expect(bounds.x).toBeCloseTo(283, 0);
+    expect(bounds.x + bounds.width).toBeCloseTo(417, 0);
+    // Under the labels, over the body.
+    const container = boxes()!.parent!;
+    const index = container.getChildIndex(boxes()!);
+    expect(index).toBeGreaterThan(0);
+    for (const child of container.children) {
+      if (child instanceof Text) expect(container.getChildIndex(child)).toBeGreaterThan(index);
+    }
+  });
+
+  it("no emphasised cell, no outline; one too narrow shows none", () => {
+    expect(scene(weekly()).boxes()).toBeNull();
+    // Daily cells of 8 px: no room between the marks.
+    const daily: PlaylistClipContent = {
+      kind: "events",
+      beats: [7, 8, 9, 10],
+      values: [-1, -1, -1, -1],
+      cells: {
+        beats: [7, 8, 9, 10],
+        labels: ["−$550", "−$700", "−$550", "−$300"],
+        strong: [false, true, false, false],
+      },
+    };
+    expect(scene(daily, 8).boxes()!.getLocalBounds().width).toBe(0);
+    // The same cells with room: outlined.
+    expect(scene(daily, 40).boxes()!.getLocalBounds().width).toBeGreaterThan(30);
+  });
+
+  it("the outline is redrawn only when it changes: not on a steady frame, a short pan or a hover", () => {
+    const { core, boxes, sync, hoverAt } = scene(weekly([false, true, false, true]), 20, 1200);
+    const cleared = countClears(boxes()!);
+    sync();
+    core.updateViewport({ pxPerBeat: 20, scrollX: 40, scrollY: 0 });
+    sync();
+    hoverAt(16);
+    hoverAt(null);
+    expect(cleared()).toBe(0);
+    core.updateViewport({ pxPerBeat: 24, scrollX: 40, scrollY: 0 });
+    sync();
+    expect(cleared()).toBe(1);
+  });
+
+  it("a very wide cell draws only the part around the view", () => {
+    // Cell 1 is 48 days wide: 4 608 px at 96 px a day.
+    const wide: PlaylistClipContent = {
+      kind: "events",
+      beats: [2, 50],
+      values: [-1, -1],
+      cells: { beats: [2, 50], labels: ["−$550", "−$700"], strong: [true, false] },
+    };
+    const { core, boxes, sync } = scene(wide, 96, 1200);
+    core.updateViewport({ pxPerBeat: 96, scrollX: 20 * 96, scrollY: 0 });
+    sync();
+    const view = 1200 - M.trackHeaderWidth;
+    const bounds = boxes()!.getLocalBounds();
+    // All of the view (from beat 20), rounded out to 512 px steps: no more.
+    expect(bounds.x).toBeLessThanOrEqual(20 * 96);
+    expect(bounds.x + bounds.width).toBeGreaterThanOrEqual(20 * 96 + view);
+    expect(bounds.width).toBeLessThanOrEqual(view + 2 * 512);
+  });
+
+  it("a theme switch repaints the outline", () => {
+    const { registry, boxes, sync } = scene(weekly([false, true, false, false]));
+    const cleared = countClears(boxes()!);
+    try {
+      applyPlaylistTheme("dark");
+      registry.invalidate();
+      sync();
+      expect(cleared()).toBe(1);
+    } finally {
+      applyPlaylistTheme("light");
+    }
   });
 
   it("a cell too narrow for its label writes nothing", () => {

@@ -612,7 +612,8 @@ export type PlaylistClipAccent = "solid" | "dashed" | "dotted";
  * end). The renderer writes `labels[i]` at the top of the cell, right of its
  * start, only where it fits (and sticks it to the visible left edge while the
  * cell's start is scrolled out); `strong[i]` emphasises it (e.g. a payment
- * that differs from its rule).
+ * that differs from its rule): bold, in the clip's colour, the cell outlined
+ * with dashes.
  */
 export interface PlaylistClipCells {
   beats: readonly number[];

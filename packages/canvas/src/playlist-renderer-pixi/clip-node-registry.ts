@@ -1,6 +1,7 @@
 import { Container, Graphics, GraphicsContext, GraphicsPath, Text } from "pixi.js";
 import {
   sortedUpperBound,
+  type PlaylistClipCells,
   type PlaylistClipContent,
   type PlaylistClipPresentation,
   type PlaylistRect,
@@ -8,6 +9,7 @@ import {
 import {
   CANVAS_FONT_FAMILY,
   COLORS,
+  legibleInk,
   mixColor,
   parseHexColor,
   type PlaylistThemePalette,
@@ -184,8 +186,10 @@ interface ClipNode {
   pill: Graphics | null;
   pillKey: number;
   pillWidth: number;
-  // The clip's colour as a number (cardFillOf keeps it).
+  // The clip's colour as a number, and as a text colour on its own card
+  // (legibleInk); cardFillOf keeps both.
   clipHue: number;
+  clipInk: number;
   // The icon before the name (providers.getClipIcon): a Graphics sharing
   // the glyph's GraphicsContext (built once per glyph for the registry),
   // tinted with the clip's colour; the glyph it shows (reference compare),
@@ -270,6 +274,18 @@ interface ClipNode {
   // body (under the outline and the labels).
   cellsHover: number;
   cellGlow: Graphics | null;
+  // The dashed outline of the emphasised cells (cells.strong): ONE Graphics
+  // in local coords, created the first time the clip has one, and what it was
+  // last drawn for. A pan only moves the container: it is redrawn when the
+  // clip's geometry / colour change or the view leaves the drawn window.
+  cellBoxes: Graphics | null;
+  cellBoxesContent: PlaylistClipContent | null;
+  cellBoxesStart: number;
+  cellBoxesWidth: number;
+  cellBoxesHeight: number;
+  cellBoxesFrom: number;
+  cellBoxesTo: number;
+  cellBoxesInk: number;
   // Visual hash captures everything that would force a redraw. Position and
   // size are kept separate so we can skip a redraw when only x/y changed.
   hash: string;
@@ -1295,10 +1311,79 @@ const CELL_HALO_WIDTH = 4;
 const CELL_GLOW_ALPHA = 0.22;
 const CELL_GLOW_MARK_WIDTH = 3;
 
+// An emphasised cell's dashed outline: clear of the payment marks at its
+// sides, the marks' own height. A cell too narrow for one shows none.
+const CELL_BOX_INSET = 3;
+const CELL_BOX_MIN_WIDTH = 6;
+const CELL_BOX_RADIUS = 4;
+const CELL_BOX_DASH = 3;
+const CELL_BOX_GAP = 3;
+const CELL_BOX_ALPHA = 0.7;
+// Its amount sits a little further in, off the outline.
+const CELL_BOX_TEXT_SHIFT = 2;
+// The outlines are drawn for the visible span rounded out to this step, so a
+// very wide cell costs what is seen and a pan redraws once per step.
+const CELL_BOX_WINDOW = 512;
+
+/**
+ * One dashed side from `a` to `b` along x (`horizontal`) or y, at `at`: whole
+ * dashes centred on the side, a gap at each end, only those in [from, to].
+ */
+function dashSide(
+  g: Graphics,
+  horizontal: boolean,
+  a: number,
+  b: number,
+  at: number,
+  from: number,
+  to: number,
+): void {
+  const period = CELL_BOX_DASH + CELL_BOX_GAP;
+  const length = b - a;
+  const count = Math.floor((length - CELL_BOX_GAP) / period);
+  if (count <= 0) return;
+  const first = a + (length - (count * period - CELL_BOX_GAP)) / 2;
+  const last = Math.min(count - 1, Math.floor((to - first) / period));
+  for (let i = Math.max(0, Math.ceil((from - first - CELL_BOX_DASH) / period)); i <= last; i += 1) {
+    const start = first + i * period;
+    if (horizontal) g.moveTo(start, at).lineTo(start + CELL_BOX_DASH, at);
+    else g.moveTo(at, start).lineTo(at, start + CELL_BOX_DASH);
+  }
+}
+
+/** A dashed box with round corners (the path only: the caller strokes it). */
+function dashBox(
+  g: Graphics,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  from: number,
+  to: number,
+): void {
+  const r = Math.min(CELL_BOX_RADIUS, (x1 - x0) / 2, (y1 - y0) / 2);
+  dashSide(g, true, x0 + r, x1 - r, y0, from, to);
+  dashSide(g, true, x0 + r, x1 - r, y1, from, to);
+  if (x0 >= from && x0 <= to) {
+    dashSide(g, false, y0 + r, y1 - r, x0, y0, y1);
+    g.moveTo(x0, y0 + r).arcTo(x0, y0, x0 + r, y0, r);
+    g.moveTo(x0 + r, y1).arcTo(x0, y1, x0, y1 - r, r);
+  }
+  if (x1 >= from && x1 <= to) {
+    dashSide(g, false, y0 + r, y1 - r, x1, y0, y1);
+    g.moveTo(x1 - r, y0).arcTo(x1, y0, x1, y0 + r, r);
+    g.moveTo(x1, y1 - r).arcTo(x1, y1, x1 - r, y1, r);
+  }
+}
+
 /** Hides the cell labels from `from` on (the ones shown last frame). */
 function hideCells(node: ClipNode, from: number): void {
   for (let i = from; i < node.cellsUsed; i += 1) node.cellTexts[i]!.visible = false;
   node.cellsUsed = from;
+}
+
+function hideCellBoxes(node: ClipNode): void {
+  if (node.cellBoxes) node.cellBoxes.visible = false;
 }
 
 function hideCellGlow(node: ClipNode): void {
@@ -1402,6 +1487,12 @@ export function createClipNodeRegistry(
         palette.background ?? COLORS.background,
         node.clipHue,
         (palette.clipTint ?? COLORS.clipTint) * (muted ? CLIP_MUTED_TINT_SCALE : 1),
+      );
+      // Against the card at its most tinted: under the hovered cell's glow.
+      node.clipInk = legibleInk(
+        node.clipHue,
+        mixColor(node.cardFill, node.clipHue, CELL_GLOW_ALPHA),
+        palette.inkContrast ?? COLORS.inkContrast,
       );
     }
     return node.cardFill;
@@ -2044,6 +2135,7 @@ export function createClipNodeRegistry(
       pillKey: -1,
       pillWidth: 0,
       clipHue: 0x777777,
+      clipInk: 0x777777,
       icon: null,
       iconSource: null,
       iconTint: -1,
@@ -2088,6 +2180,14 @@ export function createClipNodeRegistry(
       cellsMuted: false,
       cellsHover: -1,
       cellGlow: null,
+      cellBoxes: null,
+      cellBoxesContent: null,
+      cellBoxesStart: Number.NaN,
+      cellBoxesWidth: -1,
+      cellBoxesHeight: -1,
+      cellBoxesFrom: Number.NaN,
+      cellBoxesTo: Number.NaN,
+      cellBoxesInk: -1,
 
       hash: "",
       width: 0,
@@ -2121,6 +2221,7 @@ export function createClipNodeRegistry(
     if (!cells || cells.beats.length === 0 || band < 4 || width < 24) {
       hideCells(node, 0);
       hideCellGlow(node);
+      hideCellBoxes(node);
       node.cellsContent = null;
       return;
     }
@@ -2157,9 +2258,11 @@ export function createClipNodeRegistry(
     const count = Math.min(beats.length, labels.length);
     const pxPerBeat = width / Math.max(view.clip.duration, 1e-9);
     const contentLeft = contentLeftPx(width, bandHeight);
-    // An emphasised label takes the clip's own colour (cardFillOf keeps it).
+    // An emphasised label takes the clip's own colour, lighter (deeper on the
+    // light theme) so it reads on the card (cardFillOf keeps both).
     cardFillOf(node, view);
     const ink = node.clipHue;
+    const strongInk = node.clipInk;
     const bandTop = bodyTop + inset;
     // The hovered cell's glow (drawn even where its label does not fit).
     if (hover >= 0 && hover < beats.length) {
@@ -2193,11 +2296,17 @@ export function createClipNodeRegistry(
     }
     if (band < CELL_MIN_BAND) {
       hideCells(node, 0);
+      hideCellBoxes(node);
       return;
     }
     // The visible span in local px (the whole clip when unbounded).
     const localLeft = Math.max(0, visibleLeft - x);
     const localRight = Math.min(width, visibleRight - x);
+    if (strong !== undefined) {
+      placeCellBoxes(node, view, content!, cells, bandTop, band, contentLeft, localLeft, localRight);
+    } else {
+      hideCellBoxes(node);
+    }
     const size = band >= CELL_TALL_BAND ? CELL_FONT_SIZE : CELL_FONT_SIZE_SMALL;
     const charPx = size * CELL_CHAR_RATIO;
     const y = bandTop + CELL_PAD_Y;
@@ -2213,7 +2322,9 @@ export function createClipNodeRegistry(
       if (nextX <= localLeft) continue;
       const label = labels[index]!;
       if (label.length === 0) continue;
-      const textX = Math.max(cellX + CELL_PAD_X, contentLeft + CELL_PAD_X, localLeft + CELL_PAD_X);
+      const emphasised = strong !== undefined && strong[index] === true;
+      const textX =
+        Math.max(cellX, contentLeft, localLeft) + CELL_PAD_X + (emphasised ? CELL_BOX_TEXT_SHIFT : 0);
       if (label.length * charPx > nextX - CELL_PAD_X - textX) continue;
       let text = node.cellTexts[used];
       if (!text) {
@@ -2236,8 +2347,7 @@ export function createClipNodeRegistry(
         text.style.stroke = { color: halo, width: CELL_HALO_WIDTH, join: "round" };
         node.cellHalos[used] = halo;
       }
-      const emphasised = strong !== undefined && strong[index] === true;
-      applyText(text, label, emphasised ? ink : palette.text, size, emphasised ? "700" : "500");
+      applyText(text, label, emphasised ? strongInk : palette.text, size, emphasised ? "700" : "500");
       // The hovered cell's label at full strength.
       text.alpha = alpha * (emphasised || index === hover ? 1 : CELL_TEXT_ALPHA);
       text.x = Math.round(textX);
@@ -2245,6 +2355,81 @@ export function createClipNodeRegistry(
       used += 1;
     }
     hideCells(node, used);
+  }
+
+  // The dashed outline of each emphasised cell inside the visible span
+  // (rounded out to CELL_BOX_WINDOW), in the label's own colour: nothing to
+  // do on a frame whose drawn window and geometry match the last one.
+  function placeCellBoxes(
+    node: ClipNode,
+    view: PlaylistClipPresentation,
+    content: PlaylistClipContent,
+    cells: PlaylistClipCells,
+    bandTop: number,
+    band: number,
+    contentLeft: number,
+    localLeft: number,
+    localRight: number,
+  ): void {
+    const width = view.rect.width;
+    const height = view.rect.height;
+    const start = view.clip.start;
+    const from = Math.floor(localLeft / CELL_BOX_WINDOW) * CELL_BOX_WINDOW;
+    const to = Math.ceil(localRight / CELL_BOX_WINDOW) * CELL_BOX_WINDOW;
+    const ink = node.clipInk;
+    let boxes = node.cellBoxes;
+    if (!boxes) {
+      boxes = new Graphics();
+      boxes.eventMode = "none";
+      boxes.label = "clip-cell-boxes";
+      node.cellBoxes = boxes;
+      // Above the body and the hovered cell's glow, under the lock, the
+      // outline and the labels.
+      const under = node.cellGlow ?? node.body;
+      node.container.addChildAt(boxes, node.container.getChildIndex(under) + 1);
+    }
+    boxes.alpha = view.effectivelyMuted ? 0.45 : 1;
+    boxes.visible = true;
+    if (
+      node.cellBoxesContent === content &&
+      node.cellBoxesStart === start &&
+      node.cellBoxesWidth === width &&
+      node.cellBoxesHeight === height &&
+      node.cellBoxesFrom === from &&
+      node.cellBoxesTo === to &&
+      node.cellBoxesInk === ink
+    ) {
+      return;
+    }
+    node.cellBoxesContent = content;
+    node.cellBoxesStart = start;
+    node.cellBoxesWidth = width;
+    node.cellBoxesHeight = height;
+    node.cellBoxesFrom = from;
+    node.cellBoxesTo = to;
+    node.cellBoxesInk = ink;
+
+    boxes.clear();
+    const beats = cells.beats;
+    const strong = cells.strong!;
+    const pxPerBeat = width / Math.max(view.clip.duration, 1e-9);
+    const y0 = Math.round(bandTop) + 0.5;
+    const y1 = Math.round(bandTop + band) - 0.5;
+    let drew = false;
+    let index = Math.max(0, sortedUpperBound(beats, start + from / pxPerBeat) - 1);
+    for (; index < beats.length; index += 1) {
+      const cellX = (beats[index]! - start) * pxPerBeat;
+      if (cellX >= to || cellX >= width) break;
+      if (strong[index] !== true) continue;
+      const isLast = index + 1 >= beats.length;
+      const nextX = isLast ? width : Math.min(width, (beats[index + 1]! - start) * pxPerBeat);
+      const x0 = Math.round(Math.max(cellX + CELL_BOX_INSET, contentLeft)) + 0.5;
+      const x1 = Math.round(nextX - (nextX >= width ? CLIP_ACCENT_INSET : CELL_BOX_INSET)) - 0.5;
+      if (x1 - x0 < CELL_BOX_MIN_WIDTH) continue;
+      dashBox(boxes, x0, y0, x1, y1, from, to);
+      drew = true;
+    }
+    if (drew) boxes.stroke({ color: ink, width: 1, alpha: CELL_BOX_ALPHA });
   }
 
   function syncFrame(
@@ -2416,6 +2601,7 @@ export function createClipNodeRegistry(
         if (node.period) node.period.removeFromParent();
         for (const cell of node.cellTexts) cell.removeFromParent();
         node.cellGlow?.destroy();
+        node.cellBoxes?.destroy();
       } catch {
         // noop — best-effort cleanup
       }

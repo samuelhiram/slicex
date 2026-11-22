@@ -7,6 +7,7 @@ import {
   expandFinancialEvents,
   occurrenceAmount,
   projectFinancialDocument,
+  ruleChangeStartingAt,
   ruleOccurrenceDates,
   ruleSegments,
   scheduledTotal,
@@ -247,6 +248,112 @@ describe("editItemOccurrence", () => {
       frequency: "semimonthly",
     });
     expect(back.ruleChanges).toBeUndefined();
+  });
+
+  it("'this' narrows a change that starts there: the following ones are back to the rule before", () => {
+    const following = editItemOccurrence(salary, { date: "2026-12-15", scope: "following", amount: 5000 });
+    const narrowed = editItemOccurrence(following, { date: "2026-12-15", scope: "this", amount: 5000 });
+    expect(narrowed.ruleChanges).toBeUndefined();
+    expect(narrowed.occurrenceEdits).toEqual([{ date: "2026-12-15", amount: 5000 }]);
+    expect(amountsOf([narrowed], "sueldo").slice(0, 4)).toEqual([
+      ["2026-11-30", 9000],
+      ["2026-12-15", 5000],
+      ["2026-12-31", 9000],
+      ["2027-01-15", 9000],
+    ]);
+    // ... and back and forth, as many times as it takes.
+    const again = editItemOccurrence(narrowed, { date: "2026-12-15", scope: "following", amount: 5000 });
+    expect(again).toEqual(following);
+    expect(editItemOccurrence(again, { date: "2026-12-15", scope: "this", amount: 5000 })).toEqual(narrowed);
+    // The rule's own amount: no trace of either.
+    expect(editItemOccurrence(again, { date: "2026-12-15", scope: "this", amount: 9000 })).toEqual(salary);
+  });
+
+  it("narrowing a change keeps the other changes and edits", () => {
+    let item: IncomeItem = editItemOccurrence(salary, { date: "2026-12-15", scope: "following", amount: 5000 });
+    item = editItemOccurrence(item, { date: "2027-01-15", scope: "following", amount: 7000 });
+    item = editItemOccurrence(item, { date: "2026-12-31", scope: "this", amount: 1 });
+    const narrowed = editItemOccurrence(item, { date: "2026-12-15", scope: "this", amount: 5000 });
+    expect(narrowed.ruleChanges).toEqual([{ from: "2027-01-15", amount: 7000 }]);
+    expect(narrowed.occurrenceEdits).toEqual([
+      { date: "2026-12-15", amount: 5000 },
+      { date: "2026-12-31", amount: 1 },
+    ]);
+    // A later payment of the change is its own: the change stays.
+    const later = editItemOccurrence(item, { date: "2026-12-31", scope: "this", amount: 2 });
+    expect(later.ruleChanges).toEqual(item.ruleChanges);
+  });
+
+  it("narrowing a change of cadence brings the old cadence back; not when the payment only exists with it", () => {
+    const weekly = editItemOccurrence(salary, {
+      date: "2026-12-15",
+      scope: "following",
+      frequency: "weekly",
+      amount: 2000,
+    });
+    const narrowed = editItemOccurrence(weekly, { date: "2026-12-15", scope: "this", amount: 2000 });
+    expect(narrowed.ruleChanges).toBeUndefined();
+    expect(amountsOf([narrowed], "sueldo").slice(0, 3)).toEqual([
+      ["2026-11-30", 9000],
+      ["2026-12-15", 2000],
+      ["2026-12-31", 9000],
+    ]);
+    // 22 dic is a payday of the weekly rule only: an edit over it.
+    const orphan: IncomeItem = { ...salary, ruleChanges: [{ from: "2026-12-22", frequency: "weekly" }] };
+    const edited = editItemOccurrence(orphan, { date: "2026-12-22", scope: "this", amount: 100 });
+    expect(edited.ruleChanges).toEqual(orphan.ruleChanges);
+    expect(edited.occurrenceEdits).toEqual([{ date: "2026-12-22", amount: 100 }]);
+  });
+
+  it("a change dated before its first payment (the item was moved) is narrowed from that payment", () => {
+    const moved: IncomeItem = { ...salary, ruleChanges: [{ from: "2026-12-18", amount: 5000 }] };
+    expect(ruleChangeStartingAt(moved, "2026-12-31")).toEqual({ from: "2026-12-18", amount: 5000 });
+    expect(ruleChangeStartingAt(moved, "2027-01-15")).toBeUndefined();
+    const narrowed = editItemOccurrence(moved, { date: "2026-12-31", scope: "this", amount: 5000 });
+    expect(narrowed.ruleChanges).toBeUndefined();
+    expect(narrowed.occurrenceEdits).toEqual([{ date: "2026-12-31", amount: 5000 }]);
+    // Changed from that payment: one change, not two.
+    const raised = editItemOccurrence(moved, { date: "2026-12-31", scope: "following", amount: 6000 });
+    expect(raised.ruleChanges).toEqual([{ from: "2026-12-31", amount: 6000 }]);
+  });
+
+  it("a payment edited on its own keeps the change it starts when edited again", () => {
+    const both: IncomeItem = {
+      ...salary,
+      ruleChanges: [{ from: "2026-12-15", amount: 12000 }],
+      occurrenceEdits: [{ date: "2026-12-15", amount: 10000 }],
+    };
+    const next = editItemOccurrence(both, { date: "2026-12-15", scope: "this", amount: 12000 });
+    expect(next.ruleChanges).toEqual(both.ruleChanges);
+    expect(next.occurrenceEdits).toBeUndefined();
+  });
+
+  it("a credit card's payments narrow the same way", () => {
+    const card: FinancialItem = {
+      id: "card",
+      kind: "credit-card",
+      name: "Tarjeta",
+      balance: 10000,
+      annualRate: 0,
+      cutDay: 1,
+      dueDay: 20,
+      minimumPayment: 1000,
+      paymentAmount: 2000,
+      recurrence: { frequency: "monthly", startDate: "2026-11-21" },
+    };
+    const following = editItemOccurrence(card, { date: "2027-01-20", scope: "following", amount: 4000 });
+    expect(following.ruleChanges).toEqual([{ from: "2027-01-20", amount: 4000 }]);
+    const narrowed = editItemOccurrence(following, { date: "2027-01-20", scope: "this", amount: 4000 });
+    expect(narrowed.ruleChanges).toBeUndefined();
+    expect(narrowed.occurrenceEdits).toEqual([{ date: "2027-01-20", amount: 4000 }]);
+  });
+
+  it("nothing changed: the same item, in both scopes", () => {
+    const following = editItemOccurrence(salary, { date: "2026-12-15", scope: "following", amount: 5000 });
+    expect(editItemOccurrence(following, { date: "2026-12-15", scope: "following", amount: 5000 })).toBe(following);
+    expect(editItemOccurrence(salary, { date: "2026-12-15", scope: "following", amount: 9000 })).toBe(salary);
+    const weekly = editItemOccurrence(salary, { date: "2026-12-15", scope: "following", frequency: "weekly" });
+    expect(editItemOccurrence(weekly, { date: "2026-12-15", scope: "following", amount: 9000 })).toBe(weekly);
   });
 
   it("'following' replaces the edit of that occurrence and keeps later ones", () => {

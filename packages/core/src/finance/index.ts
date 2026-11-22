@@ -24,6 +24,7 @@ export {
   occurrenceAmount,
   occurrenceEditAmounts,
   removeRuleChange,
+  ruleChangeStartingAt,
   ruleOccurrenceDates,
   ruleSegmentAt,
   ruleSegments,
@@ -31,6 +32,7 @@ export {
   shiftItemRules,
   sortedRuleChanges,
   withAmountInForce,
+  withoutRuleChangeAt,
   withRuleAmount,
 } from "./rules";
 export type { OccurrenceEditRequest, OccurrenceScope, RuleSegment } from "./rules";

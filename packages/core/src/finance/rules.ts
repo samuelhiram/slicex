@@ -254,16 +254,46 @@ export function ruleOccurrenceDates(item: FinancialItem, range: { from: ISODate;
  * on their cadence.
  */
 export function isScheduledOn(item: FinancialItem, date: ISODate): boolean {
-  if (!isISODate(date)) return false;
-  const day = { from: date, to: date };
+  return isISODate(date) && hasOccurrenceIn(item, { from: date, to: date });
+}
+
+function hasOccurrenceIn(item: FinancialItem, range: { from: ISODate; to: ISODate }): boolean {
+  if (range.from > range.to) return false;
   if (item.kind === "credit-card") {
-    const window = intersectWindow(item.recurrence.startDate, item.recurrence.endDate, day);
+    const window = intersectWindow(item.recurrence.startDate, item.recurrence.endDate, range);
     if (!window) return false;
     const out: ISODate[] = [];
     expandMonthlyOnDay(item.dueDay, window, out);
     return out.length > 0;
   }
-  return ruleOccurrenceDates(item, day).length > 0;
+  return ruleOccurrenceDates(item, range).length > 0;
+}
+
+/**
+ * The rule change whose FIRST occurrence is the one on `date` (usually dated
+ * that same day; an item moved in time can leave it a few days before), or
+ * undefined: "este y los siguientes" was applied on that occurrence.
+ */
+export function ruleChangeStartingAt(item: FinancialItem, date: ISODate): FinancialRuleChange | undefined {
+  if (!isISODate(date) || item.recurrence.frequency === "once") return undefined;
+  const segment = ruleSegmentAt(item, date);
+  const change = segment.change;
+  if (change === undefined || date < segment.from) return undefined;
+  if (date > segment.from && hasOccurrenceIn(item, { from: segment.from, to: addDays(date, -1) })) return undefined;
+  return change;
+}
+
+/**
+ * The item without the rule change that starts on the occurrence of `date`:
+ * what that occurrence and the following ones go back to. Undefined when no
+ * change starts there, or when the occurrence exists only because of it (a
+ * cadence that the rule before it does not have on that day).
+ */
+export function withoutRuleChangeAt<T extends FinancialItem>(item: T, date: ISODate): T | undefined {
+  const change = ruleChangeStartingAt(item, date);
+  if (change === undefined) return undefined;
+  const without = removeRuleChange(item, change.from);
+  return isScheduledOn(without, date) ? without : undefined;
 }
 
 /** True when the schedule of `item` (segments applied) has an occurrence before `date`. */
@@ -299,6 +329,15 @@ export interface OccurrenceEditRequest {
 
 function sameInterval(a: number | undefined, b: number | undefined): boolean {
   return (a ?? 1) === (b ?? 1);
+}
+
+function sameChange(a: FinancialRuleChange, b: FinancialRuleChange): boolean {
+  return (
+    a.from === b.from &&
+    a.amount === b.amount &&
+    a.frequency === b.frequency &&
+    (a.frequency === undefined || sameInterval(a.interval, b.interval))
+  );
 }
 
 function withEdits<T extends FinancialItem>(item: T, edits: FinancialOccurrenceEdit[]): T {
@@ -339,7 +378,10 @@ export function removeRuleChange<T extends FinancialItem>(item: T, from: ISODate
  * `request.date`, keeping it ONE item:
  * - one-time item: its own amount (and, with a cadence, it starts repeating
  *   from that date, open-ended);
- * - "this": an occurrence edit (none when the amount is the rule's);
+ * - "this": an occurrence edit (none when the amount is the rule's). On an
+ *   occurrence where a rule change starts (and with no edit of its own) it
+ *   NARROWS that change to the occurrence: the change goes, the following
+ *   ones are back to the rule before it ("following" is reversible);
  * - "following" on the first occurrence: the base rule itself (and changes
  *   dated on or before it go: the new base replaces them);
  * - "following" later: a rule change from that date (merged with one already
@@ -370,14 +412,17 @@ export function editItemOccurrence<T extends FinancialItem>(item: T, request: Oc
 
   if (request.scope === "this") {
     if (amount === undefined || !isScheduledOn(item, request.date)) return item;
-    const ruled = positiveMoney(ruleSegmentAt(item, request.date).amount);
-    const edits = editsWithout(item, request.date);
+    const edited = occurrenceEditAmounts(item)?.has(request.date) ?? false;
+    const base = (edited ? undefined : withoutRuleChangeAt(item, request.date)) ?? item;
+    const ruled = positiveMoney(ruleSegmentAt(base, request.date).amount);
+    const edits = editsWithout(base, request.date);
     if (positiveMoney(amount) !== ruled) edits.push({ date: request.date, amount });
     const before = item.occurrenceEdits ?? [];
     const same =
+      base === item &&
       edits.length === before.length &&
       edits.every((edit) => before.some((old) => old && old.date === edit.date && old.amount === edit.amount));
-    return same ? item : withEdits(item, edits);
+    return same ? item : withEdits(base, edits);
   }
 
   // "following"
@@ -405,10 +450,13 @@ export function editItemOccurrence<T extends FinancialItem>(item: T, request: Oc
   }
 
   let next: T = clearOccurrenceEdit(item, request.date);
-  const changes = (next.ruleChanges ?? []).filter((change) => change && change.from !== request.date);
-  const existing = next.ruleChanges?.find((change) => change && change.from === request.date);
+  // The change that already starts on this occurrence, if any: it is replaced.
+  const existing = ruleChangeStartingAt(next, request.date);
+  const changes = (next.ruleChanges ?? []).filter(
+    (change) => change && change.from !== request.date && change.from !== existing?.from,
+  );
   // The rule in force the day before: what a change on this date is compared with.
-  const prior = ruleSegmentAt(removeRuleChange(next, request.date), addDays(request.date, -1));
+  const prior = ruleSegmentAt(withChanges(next, changes.slice()), addDays(request.date, -1));
   const merged: FinancialRuleChange = { from: request.date };
   const mergedAmount = newAmount ? amount! : existing?.amount;
   if (mergedAmount !== undefined && positiveMoney(mergedAmount) !== positiveMoney(prior.amount)) {
@@ -434,7 +482,11 @@ export function editItemOccurrence<T extends FinancialItem>(item: T, request: Oc
     if (interval !== undefined) merged.interval = interval;
   }
   if (merged.amount !== undefined || merged.frequency !== undefined) changes.push(merged);
-  next = withChanges(next, changes);
+  const before = next.ruleChanges ?? [];
+  const same =
+    changes.length === before.length &&
+    changes.every((change) => before.some((old) => old && sameChange(old, change)));
+  if (!same) next = withChanges(next, changes);
   return next;
 }
 

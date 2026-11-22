@@ -11,10 +11,11 @@ import {
   expandFinancialEvents,
   occurrenceAmount,
   occurrenceEditAmounts,
+  ruleChangeStartingAt,
   ruleOccurrenceDates,
   ruleSegmentAt,
   ruleSegments,
-  sortedRuleChanges,
+  withoutRuleChangeAt,
   type FinancialDocument,
   type FinancialEventType,
   type FinancialItem,
@@ -54,8 +55,14 @@ export interface OccurrenceInfo {
   ruleAmount: number;
   /** This payment has a one-off edit ("solo este pago"). */
   edited: boolean;
-  /** A rule change ("a partir de aquí") starts on this date. */
+  /** A rule change ("este y los siguientes") starts on this payment. */
   changeStartsHere: boolean;
+  /**
+   * The rule before the change that starts here: what this payment and the
+   * following ones go back to without it. Null when no change starts here
+   * (or this payment exists only because of it).
+   */
+  before: { amount: number; rule: FinancialRecurrence } | null;
   /** The cadence in force on that date. */
   rule: FinancialRecurrence;
   /** The item's first payment: a "from here" change edits its base rule. */
@@ -122,6 +129,7 @@ export function findOccurrence(
     ruleAmount = amount;
   }
   const direction: 1 | -1 = item.kind === "income" ? 1 : -1;
+  const without = editable && !once ? withoutRuleChangeAt(item, payment.date) : undefined;
   return {
     itemId: item.id,
     date: payment.date,
@@ -132,7 +140,14 @@ export function findOccurrence(
     amount,
     ruleAmount,
     edited: !once && (occurrenceEditAmounts(item)?.has(payment.date) ?? false),
-    changeStartsHere: !once && sortedRuleChanges(item).some((change) => change.from === payment.date),
+    changeStartsHere: ruleChangeStartingAt(item, payment.date) !== undefined,
+    before:
+      without === undefined
+        ? null
+        : {
+            amount: occurrenceAmount({ ...without, occurrenceEdits: undefined } as FinancialItem, payment.date),
+            rule: ruleSegmentAt(without, payment.date).recurrence,
+          },
     rule: ruleSegmentAt(item, payment.date).recurrence,
     // Every payment since the item's start is inside the range when it starts on or after it.
     first: index === 0 && item.recurrence.startDate >= doc.startDate,
@@ -180,8 +195,24 @@ export function signedAmount(direction: 1 | -1, amount: number): string {
 }
 
 /**
+ * "Solo este pago" on a payment where a change starts takes the change back
+ * (the payment has no edit of its own): the rule its following payments go
+ * back to, or null when they do not change.
+ */
+export function narrowedRule(info: OccurrenceInfo): OccurrenceInfo["before"] {
+  return info.edited ? null : info.before;
+}
+
+/** A rule in words: "+$9,000 /quincena" (a card has no cadence of its own). */
+export function ruleWords(item: FinancialItem, info: OccurrenceInfo, amount: number, rule: FinancialRecurrence): string {
+  const money = signedAmount(info.direction, amount);
+  return item.kind === "credit-card" ? money : `${money} ${frequencyShort(rule)}`;
+}
+
+/**
  * What a change to a payment did, in words, for the announcer:
- * "Gas: −$400 solo el 5 dic" / "Sueldo: +$12,000 /quincena desde el 12 dic".
+ * "Gas: −$400 solo el 5 dic" / "Sueldo: +$12,000 /quincena desde el 12 dic" /
+ * "Sueldo: +$5,000 solo el 15 ene; los siguientes vuelven a +$9,000 /quincena".
  */
 export function describeOccurrenceEdit(
   item: FinancialItem,
@@ -192,9 +223,15 @@ export function describeOccurrenceEdit(
   const amount = request.amount ?? info.amount;
   if (info.once) return `${item.name}: ${signedAmount(info.direction, amount)}`;
   if (request.scope === "this") {
-    return amount === 0
-      ? `${item.name}: sin pago el ${formatDateShort(info.date)}`
-      : `${item.name}: ${signedAmount(info.direction, amount)} solo el ${formatDateShort(info.date)}`;
+    const back = narrowedRule(info);
+    if (back !== null && amount === back.amount) {
+      return `${item.name}: vuelve a ${ruleWords(item, info, back.amount, back.rule)} desde el ${formatDateShort(info.date)}`;
+    }
+    const only =
+      amount === 0
+        ? `${item.name}: sin pago el ${formatDateShort(info.date)}`
+        : `${item.name}: ${signedAmount(info.direction, amount)} solo el ${formatDateShort(info.date)}`;
+    return back === null ? only : `${only}; los siguientes vuelven a ${ruleWords(item, info, back.amount, back.rule)}`;
   }
   return `${item.name}: ${signedAmount(info.direction, amount)} ${frequencyShort(rule)} desde el ${formatDateShort(info.date)}`;
 }

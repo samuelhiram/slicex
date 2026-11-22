@@ -71,6 +71,9 @@ export interface PlaylistThemePalette {
   clipTint: number; // clip card fill: mix(clip colour, background, t)
   clipBorderAlpha: number;
   shadowAlpha: number;
+  // Contrast of a label written in its clip's colour (legibleInk) against
+  // the clip's own surface.
+  inkContrast: number;
 }
 
 export const LIGHT_PALETTE: Readonly<PlaylistThemePalette> = {
@@ -121,6 +124,7 @@ export const LIGHT_PALETTE: Readonly<PlaylistThemePalette> = {
   clipTint: 0.13,
   clipBorderAlpha: 0.38,
   shadowAlpha: 0.06,
+  inkContrast: 4.5,
 };
 
 export const DARK_PALETTE: Readonly<PlaylistThemePalette> = {
@@ -171,6 +175,7 @@ export const DARK_PALETTE: Readonly<PlaylistThemePalette> = {
   clipTint: 0.2,
   clipBorderAlpha: 0.42,
   shadowAlpha: 0,
+  inkContrast: 6,
 };
 
 export const PLAYLIST_THEMES: Readonly<
@@ -232,6 +237,69 @@ export function mixColor(a: number, b: number, t: number): number {
   const g = Math.round(ag + (bg - ag) * k);
   const bl = Math.round(ab + (bb - ab) * k);
   return (r << 16) | (g << 8) | bl;
+}
+
+function channelLuminance(value: number): number {
+  const c = value / 255;
+  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+function luminance(color: number): number {
+  return (
+    0.2126 * channelLuminance((color >> 16) & 0xff) +
+    0.7152 * channelLuminance((color >> 8) & 0xff) +
+    0.0722 * channelLuminance(color & 0xff)
+  );
+}
+
+/** WCAG 2 contrast ratio of two colours (1 to 21). */
+export function contrastRatio(a: number, b: number): number {
+  const la = luminance(a);
+  const lb = luminance(b);
+  return la > lb ? (la + 0.05) / (lb + 0.05) : (lb + 0.05) / (la + 0.05);
+}
+
+// Channel of an HSL colour (CSS Color 4): `n` 0 red, 8 green, 4 blue.
+function hslChannel(h: number, s: number, l: number, n: number): number {
+  const k = (n + h * 12) % 12;
+  const a = s * Math.min(l, 1 - l);
+  return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+}
+
+const INK_LIGHTNESS_STEP = 0.01;
+
+/**
+ * `color` as a text colour on `surface`: the same hue and saturation, moved
+ * away from the surface — lighter on a dark one, deeper on a light one —
+ * until it reaches `minContrast`. A short loop: compute it once per colour
+ * (a cached node value), never per frame.
+ */
+export function legibleInk(color: number, surface: number, minContrast: number): number {
+  if (contrastRatio(color, surface) >= minContrast) return color;
+  const r = ((color >> 16) & 0xff) / 255;
+  const g = ((color >> 8) & 0xff) / 255;
+  const b = (color & 0xff) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  let l = (max + min) / 2;
+  let h = 0;
+  let s = 0;
+  if (d > 0) {
+    s = d / (1 - Math.abs(2 * l - 1));
+    if (max === r) h = ((g - b) / d + 6) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h /= 6;
+  }
+  const step = luminance(surface) < 0.18 ? INK_LIGHTNESS_STEP : -INK_LIGHTNESS_STEP;
+  const end = step > 0 ? 1 : 0;
+  let ink = color;
+  while (l !== end && contrastRatio(ink, surface) < minContrast) {
+    l = Math.max(0, Math.min(1, l + step));
+    ink = (hslChannel(h, s, l, 0) << 16) | (hslChannel(h, s, l, 8) << 8) | hslChannel(h, s, l, 4);
+  }
+  return ink;
 }
 
 // Parse a CSS-style hex colour (#rrggbb) to a Pixi-friendly integer. Falls

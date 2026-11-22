@@ -138,6 +138,33 @@ describe("editOccurrence", () => {
     );
   });
 
+  it("'este y los siguientes' then 'solo este pago': the following payments are back, one undo step", () => {
+    const { core, bridge, beat, cash } = setup();
+    bridge.editOccurrence("sueldo", { date: "2027-01-15", scope: "following", amount: 5000 });
+    const info = bridge.occurrenceAt("sueldo", beat("2027-01-15"))!;
+    expect(info.changeStartsHere).toBe(true);
+    expect(info.edited).toBe(false);
+    expect(info.before).toMatchObject({ amount: 9000, rule: { frequency: "semimonthly" } });
+    expect(bridge.editOccurrence("sueldo", { date: "2027-01-15", scope: "this", amount: 5000 })).toBe(true);
+    const back = [
+      ["2026-12-31", 9000],
+      ["2027-01-15", 5000],
+      ["2027-01-31", 9000],
+      ["2027-02-15", 9000],
+    ];
+    expect(cash("sueldo").slice(2, 6)).toEqual(back);
+    const cells = buildClipContents(bridge.getDocument(), bridge.getProjection(), new Map()).get("sueldo")!.cells!;
+    expect(cells.labels.slice(2, 6)).toEqual(["+$9,000", "+$5,000", "+$9,000", "+$9,000"]);
+    expect(cells.strong!.slice(2, 6)).toEqual([false, true, false, false]);
+    core.undo();
+    expect(cash("sueldo").slice(3, 5)).toEqual([
+      ["2027-01-15", 5000],
+      ["2027-01-31", 5000],
+    ]);
+    core.redo();
+    expect(cash("sueldo").slice(2, 6)).toEqual(back);
+  });
+
   it("a cadence change from a payment restarts the rhythm there", () => {
     const { bridge, cash } = setup();
     bridge.editOccurrence("gas", { date: "2026-12-11", scope: "following", frequency: "biweekly", amount: 1500 });
@@ -184,6 +211,14 @@ describe("editOccurrence", () => {
     );
     expect(describeOccurrenceEdit(item, info, { date: info.date, scope: "following", amount: 400 }, rule)).toBe(
       "Gas: −$400 /semana desde el 4 dic",
+    );
+    bridge.editOccurrence("gas", { date: "2026-12-04", scope: "following", amount: 400 });
+    const changed = bridge.occurrenceAt("gas", beat("2026-12-04"))!;
+    expect(describeOccurrenceEdit(item, changed, { date: info.date, scope: "this", amount: 400 }, rule)).toBe(
+      "Gas: −$400 solo el 4 dic; los siguientes vuelven a −$800 /semana",
+    );
+    expect(describeOccurrenceEdit(item, changed, { date: info.date, scope: "this", amount: 800 }, rule)).toBe(
+      "Gas: vuelve a −$800 /semana desde el 4 dic",
     );
   });
 });

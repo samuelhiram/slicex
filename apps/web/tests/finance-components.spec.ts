@@ -1722,6 +1722,49 @@ describe("OccurrenceCard", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  // A change from 4 dic on ("este y los siguientes"), already applied.
+  const changedDoc = (): FinancialDocument => {
+    const doc = gasDoc();
+    return {
+      ...doc,
+      items: doc.items.map((item) => ({ ...item, ruleChanges: [{ from: "2026-12-04", amount: 500 }] })),
+    };
+  };
+  const scopeButton = (card: HTMLElement, label: string) =>
+    [...card.querySelectorAll<HTMLButtonElement>(".fin-occ__scope-option")].find(
+      (button) => button.textContent === label,
+    )!;
+  const buttonNamed = (card: HTMLElement, label: string) =>
+    [...card.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === label)!;
+
+  it("where a change starts it opens on 'Este y los siguientes'; untouched, Aplicar does nothing", () => {
+    const { bridge } = createFakeBridge(changedDoc());
+    const { card, onClose } = open(bridge);
+    expect(scopeButton(card, "Este y los siguientes").getAttribute("aria-checked")).toBe("true");
+    expect(card.querySelector(".fin-occ__note")!.textContent).toContain("antes, −$800 /semana");
+    click(buttonNamed(card, "Aplicar"));
+    expect(bridge.editOccurrence).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("'Solo este pago' there says the next ones go back, and takes the change back", () => {
+    const { bridge } = createFakeBridge(changedDoc());
+    const { card } = open(bridge);
+    click(scopeButton(card, "Solo este pago"));
+    expect(card.querySelector(".fin-occ__note")!.textContent).toBe("Los pagos siguientes vuelven a −$800 /semana.");
+    click(buttonNamed(card, "Aplicar"));
+    expect(bridge.getItem("gas")!.ruleChanges).toBeUndefined();
+    expect(bridge.getItem("gas")!.occurrenceEdits).toEqual([{ date: "2026-12-04", amount: 500 }]);
+  });
+
+  it("'Volver a $800' undoes the change from there", () => {
+    const { bridge } = createFakeBridge(changedDoc());
+    const { card } = open(bridge);
+    click(buttonNamed(card, "Volver a $800"));
+    expect(bridge.getItem("gas")!.ruleChanges).toBeUndefined();
+    expect(bridge.getItem("gas")!.occurrenceEdits).toBeUndefined();
+  });
+
   it("‹ › and Alt+← / Alt+→ walk to the previous / next payment (none before the first)", () => {
     const { bridge } = createFakeBridge(gasDoc());
     const onNavigate = vi.fn();

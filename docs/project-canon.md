@@ -105,7 +105,11 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     celda queda como marca punteada) y **"Este y los siguientes"** = `ruleChanges`
     (`{ from, amount?, frequency?, interval? }`: monto y/o cada cuánto desde ese pago; en el
     primer pago cambia la regla base). Cambiar la frecuencia fuerza "y los siguientes" y
-    reinicia el ritmo en ese pago; solo monto conserva los días. El motor expande por tramos
+    reinicia el ritmo en ese pago; solo monto conserva los días. El alcance es el **estado** de
+    ese pago y **va y viene** (2026-11-22): donde empieza un cambio la tarjeta abre en "Este y los
+    siguientes"; pasarlo a "Solo este pago" lo acota a ese pago y los siguientes vuelven a la regla
+    anterior (`withoutRuleChangeAt`; la tarjeta lo dice antes de aplicar), y "Volver a $…" lo quita.
+    En el primer pago no hay regla anterior: el cambio es la regla misma. El motor expande por tramos
     (`ruleSegments`) en eventos, liquidación (`payoff.ts`) y búsqueda de objetivo; un préstamo
     por ventana debe lo de su regla **base** (pagar distinto cambia cuándo terminas, no cuánto
     debes). Mover el objeto mueve sus cambios (`shiftItemRules`); recortar un borde no. La
@@ -118,7 +122,12 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     MSI incluidos) arriba de la barra, a la derecha de su marca, solo donde cabe; si el inicio
     de la celda quedó fuera, el texto se pega al borde visible. Resaltados (negrita, color del
     objeto) los pagos que difieren de su regla: un ajuste de solo ese pago y el primero de un
-    cambio. Genérico en el motor: `PlaylistClipContent.cells` (`beats`, `labels`, `strong`);
+    cambio. Ese color no es el de la marca, que se pierde sobre su propio tinte: es el mismo tono
+    más claro en oscuro y más profundo en claro, hasta leerse sobre la tarjeta aun con el brillo
+    del hover (`legibleInk` + `inkContrast` en `palette.ts`, 2026-11-22). Su celda lleva además
+    un **contorno punteado** en ese color, separado de las marcas de los lados (un `Graphics` por
+    nodo, `label: "clip-cell-boxes"`, dibujado solo alrededor de lo visible y redibujado al
+    cambiar el zoom, la tarjeta o el tema, no al desplazar). Genérico en el motor: `PlaylistClipContent.cells` (`beats`, `labels`, `strong`);
     el registro de nodos recicla un `Text` por celda visible (`label: "clip-cell"`), recorta a
     `[stickyLeft, visibleRight]` y no hace nada en un cuadro donde no se movió nada. El host
     las arma en `buildCells` (`visuals.ts`, textos en caché por monto). En "En tu plan" cada

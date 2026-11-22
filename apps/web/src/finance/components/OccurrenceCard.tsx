@@ -14,6 +14,10 @@
 // - "Este y los siguientes": the rule changes from that payment on (amount
 //   and / or cadence); on the item's first payment it is the rule itself.
 //   Picking another cadence switches to it (one payment has no cadence).
+// - The scope is the payment's STATE and goes both ways: where a change
+//   starts, the card opens on "Este y los siguientes", and "Solo este pago"
+//   narrows it to this payment — the following ones are back to the rule
+//   before it (the card says so before applying) — or "Volver a $…" undoes it.
 // - One-time items: the amount (and "Se repite" turns it recurring from
 //   that date). Statement cards and MSI: read-only, with the form.
 // - Live what-if on the money lane while editing (EffectLine); "Aplicar"
@@ -32,7 +36,7 @@ import type { FinancialBridgeApi, FinancialPreview } from "../bridge-api";
 import { formatDateShort, formatDateWeekday, formatMoney, parseNumberInput } from "../format";
 import { KIND_LABELS } from "../labels";
 import { itemColor } from "../mapping";
-import { describeOccurrenceEdit, signedAmount, type OccurrenceInfo } from "../occurrence";
+import { describeOccurrenceEdit, narrowedRule, ruleWords, signedAmount, type OccurrenceInfo } from "../occurrence";
 import { frequencyParts, withFrequencyParts, type FrequencyUnit } from "../schedule-ui";
 import { useAnnounce } from "../../ui/announcer";
 import { useDismiss } from "../../ui/use-dismiss";
@@ -126,7 +130,11 @@ function OccurrenceCardBody({
   const errorId = React.useId();
 
   const [amountText, setAmountText] = React.useState(() => amountInputText(info.amount));
-  const [scope, setScope] = React.useState<OccurrenceScope>("this");
+  // The rule the following payments go back to when this one is narrowed.
+  const back = narrowedRule(info);
+  const [scope, setScope] = React.useState<OccurrenceScope>(
+    info.changeStartsHere && !info.edited ? "following" : "this",
+  );
   const initialParts = React.useMemo(() => frequencyParts(info.rule), [info.rule]);
   const [parts, setParts] = React.useState<{ unit: FrequencyUnit; every: number }>(initialParts);
 
@@ -215,6 +223,13 @@ function OccurrenceCardBody({
       { date: info.date, scope: "this", amount: info.ruleAmount },
       `${item.name}: vuelve a ${signedAmount(info.direction, info.ruleAmount)} el ${formatDateShort(info.date)}`,
     );
+
+  // "Este y los siguientes" taken back: this payment and the next ones follow
+  // the rule before it again.
+  const revertChange = (rule: NonNullable<OccurrenceInfo["before"]>) => {
+    const request: OccurrenceEditRequest = { date: info.date, scope: "this", amount: rule.amount };
+    commit(request, describeOccurrenceEdit(item, info, request, rule.rule));
+  };
 
   const color = itemColor(item);
   const showScope = info.editable && !info.once;
@@ -372,6 +387,19 @@ function OccurrenceCardBody({
               Ajustaste este pago; tu regla dice {signedAmount(info.direction, info.ruleAmount)}.{" "}
               <button type="button" className="fin-link" onClick={revertEdit}>
                 Volver a {formatMoney(info.ruleAmount)}
+              </button>
+            </p>
+          ) : back !== null && effectiveScope === "this" ? (
+            <p className="fin-occ__note">
+              Los pagos siguientes vuelven a{" "}
+              <span className="fin-occ__nowrap">{ruleWords(item, info, back.amount, back.rule)}</span>.
+            </p>
+          ) : back !== null ? (
+            <p className="fin-occ__note">
+              Desde este pago rige un cambio; antes,{" "}
+              <span className="fin-occ__nowrap">{ruleWords(item, info, back.amount, back.rule)}</span>.{" "}
+              <button type="button" className="fin-link" onClick={() => revertChange(back)}>
+                {back.amount === info.ruleAmount ? "Quitar el cambio" : `Volver a ${formatMoney(back.amount)}`}
               </button>
             </p>
           ) : info.changeStartsHere ? (
