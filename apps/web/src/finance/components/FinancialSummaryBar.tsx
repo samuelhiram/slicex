@@ -615,7 +615,7 @@ export function FinancialSummaryBar({
                 value={nextPayment ? `${formatMoneyWhole(nextPayment.amount)} ${nextPayment.name}` : "—"}
                 date={nextPayment ? fmtDate(nextPayment.date) : undefined}
                 describedBy={help.next.id}
-                action={nextPayment ? { label: "Ir a esa fecha", onClick: goNext } : undefined}
+                action={nextPayment ? { label: "Ir a ese día", onClick: goNext } : undefined}
               />
             ) : null}
           </dl>

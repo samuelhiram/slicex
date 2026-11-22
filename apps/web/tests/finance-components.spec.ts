@@ -758,9 +758,11 @@ describe("react-5: avalanche uses the debts still owed at the playhead day", () 
   function rows() {
     return [...document.querySelectorAll(".fin-table tbody tr")].map((tr) => {
       const cells = tr.querySelectorAll("td");
+      // The name cell carries the rate under the name ("54% anual").
       return {
-        name: cells[1]?.textContent ?? "",
-        balance: cells[3]?.textContent ?? "",
+        name: cells[1]?.querySelector(".fin-table__who")?.textContent ?? "",
+        rate: cells[1]?.querySelector(".fin-table__rate")?.textContent ?? "",
+        balance: cells[2]?.textContent ?? "",
       };
     });
   }
@@ -769,6 +771,15 @@ describe("react-5: avalanche uses the debts still owed at the playhead day", () 
     const { bridge } = createFakeBridge(createDemoFinancialDocument(START), { time: 0 });
     mount(h(DebtStrategyPanel, { bridge }));
     expect(rows().map((r) => r.name)).toContain("Préstamo personal");
+    // The rate rides under each name (five columns fit the rail).
+    expect(rows().every((r) => /% anual$/.test(r.rate))).toBe(true);
+    expect([...document.querySelectorAll(".fin-table thead th")].map((th) => th.textContent)).toEqual([
+      "#",
+      "Deuda · tasa",
+      "Saldo",
+      "Mín.",
+      "Extra",
+    ]);
   });
 
   it("day 250 drops the paid-off loan and shows that day's balances", () => {

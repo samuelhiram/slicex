@@ -229,6 +229,40 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* How text wraps, everywhere: never one word alone on a last line.
+   Running text (paragraphs, hints, captions, details) wraps "pretty" —
+   the browser evens out the last lines; titles, labels, empty states and
+   banners "balance" — every line about the same width. Only the style
+   longhand: a `white-space: nowrap` anywhere keeps winning, and a browser
+   without it wraps as before. */
+p,
+li,
+dd,
+[class*="__hint"],
+[class*="__help"],
+[class*="__detail"],
+[class*="__desc"],
+[class*="__note"],
+[class*="__sentence"],
+[class*="__text"],
+[class*="__meta"],
+[class*="__caption"],
+[class*="__line"] {
+  text-wrap-style: pretty;
+}
+
+h1,
+h2,
+h3,
+h4,
+[class*="__title"],
+[class*="__heading"],
+[class*="__label"],
+[class*="__empty"],
+.fin-banner__text {
+  text-wrap-style: balance;
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -1328,7 +1362,10 @@ button.fin-summary__chip:hover,
   z-index: 30;
   min-width: 280px;
   max-width: 380px;
-  max-height: 360px;
+  /* Tall enough for its longest menu ("Nuevo": six kinds and "Escribir…"),
+     so no last item shows cut in half; the floating guard still caps it at
+     the window and shifts it inside. */
+  max-height: min(640px, calc(100dvh - 16px));
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1377,6 +1414,39 @@ button.fin-summary__chip:hover,
 .fin-popover__date {
   min-width: 52px;
   font-weight: 600;
+}
+
+/* The alerts: one column per part (dot · date · what), shared by every
+   row (subgrid), so the amounts line up even when a date carries its year
+   ("29 nov" over "29 abr 2027"). */
+.fin-popover.fin-alerts {
+  width: min(380px, calc(100vw - 16px));
+}
+
+.fin-popover.fin-alerts > [role="menu"] {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, max-content);
+  row-gap: 1px;
+}
+
+.fin-popover.fin-alerts .fin-popover__item {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  column-gap: 10px;
+  text-align: left;
+}
+
+.fin-alerts .fin-popover__date {
+  min-width: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A long name wraps under itself, inside the popover's width. */
+.fin-popover.fin-alerts .fin-popover__text {
+  min-width: 0;
+  white-space: normal;
 }
 
 .fin-popover__text {
@@ -2224,7 +2294,8 @@ button.fin-summary__chip[aria-disabled="true"]:hover {
   white-space: nowrap;
 }
 
-.fin-table tr:last-child td {
+.fin-table tr:last-child td,
+.fin-table tbody tr:last-child th {
   border-bottom: 0;
 }
 
@@ -2238,10 +2309,30 @@ button.fin-summary__chip[aria-disabled="true"]:hover {
   color: var(--muted);
 }
 
+/* The debt's name over its rate. The name column takes the room the
+   figures leave (width 100% + max-width 0); a name longer than that wraps
+   instead of being cut. */
 .fin-table__name {
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  width: 100%;
+  max-width: 0;
+  white-space: normal;
+}
+
+.fin-table__who {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.fin-table__rate {
+  display: block;
+  padding-left: 15px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.fin-table td {
+  vertical-align: top;
 }
 
 .fin-table__swatch {
@@ -2463,6 +2554,21 @@ button.fin-summary__chip[aria-disabled="true"]:hover {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* The choices fill their rows: when they wrap, every row ends at the
+   fields' right edge (no short last row). */
+.fin-repeat__presets > .fin-repeat__preset {
+  flex: 1 1 auto;
+}
+
+/* The welcome's five pay choices in one row (they grow back to fill it). */
+.fin-onboarding .fin-repeat__presets {
+  gap: 6px;
+}
+
+.fin-onboarding .fin-repeat__presets > .fin-repeat__preset {
+  padding-inline: 10px;
 }
 
 .fin-repeat__preset {
@@ -2985,15 +3091,16 @@ label.fin-ends__option {
 .playlist-shell__modal.fin-editor,
 .playlist-shell__modal.fin-onboarding {
   min-width: min(320px, calc(100vw - 16px));
-  max-width: min(560px, calc(100vw - 16px));
+  max-width: min(600px, calc(100vw - 16px));
 }
 
 .playlist-shell__modal.fin-editor {
   width: min(520px, calc(100vw - 16px));
 }
 
+/* 600 px: "¿Cada cuánto te pagan?" fits its five choices in one row. */
 .playlist-shell__modal.fin-onboarding {
-  width: min(560px, calc(100vw - 16px));
+  width: min(600px, calc(100vw - 16px));
 }
 
 .fin-editor .fin-editor__header,
@@ -3202,14 +3309,18 @@ h3.fin-editor__section-title {
   font-size: 12px;
 }
 
-.fin-onboarding__debt > :nth-child(1),
-.fin-onboarding__debt > :nth-child(2) {
+/* By what each control is, not its position: each Select carries a hidden
+   native <select>, which shifted positional spans by one (the row ended
+   short and "Día de pago" was cut to "Día d…"). Kind and name share the
+   first row; balance, payment (or its note) and day the second. */
+.fin-onboarding__debt > .fin-select:not(.fin-day-select),
+.fin-onboarding__debt > input:first-of-type {
   grid-column: span 3;
 }
 
-.fin-onboarding__debt > :nth-child(3),
-.fin-onboarding__debt > :nth-child(4),
-.fin-onboarding__debt > :nth-child(5) {
+.fin-onboarding__debt > input:nth-of-type(n + 2),
+.fin-onboarding__debt > .fin-onboarding__debt-note,
+.fin-onboarding__debt > .fin-day-select {
   grid-column: span 2;
 }
 
@@ -3310,7 +3421,9 @@ h3.fin-editor__section-title {
     grid-column: 1 / -1;
   }
 
-  .fin-onboarding__debt > :nth-child(n) {
+  .fin-onboarding .fin-onboarding__debt > .fin-select,
+  .fin-onboarding .fin-onboarding__debt > input,
+  .fin-onboarding .fin-onboarding__debt > .fin-onboarding__debt-note {
     grid-column: 1 / -1;
   }
 
@@ -3453,21 +3566,35 @@ kbd {
   list-style: none;
 }
 
+/* A fix: its title beside "Aplicar", what it does under both at the card's
+   full width (beside the button they wrapped into ragged pairs of lines). */
 .fin-valley__fix {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  padding: 8px 8px 8px 10px;
+  column-gap: 10px;
+  row-gap: 2px;
+  padding: 8px 8px 10px 10px;
   border: 1px solid var(--line);
   border-radius: 10px;
 }
 
 .fin-valley__fix-text {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  display: contents;
+}
+
+.fin-valley__fix-text > :not(.fin-valley__fix-title) {
+  grid-column: 1 / -1;
+}
+
+.fin-valley__fix-title {
+  grid-row: 1;
+  grid-column: 1;
+}
+
+.fin-valley__apply {
+  grid-row: 1;
+  grid-column: 2;
 }
 
 .fin-valley__fix-title {
@@ -5831,11 +5958,18 @@ kbd {
   letter-spacing: -0.01em;
 }
 
+/* Equal columns: the quick picks form a tidy block (rows of four in the
+   dialog, three on a phone) instead of rows of uneven length. */
 .fin-capture__chips {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
   gap: 6px;
   margin: 12px 0 16px;
+}
+
+.fin-capture__chips > .fin-capture__chip {
+  min-width: 0;
+  padding-inline: 6px;
 }
 
 .fin-repeat__preset.fin-capture__chip {
@@ -6974,12 +7108,13 @@ h3.fin-editor__section-title {
   line-height: 13px;
 }
 
-/* A payment: a short bar on the card's lower edge. */
+/* A payment: a short bar on the card's lower edge, below the dates line
+   (9 px tall it crossed the dates' letters). */
 .fin-shape__mark {
   position: absolute;
-  bottom: 4px;
+  bottom: 3px;
   width: 2px;
-  height: 9px;
+  height: 6px;
   margin-left: -1px;
   border-radius: 1px;
   background: var(--clip-color);
@@ -7730,7 +7865,9 @@ input[type="number"]::-webkit-outer-spin-button {
   height: 50px;
   margin-left: 0;
   padding: 0;
-  border: 1px solid var(--line);
+  /* A filled box like its neighbours (Liquidez hoy, Más cifras): no
+     outline of its own; the line between its two cells stays. */
+  border: 1px solid transparent;
   border-radius: 12px;
   background: var(--surface-2);
   font-variant-numeric: tabular-nums;
@@ -7776,7 +7913,9 @@ input[type="number"]::-webkit-outer-spin-button {
 
 .fin-readout--header .fin-readout__cell {
   display: grid;
-  grid-template-columns: auto auto;
+  /* A figure wider than "— DEUDA" gives its extra room to the label's
+     column, so the label stays beside its swatch. */
+  grid-template-columns: auto minmax(0, 1fr);
   grid-template-areas:
     "swatch label"
     "value value";
@@ -7902,8 +8041,12 @@ input[type="number"]::-webkit-outer-spin-button {
     display: none;
   }
 
+  /* " · 31 MAR" is the widest day: every day keeps that room, so moving
+     the pointer never shifts what follows the reading. */
   .fin-readout--header .fin-readout__label-day {
-    display: inline;
+    display: inline-block;
+    min-width: 5.1em;
+    white-space: pre;
   }
 
   .fin-readout--header .fin-readout__date + .fin-readout__cell {
@@ -7996,7 +8139,7 @@ input[type="number"]::-webkit-outer-spin-button {
 @media (max-width: 1309px) {
   .fin-readout .fin-readout__cash,
   .fin-readout .fin-readout__debt {
-    min-width: 7ch;
+    min-width: 8ch;
   }
 }
 
@@ -8127,6 +8270,22 @@ input[type="number"]::-webkit-outer-spin-button {
   justify-content: center;
 }
 
+/* Every header button is a filled box: the movements toggle was the one
+   bare icon among its filled siblings. Open, it keeps the accent. */
+.playlist-shell--finance .fin-summary .fin-summary__actions .fin-icon-button {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.playlist-shell--finance .fin-summary .fin-summary__actions .fin-icon-button:hover {
+  background: var(--hover);
+}
+
+.playlist-shell--finance .fin-summary .fin-summary__actions .fin-search-trigger[aria-expanded="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 /* Futures: a 40 px square only while it is the icon alone (the main plan,
    no other future). With more futures it says where you are — the icon,
    the active future's name (cut with "…") and how many there are — at its
@@ -8223,7 +8382,9 @@ input[type="number"]::-webkit-outer-spin-button {
 .playlist-shell--finance .fin-summary .fin-readout--header .fin-readout__cash,
 .playlist-shell--finance .fin-summary .fin-readout--header .fin-readout__debt {
   font-size: 17px;
-  line-height: 21px;
+  /* Liquidez hoy's field is 24 px tall (its target size): the same line
+     box puts both figures, and both labels, on one baseline. */
+  line-height: 24px;
 }
 
 .playlist-shell--finance .fin-summary .fin-readout--header .fin-readout__cell:nth-child(n) .fin-readout__label {
@@ -8857,6 +9018,49 @@ input[type="number"]::-webkit-outer-spin-button {
   white-space: nowrap;
 }
 
+/* The header as a grid: icon · name · ‹ › · ×, and the date line under the
+   name running the card's whole width (squeezed beside the buttons it
+   broke after its "·"). A long name wraps to a second line, never "…". */
+.fin-occ__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "icon title nav close"
+    "icon date date date";
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 0;
+}
+
+.fin-occ__heading {
+  display: contents;
+}
+
+.fin-occ__icon {
+  grid-area: icon;
+  align-self: start;
+}
+
+.fin-occ__header .fin-occ__title {
+  grid-area: title;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+
+.fin-occ__date {
+  grid-area: date;
+}
+
+.fin-occ__nav {
+  grid-area: nav;
+}
+
+.fin-occ__close {
+  grid-area: close;
+}
+
 /* ‹ › — the previous / next payment, beside ×. */
 .fin-occ__nav {
   display: inline-flex;
@@ -9069,4 +9273,175 @@ input[type="number"]::-webkit-outer-spin-button {
 .fin-changes__remove {
   height: 28px;
   padding: 0 10px;
+}
+
+/* ==========================================================================
+   Header on a phone (≤ 720 px): three rows, both edges aligned.
+     1. the brand and the alerts · · · "Más cifras" and "Nuevo";
+     2. Liquidez hoy (taking the rest) and the four panel buttons;
+     3. the tools, spread across the whole row, and the snap.
+   A grid with named areas (the actions group dissolves into it), so no
+   row is left half empty and no button sits alone on a line.
+   ========================================================================== */
+@media (max-width: 720px) {
+  .playlist-shell--finance .fin-summary {
+    display: grid;
+    grid-template-columns:
+      auto auto minmax(0, 1fr) repeat(4, var(--header-control-h, 40px));
+    grid-template-areas:
+      "brand verdict . more more more new"
+      "metrics metrics metrics record debts search futures"
+      "bar bar bar bar bar bar bar";
+    align-items: center;
+    gap: 8px;
+  }
+
+  .playlist-shell--finance .fin-summary::after,
+  .playlist-shell--finance .fin-summary__spacer {
+    display: none;
+  }
+
+  .playlist-shell--finance .fin-summary__actions {
+    display: contents;
+  }
+
+  .playlist-shell--finance .fin-summary__brand {
+    grid-area: brand;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-verdict {
+    grid-area: verdict;
+    min-width: 0;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-summary__metrics {
+    grid-area: metrics;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-summary__start,
+  .playlist-shell--finance .fin-summary .fin-summary__start .fin-summary__metric {
+    width: 100%;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-summary__more {
+    grid-area: more;
+    justify-self: end;
+  }
+
+  .playlist-shell--finance .fin-summary > .playlist-shell__bar {
+    grid-area: bar;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-record {
+    grid-area: record;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-side__tab--header {
+    grid-area: debts;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-search-trigger {
+    grid-area: search;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-futures {
+    grid-area: futures;
+  }
+
+  .playlist-shell--finance .fin-summary .fin-new {
+    grid-area: new;
+  }
+
+  /* "Nuevo" is its "+" (its name stays the accessible name). */
+  .playlist-shell--finance .fin-summary .fin-new__trigger-words {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* Each panel button and "Nuevo" fill their 40 px column exactly. */
+  .playlist-shell--finance .fin-summary .fin-summary__actions .fin-button,
+  .playlist-shell--finance .fin-summary .fin-summary__actions .fin-icon-button,
+  .playlist-shell--finance .fin-summary .fin-futures__trigger,
+  .playlist-shell--finance .fin-summary .fin-new__trigger {
+    width: var(--header-control-h, 40px);
+    min-width: 0;
+    padding: 0;
+    justify-content: center;
+  }
+
+  /* The tools share the row evenly; the snap keeps its own size. */
+  .playlist-shell--finance .fin-summary .playlist-shell__toolbar {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .playlist-shell--finance .fin-summary .playlist-shell__segmented {
+    flex: 1 1 auto;
+    justify-content: space-between;
+  }
+}
+
+/* ==========================================================================
+   Banners in a narrow canvas (a phone, a side panel open): the text takes
+   the first row (beside the × when there is one), the buttons a second row
+   on the right — as the dialogs' footers. Beside the buttons the text wrapped
+   one or two words per line.
+   ========================================================================== */
+.fin-banners {
+  container: banners / inline-size;
+}
+
+@container banners (max-width: 520px) {
+  .fin-banner {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .fin-banner > .fin-banner__text {
+    order: 0;
+    flex: 1 1 calc(100% - 48px);
+    min-width: 0;
+  }
+
+  .fin-banner:not(:has(> .fin-icon-button)) > .fin-banner__text {
+    flex-basis: 100%;
+  }
+
+  .fin-banner > .fin-icon-button {
+    order: 1;
+    align-self: flex-start;
+  }
+
+  .fin-banner > .fin-button {
+    order: 2;
+  }
+
+  .fin-banner > .fin-button:first-of-type {
+    margin-left: auto;
+  }
+
+  /* The navigation help: each gesture over what it does. */
+  .fin-banner--hint .fin-navhelp__row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0;
+  }
+}
+
+/* The editor's preview before there is anything to preview. */
+.fin-readback.fin-readback--empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
 }

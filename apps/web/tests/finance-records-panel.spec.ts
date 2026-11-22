@@ -349,7 +349,11 @@ describe("MovementsPanel", () => {
     act(() => plan.click());
     expect(title()).toBe("Ingresos de tu plan");
     expect(concepts()).toEqual(["Sueldo"]);
-    expect(caption()).toBe("1 ingreso");
+    // A figure over the plan list too (what it moves over the horizon), so
+    // switching sections never shifts what is below.
+    expect(figure()).toMatch(/^\$[\d,]+$/);
+    expect(figure()).not.toBe("$0");
+    expect(caption()).toBe("1 ingreso en el año");
     act(() => button("Editar", panel()).click());
     expect(calls.items).toEqual(["sueldo"]);
     act(() => button("Ver", panel()).click());
@@ -369,7 +373,9 @@ describe("MovementsPanel", () => {
     expect(counts.checked).toBe(true);
     act(() => counts.click());
     expect(bridge.getItem("sueldo")?.enabled).toBe(false);
-    expect(caption()).toBe("1 ingreso · 1 no cuenta");
+    expect(caption()).toBe("1 ingreso en el año · 1 no cuenta");
+    // Excluded, it moves nothing.
+    expect(figure()).toBe("$0");
     act(() => bridge.core.undo());
     expect(bridge.getItem("sueldo")?.enabled).not.toBe(false);
   });

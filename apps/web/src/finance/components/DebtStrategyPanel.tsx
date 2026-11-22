@@ -234,8 +234,9 @@ export function DebtStrategyPanel({
             <thead>
               <tr>
                 <th className="fin-table__rank">#</th>
-                <th>Deuda</th>
-                <th className="fin-table__num">Tasa</th>
+                {/* The rate rides under the name (the order follows it):
+                    five columns fit the rail without cutting a name. */}
+                <th>Deuda · tasa</th>
                 <th className="fin-table__num">Saldo</th>
                 <th className="fin-table__num">Mín.</th>
                 <th className="fin-table__num">Extra</th>
@@ -248,15 +249,15 @@ export function DebtStrategyPanel({
                   <tr key={debt.id}>
                     <td className="fin-table__rank">{index + 1}</td>
                     <td className="fin-table__name" title={debt.name}>
-                      <span
-                        className="fin-table__swatch"
-                        style={{ background: KIND_COLORS[debt.kind] }}
-                        aria-hidden="true"
-                      />
-                      {debt.name}
-                    </td>
-                    <td className="fin-table__num">
-                      {formatPercent(debt.annualRate)}
+                      <span className="fin-table__who">
+                        <span
+                          className="fin-table__swatch"
+                          style={{ background: KIND_COLORS[debt.kind] }}
+                          aria-hidden="true"
+                        />
+                        {debt.name}
+                      </span>
+                      <span className="fin-table__rate">{formatPercent(debt.annualRate)} anual</span>
                     </td>
                     <td className="fin-table__num">{formatMoneyWhole(debt.balance)}</td>
                     <td className="fin-table__num">

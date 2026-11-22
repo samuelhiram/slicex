@@ -149,6 +149,37 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     columna de nombres mide 132 px (`NARROW_HEADER_WIDTH`, al montar). La tarjeta de pago
     rechaza texto que no es monto (antes cerraba sin avisar). En "En tu plan": "Cada lunes ·
     Sin fin" juntos y "Próximo 23 nov: −$1,200" sin partir fecha y monto.
+  - *Auditoría de simetría y desbordes (2026-11-22):* reglas tipográficas globales al inicio
+    de `globals.css`: texto corrido con `text-wrap-style: pretty` y títulos / etiquetas /
+    estados vacíos / banners con `balance` (solo la propiedad larga: un `nowrap` sigue
+    ganando). Encabezado:
+    - La lectura del día tiene ancho fijo: el día del rótulo reserva el de "· 31 MAR" y las
+      cifras 8ch. Mover el puntero ya no empuja Liquidez, "Más cifras" ni las herramientas.
+    - Las cifras comparten línea base con Liquidez hoy (24 px).
+    - La lectura no lleva borde propio.
+    - El botón de movimientos va relleno como sus vecinos.
+    - En ≤ 720 px el encabezado es una cuadrícula de tres filas, alineada a ambos bordes:
+      marca · alertas · Más · Nuevo / Liquidez · cuatro paneles / herramientas.
+
+    Superficies:
+    - Menús hasta 640 px de alto: "Escribir…" ya no sale cortado.
+    - Alertas en columnas (subgrid), con los montos alineados aunque la fecha lleve año.
+    - Tabla de avalancha en cinco columnas, con la tasa bajo el nombre: ningún nombre
+      cortado.
+    - "En tu plan" muestra cifra (lo que mueve en el horizonte, `planTotal`), así que
+      cambiar de sección no mueve nada.
+    - Arreglos del valle: el título va junto a "Aplicar" y el detalle a todo lo ancho; el
+      interés va en pesos enteros.
+    - Banners angostos (consulta de contenedor): el texto va arriba junto a la × y los
+      botones en una fila a la derecha.
+    - La tarjeta de pago pone la fecha bajo el nombre, a todo lo ancho; el nombre largo pasa
+      a dos líneas, nunca "…".
+    - Los rápidos del registro van en columnas iguales.
+    - Las opciones de "Se repite" llenan sus filas.
+    - El renglón de deudas de la bienvenida se acomoda por tipo de control, ya no por
+      posición: los `<select>` ocultos corrían los anchos.
+    - Vista previa del editor: sin "−—" cuando aún no hay monto, el MSI termina en su último
+      pago y la caja vacía dice qué falta.
   - *Monto con la mano:* el borde superior de un clip es un "nivel" genérico del canvas
     (`PlaylistInteractionOptions.onClipLevelDrag`); el bridge lo mapea al monto (`levelDrag`).
     Un arrastre = una entrada de undo; la píldora muestra el efecto.

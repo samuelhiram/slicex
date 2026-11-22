@@ -423,7 +423,8 @@ function fixWarning(item: FinancialItem, delayDays: number, extraInterest: numbe
     return `Lo pagarías ${delayDays} ${delayDays === 1 ? "día" : "días"} después: revisa que no tenga recargo.`;
   }
   if (extraInterest >= 0.5) {
-    return `Pagarías ${formatPesos(extraInterest)} más de intereses en tu horizonte.`;
+    // Whole pesos, like every figure beside it ("$4,305", not "$4,304.78").
+    return `Pagarías ${formatPesos(Math.round(extraInterest))} más de intereses en tu horizonte.`;
   }
   return null;
 }

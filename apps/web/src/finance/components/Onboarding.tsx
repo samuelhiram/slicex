@@ -698,7 +698,9 @@ export function OnboardingDialog({
                     }}
                   />
                 </div>
-                <label className="fin-editor__field">
+                {/* Wide like every answer around it (half a row left the
+                    other half empty). */}
+                <label className="fin-editor__field fin-editor__field--wide">
                   <span className="fin-editor__label">¿Cuánto cada vez?</span>
                   <input key={pay.key} {...pay.input} type="text" inputMode="decimal" placeholder="ej. 9,000" />
                   {pay.error}

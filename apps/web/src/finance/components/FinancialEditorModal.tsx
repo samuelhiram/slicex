@@ -2047,6 +2047,13 @@ export function FinancialEditorModal(props: FinancialEditorModalProps) {
               />
               {purchase ? <Readback sentence={purchase} /> : null}
               <EffectLine className="fin-editor__field--wide" effect={effect} reserve={doc.minimumCashReserve} />
+              {/* Nothing to show yet (no amount): the box still says what
+                  goes in it, never an empty band under its title. */}
+              {!readback && !purchase && !effect ? (
+                <p className="fin-editor__field--wide fin-readback fin-readback--empty">
+                  Escribe el monto para ver cómo queda en tu plan.
+                </p>
+              ) : null}
             </div>
           </aside>
 

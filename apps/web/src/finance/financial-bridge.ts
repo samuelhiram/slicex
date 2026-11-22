@@ -319,6 +319,11 @@ function isDebtItem(item: FinancialItem): boolean {
   );
 }
 
+/** "+$9,000" / "−$800"; a sign never hangs off an amount not given yet ("—"). */
+function signed(sign: "+" | "−", amount: number): string {
+  return Number.isFinite(amount) ? `${sign}${formatMoney(amount)}` : "—";
+}
+
 export function describeItem(
   item: FinancialItem,
   doc: FinancialDocument,
@@ -326,14 +331,14 @@ export function describeItem(
   const freq = frequencyShort(item.recurrence);
   switch (item.kind) {
     case "income":
-      return `+${formatMoney(item.amount)} ${freq}`;
+      return `${signed("+", item.amount)} ${freq}`;
     case "expense":
       // A budget with no fixed day says so on the timeline.
-      return `−${formatMoney(item.amount)} ${freq}${item.recurrence.flexibleDay === true ? " · presupuesto" : ""}`;
+      return `${signed("−", item.amount)} ${freq}${item.recurrence.flexibleDay === true ? " · presupuesto" : ""}`;
     case "loan":
-      return item.balance !== undefined
-        ? `−${formatMoney(item.paymentAmount)} ${freq} · resta ${formatMoney(item.balance)}`
-        : `−${formatMoney(item.paymentAmount)} ${freq}`;
+      return item.balance !== undefined && Number.isFinite(item.balance)
+        ? `${signed("−", item.paymentAmount)} ${freq} · resta ${formatMoney(item.balance)}`
+        : `${signed("−", item.paymentAmount)} ${freq}`;
     case "credit-card":
       return `Deuda ${formatMoney(item.balance)} · tasa ${item.annualRate}% · paga ${formatMoney(
         item.paymentAmount ?? item.minimumPayment,
@@ -341,13 +346,13 @@ export function describeItem(
     case "card-purchase": {
       const card = doc.items.find((candidate) => candidate.id === item.cardId);
       return card
-        ? `−${formatMoney(item.amount)} con ${card.name}`
-        : `−${formatMoney(item.amount)} (sin tarjeta)`;
+        ? `${signed("−", item.amount)} con ${card.name}`
+        : `${signed("−", item.amount)} (sin tarjeta)`;
     }
     case "installment-plan": {
       const monthly =
-        item.installmentsTotal > 0 ? item.originalAmount / item.installmentsTotal : 0;
-      return `−${formatMoney(monthly)}/mes · ${item.installmentsPaid} de ${item.installmentsTotal} pagos`;
+        item.installmentsTotal > 0 ? item.originalAmount / item.installmentsTotal : Number.NaN;
+      return `${signed("−", monthly)}/mes · ${item.installmentsPaid} de ${item.installmentsTotal} pagos`;
     }
   }
 }

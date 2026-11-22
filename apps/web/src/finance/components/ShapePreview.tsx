@@ -13,6 +13,7 @@ import {
   addDays,
   addMonths,
   diffDays,
+  estimateDebtPayoffs,
   expandRecurrence,
   isISODate,
   type FinancialDocument,
@@ -206,15 +207,29 @@ export function ShapePreview({
       return "";
     }
   }, [key, doc]);
-  // The dates, as the canvas card's third row ("21 nov 2026 – Indefinido").
+  // The dates, as the canvas card's third row ("21 nov 2026 – Indefinido"):
+  // a debt or MSI up to its payoff, like the card ("6 MSI" ends with its
+  // sixth payment, never "Indefinido").
   const period = React.useMemo(() => {
     if (!item || !isISODate(item.recurrence.startDate)) return "";
     try {
-      return describePeriod(item);
+      const debt = item.kind === "loan" || item.kind === "credit-card" || item.kind === "installment-plan";
+      if (!debt || item.recurrence.endDate !== undefined) return describePeriod(item);
+      // An MSI ends with its last payment whatever the amount: one not
+      // typed yet still has its months.
+      const subject =
+        item.kind === "installment-plan" && !(item.originalAmount > 0)
+          ? { ...item, originalAmount: Math.max(1, item.installmentsTotal) }
+          : item;
+      const estimate = estimateDebtPayoffs({ ...doc, items: [subject] }).get(item.id);
+      // Paid off on its first day = nothing owed yet: no end to show.
+      const end = estimate?.payoffDate ?? null;
+      const payoff = end !== null && end > item.recurrence.startDate ? estimate : undefined;
+      return describePeriod(item, payoff);
     } catch {
       return "";
     }
-  }, [key]);
+  }, [key, doc]);
   if (!item || !model) return null;
   const card = model.card;
   const color = itemColor(item);

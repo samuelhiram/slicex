@@ -293,6 +293,25 @@ export function plannedKindOf(capture: { kind: MovementKind; cardId?: string }):
 
 export type PlanTab = "income" | "expense" | "loan" | "card" | "msi";
 
+/**
+ * What the listed plan items move over the projection (absolute; excluded
+ * items move nothing): the figure over "En tu plan" — the same sum as each
+ * line's "/año" — so both sections show a figure and a caption, and
+ * switching between them moves nothing below.
+ */
+export function planTotal(items: readonly FinancialItem[], projection: FinancialProjection): number {
+  const ids = new Set<string>();
+  for (const item of items) if (item.enabled !== false) ids.add(item.id);
+  let sum = 0;
+  for (const point of projection.points) if (ids.has(point.itemId)) sum += point.cashDelta;
+  return Math.abs(sum);
+}
+
+/** The span that figure covers: "en el año" or "en 18 meses". */
+export function horizonPhrase(months: number): string {
+  return months === 12 ? "en el año" : `en ${months} meses`;
+}
+
 export const PLAN_TABS: ReadonlyArray<{ id: PlanTab; label: string; kinds: readonly FinancialItemKind[] }> = [
   { id: "income", label: "Ingresos", kinds: ["income"] },
   { id: "expense", label: "Gastos", kinds: ["expense"] },

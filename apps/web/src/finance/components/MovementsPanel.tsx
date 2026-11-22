@@ -54,6 +54,8 @@ import {
   viewRange,
   withPeriod,
   PLAN_TABS,
+  horizonPhrase,
+  planTotal,
   planAmountOf,
   planCards,
   planTabFor,
@@ -287,6 +289,8 @@ export function MovementsPanel(props: MovementsPanelProps) {
     // `revision` covers every document change.
   }, [doc, planTab, view.query, revision]);
 
+  const planSum = React.useMemo(() => planTotal(planItems, projection), [planItems, projection]);
+
   const toggleIncluded = (item: FinancialItem) => {
     if (bridge.isItemLocked(item.id)) {
       announce({ message: `${item.name} está en una línea bloqueada.` });
@@ -350,7 +354,10 @@ export function MovementsPanel(props: MovementsPanelProps) {
     if (view.category) caption += ` en ${view.category}`;
   } else if (planTab) {
     const excluded = planItems.filter((item) => item.enabled === false).length;
-    caption = plural(planItems.length, PLAN_NOUNS[planTab.id]) + (excluded > 0 ? ` · ${excluded} no cuenta${excluded === 1 ? "" : "n"}` : "");
+    figure = formatMoneyWhole(planSum);
+    caption =
+      `${plural(planItems.length, PLAN_NOUNS[planTab.id])} ${horizonPhrase(doc.horizonMonths)}` +
+      (excluded > 0 ? ` · ${excluded} no cuenta${excluded === 1 ? "" : "n"}` : "");
   }
   const narrowed = view.query !== "" || view.category !== "" || view.paidWith !== "";
 
