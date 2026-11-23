@@ -12,6 +12,7 @@ export {
   toDayNumber,
 } from "./dates";
 export { expandRecurrence, MAX_RECURRENCE_INTERVAL, recurrenceInterval } from "./recurrence";
+export { MAX_MONEY } from "./money";
 export { expandFinancialEvents, getProjectionRange } from "./events";
 export {
   canChangeCadence,
@@ -59,8 +60,9 @@ export {
   monthlyInstallment,
   remainingInstallmentDebt,
 } from "./items";
-export { createDemoFinancialDocument, createExampleYearDocument } from "./demo";
+export { createDemoFinancialDocument, createExampleYearDocument, createRememberedPlanDocument } from "./demo";
 export { rollForward } from "./rollforward";
+export { extendHistory, historyStart, openingCashAt, rebuildHistory } from "./history";
 export type {
   ActualRecord,
   ActualStatus,

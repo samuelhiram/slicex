@@ -8,7 +8,7 @@
 import * as React from "react";
 import { schemaResolver, useForm } from "@mantine/form";
 import { z } from "zod";
-import { FinancialDocumentSchema, ISODateSchema } from "@slicex/contracts";
+import { FinancialDocumentSchema, ISODateSchema, MAX_MONEY, MAX_MONEY_MESSAGE } from "@slicex/contracts";
 import {
   addDays,
   clampedDayOfMonth,
@@ -335,21 +335,34 @@ export function onboardingSchema() {
         })
         .superRefine((row, ctx) => {
           if (isBlankDebt(row)) return;
+          // "ok", "empty" (missing / not a number / ≤ 0) or "too-big" (past the money cap).
           const amount = (text: string) => {
             const value = parseNumberInput(text);
-            return value !== null && Number.isFinite(value) && value > 0;
+            if (value === null || !Number.isFinite(value) || value <= 0) return "empty";
+            return value > MAX_MONEY ? "too-big" : "ok";
           };
           if (row.name.trim() === "") {
             ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["name"], message: "Ponle un nombre" });
           }
-          if (!amount(row.balance)) {
-            ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["balance"], message: "Escribe cuánto debes" });
+          const balance = amount(row.balance);
+          if (balance !== "ok") {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["balance"],
+              message: balance === "too-big" ? MAX_MONEY_MESSAGE : "Escribe cuánto debes",
+            });
           }
-          if (row.kind !== "card-statement" && !amount(row.payment)) {
+          const payment = row.kind === "card-statement" ? "ok" : amount(row.payment);
+          if (payment !== "ok") {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: ["payment"],
-              message: row.kind === "card" ? "Escribe cuánto pagas al mes (o elige «pago el total»)" : "Escribe cuánto pagas al mes",
+              message:
+                payment === "too-big"
+                  ? MAX_MONEY_MESSAGE
+                  : row.kind === "card"
+                    ? "Escribe cuánto pagas al mes (o elige «pago el total»)"
+                    : "Escribe cuánto pagas al mes",
             });
           }
           if (row.day === "") {
@@ -359,6 +372,13 @@ export function onboardingSchema() {
     ),
     withSuggestions: z.boolean(),
   });
+}
+
+/** What is wrong with a checked suggestion's amount (undefined: nothing). */
+function pickedAmountProblem(text: string): string | undefined {
+  const amount = parseNumberInput(text);
+  if (amount === null || !Number.isFinite(amount) || amount <= 0) return "Escribe un monto (o desmárcala)";
+  return amount > MAX_MONEY ? MAX_MONEY_MESSAGE : undefined;
 }
 
 const DEBT_KIND_LABELS: Readonly<Record<DebtKind, string>> = {
@@ -490,8 +510,7 @@ export function OnboardingDialog({
   const pickedError = (id: string): string | undefined => {
     const choice = picked[id];
     if (!reviewTried || !choice?.checked) return undefined;
-    const amount = parseNumberInput(choice.amount);
-    return amount !== null && Number.isFinite(amount) && amount > 0 ? undefined : "Escribe un monto (o desmárcala)";
+    return pickedAmountProblem(choice.amount);
   };
 
   // How the year ends up, before creating it ("ningún valle sin aviso").
@@ -530,11 +549,9 @@ export function OnboardingDialog({
         return;
       }
       setReviewTried(true);
-      const bad = Object.values(picked).some((choice) => {
-        if (!choice.checked) return false;
-        const amount = parseNumberInput(choice.amount);
-        return !(amount !== null && Number.isFinite(amount) && amount > 0);
-      });
+      const bad = Object.values(picked).some(
+        (choice) => choice.checked && pickedAmountProblem(choice.amount) !== undefined,
+      );
       if (bad) {
         setFailures((count) => count + 1);
         return;

@@ -3,7 +3,7 @@
 // each error under its field and keep typing smooth. See docs/forms-audit.md.
 import * as React from "react";
 import type { UseFormReturnType } from "@mantine/form";
-import { MoneySchema } from "@slicex/contracts";
+import { MAX_MONEY_MESSAGE, MIN_MONEY_MESSAGE, MoneySchema } from "@slicex/contracts";
 import { z } from "zod";
 import { parseNumberInput } from "../format";
 import { Select, type SelectOption } from "../../ui/select";
@@ -11,9 +11,10 @@ import { Select, type SelectOption } from "../../ui/select";
 /**
  * Zod schema of an amount AS TYPED ("$12,000", "1 234.5"): the text is read
  * like every money input (parseNumberInput) and the number checked with
- * `number` — by default the shared MoneySchema (finite, ≥ 0). Empty passes
- * unless `required`. `message` replaces the schema's wording for every
- * failure (the onboarding's questions say what to write).
+ * `number` — by default the shared MoneySchema (finite, 0 … MAX_MONEY).
+ * Empty passes unless `required`. `message` replaces the schema's wording
+ * (the onboarding's questions say what to write), except past the money cap:
+ * "El máximo es $1,000,000,000" says what a question cannot.
  */
 export function amountTextSchema({
   number = MoneySchema,
@@ -34,9 +35,11 @@ export function amountTextSchema({
     }
     const result = number.safeParse(value);
     if (!result.success) {
+      const own = result.error.issues[0]?.message;
+      const cap = own === MAX_MONEY_MESSAGE || own === MIN_MONEY_MESSAGE;
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: message ?? result.error.issues[0]?.message ?? "Escribe un número",
+        message: (cap ? own : message) ?? own ?? "Escribe un número",
       });
     }
   });

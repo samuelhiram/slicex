@@ -3,6 +3,8 @@ import {
   clamp,
   getMaxScrollX,
   getMaxScrollY,
+  getMinScrollX,
+  getMinTime,
   getTrackIdByIndex,
   isAutomationClip,
 } from "./geometry";
@@ -471,7 +473,7 @@ export function playlistReducer(
         };
         scrollX = clamp(
           scrollX,
-          0,
+          getMinScrollX(clampedCandidate),
           getMaxScrollX(clampedCandidate, metrics),
         );
         scrollY = clamp(
@@ -499,8 +501,27 @@ export function playlistReducer(
         },
       };
     }
+    case "SET_MIN_BEAT": {
+      const beat = Number.isFinite(action.beat) && action.beat < 0 ? action.beat : 0;
+      if (getMinTime(state) === beat) {
+        return state;
+      }
+      const viewport = { ...state.viewport };
+      if (beat < 0) viewport.minBeat = beat;
+      else delete viewport.minBeat;
+      // A shorter past pulls the view and the playhead back inside it.
+      const minScrollX = beat * viewport.pxPerBeat;
+      if (viewport.scrollX < minScrollX) viewport.scrollX = minScrollX;
+      const time = Math.max(beat, state.playPosition.time);
+      return {
+        ...state,
+        viewport,
+        playPosition:
+          time === state.playPosition.time ? state.playPosition : { ...state.playPosition, time },
+      };
+    }
     case "SET_PLAY_POSITION": {
-      const time = Math.max(0, action.time);
+      const time = Math.max(getMinTime(state), action.time);
       if (state.playPosition.time === time) {
         return state;
       }

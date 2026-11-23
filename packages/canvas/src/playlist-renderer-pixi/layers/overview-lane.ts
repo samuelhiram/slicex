@@ -232,15 +232,17 @@ function clampNumber(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;
 }
 
-// Walks the steps of `series` that intersect [fromBeat, toBeat]: visit is
-// called once per visible segment with its clipped beat range and value.
-// O(log n + visible segments): the start is found by binary search.
+// Walks the steps of `series` that intersect [fromBeat, toBeat] (and start
+// at or after the series' own `from`): visit is called once per visible
+// segment with its clipped beat range and value. O(log n + visible
+// segments): the start is found by binary search.
 export function walkVisibleSteps(
   series: PlaylistStepSeries,
-  fromBeat: number,
+  visibleFrom: number,
   toBeat: number,
   visit: (segmentFrom: number, segmentTo: number, value: number) => void,
 ): void {
+  const fromBeat = series.from !== undefined && series.from > visibleFrom ? series.from : visibleFrom;
   if (!(toBeat > fromBeat)) return;
   const beats = series.beats;
   const values = series.values;
@@ -443,7 +445,8 @@ export function createOverviewLaneLayer(
     const viewport = presentation.state.viewport;
     const pxPerBeat = viewport.pxPerBeat;
     const scrollX = viewport.scrollX;
-    const fromBeat = scrollX / pxPerBeat;
+    // No curve before the data's start (beat 0 unless the host has a past).
+    const fromBeat = Math.max(scrollX / pxPerBeat, data.startBeat ?? 0);
     const viewEndBeat = (scrollX + lane.width) / pxPerBeat;
     // No curve past the data's end (e.g. the projection horizon).
     const toBeat =
@@ -724,7 +727,8 @@ export function createOverviewLaneLayer(
     const playX = play.isVisible ? play.x : Number.NEGATIVE_INFINITY;
     let dotY = Number.NEGATIVE_INFINITY;
     let dotTone = -1;
-    if (play.isVisible && plotData) {
+    // The dot rides the curve only where there is one (data.startBeat on).
+    if (play.isVisible && plotData && play.time >= (plotData.startBeat ?? 0)) {
       const value = stepSeriesValueAt(plotData.primary, play.time);
       dotY = Math.round(clampNumber(yOf(value), plotTop, plotBottom));
       dotTone = overviewToneOf(value, scale);

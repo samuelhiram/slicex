@@ -4,6 +4,7 @@
 // Pure apart from the bridge calls in applyRecCorrections.
 import {
   createExampleYearDocument,
+  rebuildHistory,
   rollForward,
   type ActualRecord,
   type FinancialDocument,
@@ -51,12 +52,14 @@ export function bootstrapPlan(today: ISODate, saved: SavedPlan | null): PlanBoot
   const active = saved.branches.find((branch) => branch.id === saved.activeId) ?? saved.branches[0]!;
   let rec: RecState | null = null;
   const branches = saved.branches.map((branch) => {
-    if (branch.doc.startDate >= today) return branch;
-    const rolled = rollForward(branch.doc, today);
+    const doc = remembered(branch.doc, saved);
+    if (doc.startDate >= today) return doc === branch.doc ? branch : { ...branch, doc };
+    // Rolling forward leaves the days behind in the plan's memory.
+    const rolled = rollForward(doc, today);
     if (branch.id === active.id) {
       rec = {
-        since: branch.doc.startDate,
-        original: branch.doc,
+        since: doc.startDate,
+        original: doc,
         pending: rolled.pending,
         ledger: rolled.ledger,
       };
@@ -72,6 +75,18 @@ export function bootstrapPlan(today: ISODate, saved: SavedPlan | null): PlanBoot
     rec,
     firstVisit: false,
   };
+}
+
+/**
+ * A plan saved before it had a memory (FinancialDocument.history) gets its
+ * past back, once: rebuilt backward from today's cash through what Rec
+ * booked and the movements recorded (`rebuildHistory`). A plan that has one
+ * (even empty) is kept as is.
+ */
+function remembered(doc: FinancialDocument, saved: SavedPlan): FinancialDocument {
+  if (doc.history !== undefined) return doc;
+  const history = rebuildHistory(doc, saved.ledger, saved.movements ?? []);
+  return history ? { ...doc, history } : doc;
 }
 
 function balanceOf(item: FinancialItem): number | null {
@@ -135,6 +150,9 @@ export function applyRecCorrections(
   const current = bridge.getDocument().initialCash;
   const nextCash = recResultCash(rec, today, actuals, cashOverride, current, assumed);
   if (Math.abs(nextCash - current) > 0.004) bridge.setInitialCash(nextCash);
+  // The days corrected already happened: the plan's memory says them as
+  // they really were ("no pasó" gives that day its money back).
+  if (actuals.length > 0) bridge.setHistory(corrected.doc.history);
 
   const assumedById = new Map<string, FinancialItem>();
   for (const item of assumed.doc.items) assumedById.set(item.id, item);

@@ -4,7 +4,7 @@
 // (apps/web, through Mantine Form's schemaResolver), the plan read back from
 // localStorage, and the API once it is connected.
 //
-// Structural + money semantics only (types, finite non-negative amounts,
+// Structural + money semantics only (types, finite non-negative amounts up to MAX_MONEY,
 // calendar dates, day / installment ranges, end >= start). UX rules that are
 // not about the data being valid (e.g. "ponle un nombre") are added by the
 // forms on top. Messages are Spanish and per field: the UI shows them under
@@ -29,11 +29,27 @@ export const ISODateSchema = z
 const number = (required = "Requerido") =>
   z.number({ required_error: required, invalid_type_error: "Escribe un número" });
 
-/** A finite amount of money, >= 0. */
-export const MoneySchema = number().finite("Escribe un número").nonnegative("No puede ser negativo");
+/**
+ * The largest amount a plan takes: $1,000,000,000 per payment, balance or
+ * cash. Same value as @slicex/core MAX_MONEY (the engine clamps to it; a
+ * running sum of bigger amounts loses its cents in a float64). apps/web
+ * checks both stay equal.
+ */
+export const MAX_MONEY = 1_000_000_000;
+export const MAX_MONEY_MESSAGE = "El máximo es $1,000,000,000";
+export const MIN_MONEY_MESSAGE = "El mínimo es −$1,000,000,000";
 
-/** A balance: finite, may be negative (an overdraft). */
-export const SignedMoneySchema = number().finite("Escribe un número");
+/** A finite amount of money, 0 … MAX_MONEY. */
+export const MoneySchema = number()
+  .finite("Escribe un número")
+  .nonnegative("No puede ser negativo")
+  .max(MAX_MONEY, MAX_MONEY_MESSAGE);
+
+/** A balance: finite, may be negative (an overdraft), within ±MAX_MONEY. */
+export const SignedMoneySchema = number()
+  .finite("Escribe un número")
+  .min(-MAX_MONEY, MIN_MONEY_MESSAGE)
+  .max(MAX_MONEY, MAX_MONEY_MESSAGE);
 
 /** Day of the month, 1–31. */
 export const DayOfMonthSchema = number()
@@ -187,6 +203,12 @@ export const FinancialItemSchemaStrict = FinancialItemSchema.superRefine((item, 
   if (!result.success) for (const issue of result.error.issues) ctx.addIssue(issue);
 });
 
+/** One remembered day: the cash the plan opened it with (@slicex/core CashHistoryEntry). */
+export const CashHistoryEntrySchema = z.object({
+  date: ISODateSchema,
+  cash: SignedMoneySchema,
+});
+
 export const FinancialDocumentSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
@@ -195,6 +217,8 @@ export const FinancialDocumentSchema = z.object({
   minimumCashReserve: MoneySchema,
   horizonMonths: number().int().min(1).max(1200),
   items: z.array(z.unknown()),
+  // The plan's memory of its past; read leniently (a bad entry: no memory).
+  history: z.array(CashHistoryEntrySchema).optional().catch(undefined),
 });
 
 /** "HH:MM", 24 h. */

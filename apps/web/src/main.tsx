@@ -13,14 +13,21 @@ import "@mantine/dates/styles.css";
 import "./styles/globals.css";
 import { App } from "./App";
 import { initSentry } from "./lib/sentry";
-import { clearPlan } from "./finance/persistence";
+import { clearPlan, savePlan } from "./finance/persistence";
+import { testPlan } from "./finance/test-plans";
+import { localTodayISO } from "./clock";
 import { applyDocumentTheme, initialTheme } from "./theme";
 
 initSentry();
-// "?reset": start over with the example year (testing). Runs before the
-// app loads the saved plan, so no autosave can race it.
-if (new URLSearchParams(window.location.search).has("reset")) {
+// "?reset": start over with the example year; "?reset=memoria": with a plan
+// set 22 days ago that remembers its past (test-plans.ts). Testing hooks:
+// they replace the saved plan. Run before the app loads it, so no autosave
+// can race them.
+const reset = new URLSearchParams(window.location.search).get("reset");
+if (reset !== null) {
   clearPlan();
+  const plan = reset ? testPlan(reset, localTodayISO()) : null;
+  if (plan) savePlan(plan);
   window.history.replaceState(null, "", window.location.pathname + window.location.hash);
 }
 // Before the first paint: no flash of the wrong theme.

@@ -17,6 +17,8 @@ import {
   nextPayment,
   projectFinancialDocument,
   snapshotAt,
+  historyStart,
+  openingCashAt,
   type CreditCardItem,
   type FinancialDocument,
   type FinancialItem,
@@ -24,6 +26,7 @@ import {
   type InstallmentPlanItem,
   type LoanItem,
   type MovementEffect,
+  type CashHistoryEntry,
 } from "@slicex/core";
 import type { PlaylistCore } from "@slicex/canvas";
 import type { FinancialBridgeApi, FinancialPreview, PreviewEffect } from "../src/finance/bridge-api";
@@ -119,10 +122,15 @@ function createFakeBridge(initial: FinancialDocument) {
     }),
     setInitialCash: (amount: number) => commit({ ...doc, initialCash: amount }),
     applyReality: (effect: MovementEffect) => commit(applyMovementEffect(doc, effect)),
+    setHistory: (history: CashHistoryEntry[] | undefined) => commit({ ...doc, history }),
     setMinimumCashReserve: (amount: number) => commit({ ...doc, minimumCashReserve: amount }),
     dateAtBeat: (beat: number) => addDays(doc.startDate, Math.floor(beat)),
     beatAtDate: (date: string) => diffDays(doc.startDate, date),
     snapshotAt: (date: string) => snapshotAt(projection, date),
+    pastCashAt: (date: string) =>
+      date < doc.startDate && historyStart(doc) !== null && date >= historyStart(doc)!
+        ? openingCashAt(doc, addDays(date, 1))
+        : null,
     nextPaymentAfter: (date: string) => nextPayment(projection, date),
     getWarnings: () => findLiquidityWarnings(projection, doc.minimumCashReserve),
     getClipDetail: () => null,

@@ -3,6 +3,7 @@ import {
   buildProjectionAccounts,
   createDefaultFinancialItem,
   diffDays,
+  MAX_MONEY,
   expandFinancialEvents,
   projectFinancialDocument,
   projectFinancialTimeline,
@@ -554,5 +555,42 @@ describe("regressions (engine review)", () => {
       ["x", 10, 160],
       ["x", 15, 165],
     ]);
+  });
+});
+
+describe("MAX_MONEY — an amount past the cap is booked at the cap", () => {
+  // 2026-11-23: one payment set to −$10^31 left every later cell at "$0"
+  // (a float64 near 10^31 cannot change by $1,200).
+  it("a −$10^31 one-payment edit books −$1,000,000,000; every later payment keeps its amount", () => {
+    const superWeekly: FinancialItem = {
+      id: "super",
+      kind: "expense",
+      name: "Súper",
+      amount: 1200,
+      recurrence: { frequency: "weekly", startDate: "2026-11-02" },
+    };
+    const streaming: FinancialItem = {
+      id: "streaming",
+      kind: "expense",
+      name: "Streaming",
+      amount: 329,
+      recurrence: { frequency: "monthly", startDate: "2026-11-15" },
+      occurrenceEdits: [{ date: "2026-11-15", amount: 1e31 }],
+    };
+    const projection = projectFinancialDocument(makeDoc([superWeekly, streaming]));
+    const edited = projection.points.filter((p) => p.itemId === "streaming");
+    expect(edited.map((p) => [p.date, p.cashDelta])).toEqual([
+      ["2026-11-15", -MAX_MONEY],
+      ["2026-12-15", -329],
+    ]);
+    const later = projection.points.filter((p) => p.itemId === "super" && p.date > "2026-11-15");
+    expect(later.length).toBeGreaterThan(3);
+    for (const point of later) expect(point.cashDelta).toBe(-1200);
+  });
+
+  it("today's cash is read within ±MAX_MONEY", () => {
+    expect(projectFinancialDocument(makeDoc([], { initialCash: -1e31 })).initialCash).toBe(-MAX_MONEY);
+    expect(projectFinancialDocument(makeDoc([], { initialCash: 1e31 })).initialCash).toBe(MAX_MONEY);
+    expect(projectFinancialDocument(makeDoc([], { initialCash: -1500.5 })).initialCash).toBe(-1500.5);
   });
 });

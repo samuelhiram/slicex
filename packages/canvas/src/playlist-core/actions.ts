@@ -136,6 +136,9 @@ export type PlaylistAction =
       patch: Partial<PlaylistViewport>;
       clamp: boolean;
     }
+  // The earliest beat the view reaches (viewport.minBeat; ≤ 0). A view
+  // bound, not a document change: never an undo step.
+  | { type: "SET_MIN_BEAT"; beat: number }
   | { type: "SET_PLAY_POSITION"; time: number }
   | { type: "SET_PLAY_RUNNING"; isRunning: boolean }
   | { type: "ADVANCE_PLAY_POSITION"; deltaTime: number }

@@ -28,6 +28,7 @@ import {
   type MovementKind,
 } from "@slicex/core";
 import { PlaylistInspector } from "./PlaylistInspector";
+import { localTodayISO } from "../clock";
 import type {
   FinancialBridgeApi,
   FinancialPlacement,
@@ -158,15 +159,8 @@ type EditorState =
   | { mode: "create"; draft: FinancialItem; placement?: FinancialPlacement; restore?: EditorRestore }
   | null;
 
-// Local calendar date of the device ("today" for the projection). The only
-// place that reads the clock: @slicex/core stays pure and receives dates.
-function localTodayISO(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
+// "Today" for the projection: the device's local date (clock.ts, the only
+// place that reads the clock).
 
 // The canvas draws its labels with Inter (shipped by the app). Pixi
 // rasterises a Text once, so the renderer is created once the font is ready

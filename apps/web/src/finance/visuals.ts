@@ -6,6 +6,7 @@
 import {
   accountActivity,
   cardCycleDates,
+  historyStart,
   itemRuleAmount,
   occurrenceEditAmounts,
   ruleOccurrenceDates,
@@ -39,7 +40,7 @@ import {
   formatSignedMoneyWhole,
 } from "./format";
 import { derivedRowTitle, frequencyShort, KIND_ACCENT } from "./labels";
-import { beatOf, horizonBeat } from "./mapping";
+import { beatOf, horizonBeat, pastStartBeat } from "./mapping";
 
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
@@ -121,20 +122,50 @@ function endOfDaySeries(
  */
 export const EVENT_DAY_OFFSET = 0;
 
-/** Cash at the end of each day with events. */
+/**
+ * Cash at the end of each day with events — from the plan's first
+ * remembered day (FinancialDocument.history) when it has a past: there the
+ * curve starts with what that day opened with, and each remembered day's
+ * opening is the end of the day before it (the same step the projection
+ * draws: a day shows how it closed). The day before today closes with
+ * today's opening cash.
+ */
 export function cashSeries(
   doc: FinancialDocument,
   projection: FinancialProjection,
 ): PlaylistStepSeries {
-  return endOfDaySeries(doc, projection, projection.initialCash, (i) => projection.points[i]!.cashAfter);
+  const future = endOfDaySeries(doc, projection, projection.initialCash, (i) => projection.points[i]!.cashAfter);
+  const history = doc.history;
+  if (historyStart(doc) === null || !history) return future;
+  const beats: number[] = [];
+  const values: number[] = [];
+  const step = (beat: number, value: number): void => {
+    if (beats.length > 0 && beats[beats.length - 1] === beat) values[values.length - 1] = value;
+    else if ((values.length > 0 ? values[values.length - 1] : history[0]!.cash) !== value) {
+      beats.push(beat);
+      values.push(value);
+    }
+  };
+  for (let i = 1; i < history.length; i += 1) {
+    const entry = history[i]!;
+    if (entry.date >= doc.startDate) break;
+    step(beatOf(doc, entry.date) - 1, entry.cash);
+  }
+  step(-1, projection.initialCash);
+  for (let i = 0; i < future.beats.length; i += 1) {
+    beats.push(future.beats[i]!);
+    values.push(future.values[i]!);
+  }
+  return { initial: history[0]!.cash, beats, values };
 }
 
-/** Total debt at the end of each day with events. */
+/** Total debt at the end of each day with events (no past: the memory is the cash's). */
 export function debtSeries(
   doc: FinancialDocument,
   projection: FinancialProjection,
 ): PlaylistStepSeries {
-  return endOfDaySeries(doc, projection, projection.initialDebt, (i) => projection.points[i]!.debtAfter);
+  const series = endOfDaySeries(doc, projection, projection.initialDebt, (i) => projection.points[i]!.debtAfter);
+  return historyStart(doc) === null ? series : { ...series, from: 0 };
 }
 
 // --- scale of the money lane ---------------------------------------------
@@ -306,6 +337,8 @@ export function buildOverview(
     scale: { kind: "symlog", constant },
     domain,
     endBeat: horizonBeat(doc),
+    // The remembered past (0: none), drawn left of today.
+    startBeat: pastStartBeat(doc),
   };
   if (view.scale) data.guides = overviewGuides(domain, reserve, constant);
   else data.scaleLabels = false;
@@ -604,6 +637,38 @@ function cellLabel(signed: number): string {
   return label;
 }
 
+/** A whole count with one decimal when it has one: 1.2 → "1.2", 11.0 → "11". */
+function oneDecimal(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+/**
+ * The short form of a cell label, for cells too narrow for the whole one:
+ * "+$11k" / "−$1.2k" / "−$9.8k" / "+$1.5M" / "−$899" / "$0" (cached).
+ */
+const cellShortLabelCache = new Map<number, string>();
+export function cellShortLabel(signed: number): string {
+  const key = Math.round(signed);
+  let label = cellShortLabelCache.get(key);
+  if (label === undefined) {
+    if (cellShortLabelCache.size > 4096) cellShortLabelCache.clear();
+    const abs = Math.abs(key);
+    const sign = key > 0 ? "+" : key < 0 ? "−" : "";
+    const body =
+      abs >= 1_000_000
+        ? `${oneDecimal(abs / 1_000_000)}M`
+        : abs >= 10_000
+          ? `${Math.round(abs / 1000)}k`
+          : abs >= 1000
+            ? `${oneDecimal(abs / 1000)}k`
+            : String(abs);
+    label = `${sign}$${body}`;
+    cellShortLabelCache.set(key, label);
+  }
+  return label;
+}
+
 /**
  * Cells of every recurring item: one per payment / charge the projection
  * applied (what really moves: a loan's last payment capped at what is owed,
@@ -675,7 +740,7 @@ function buildCells(
     }
     if (beats.length === 0) continue;
     const labels = amounts.map(cellLabel);
-    const cells: PlaylistClipCells = { beats, labels };
+    const cells: PlaylistClipCells = { beats, labels, shortLabels: amounts.map(cellShortLabel) };
     if (edits !== null || changes.length > 0) {
       const marked = new Set<ISODate>();
       if (edits !== null) for (const date of edits.keys()) marked.add(date);

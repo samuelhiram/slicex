@@ -29,6 +29,7 @@ import { createFinancialPlaylistState, beatOf } from "../src/finance/mapping";
 import { KIND_ACCENT, KIND_COLORS, derivedRowTitle } from "../src/finance/labels";
 import {
   buildClipContents,
+  cellShortLabel,
   describeItemAt,
   dragAnnotation,
   overviewDomain,
@@ -100,6 +101,31 @@ describe("UX-10 — kinds tell apart, and their marks read", () => {
     expect(levelText(purchase, 900, doc, 800)).toBe(`−$900 con ${card.name} (antes $800)`);
     const cardText = describeItemAt(card, doc, projection, doc.startDate, new Map([[card.id, 30069]]));
     expect(cardText).toMatch(/· tasa [\d.]+%$/);
+  });
+});
+
+describe("cell amounts: one format per card, with a short form", () => {
+  it("the short form keeps the sign and the scale", () => {
+    expect(cellShortLabel(11_000)).toBe("+$11k");
+    expect(cellShortLabel(-1200)).toBe("−$1.2k");
+    expect(cellShortLabel(-1000)).toBe("−$1k");
+    expect(cellShortLabel(-9800)).toBe("−$9.8k");
+    expect(cellShortLabel(-899)).toBe("−$899");
+    expect(cellShortLabel(1_500_000)).toBe("+$1.5M");
+    expect(cellShortLabel(0)).toBe("$0");
+  });
+
+  it("every recurring item's cells carry a short form for each amount", () => {
+    const doc = createDemoFinancialDocument(TODAY);
+    const contents = buildClipContents(doc, projectFinancialDocument(doc), new Map());
+    let checked = 0;
+    for (const content of contents.values()) {
+      const cells = content.cells;
+      if (!cells) continue;
+      expect(cells.shortLabels).toHaveLength(cells.labels.length);
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThan(3);
   });
 });
 

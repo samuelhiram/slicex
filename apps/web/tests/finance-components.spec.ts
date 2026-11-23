@@ -20,11 +20,14 @@ import {
   nextPayment,
   projectFinancialDocument,
   snapshotAt,
+  historyStart,
+  openingCashAt,
   type FinancialDocument,
   type FinancialItem,
   type FinancialItemKind,
   type FinancialProjectionPoint,
   type MovementEffect,
+  type CashHistoryEntry,
   type OccurrenceEditRequest,
 } from "@slicex/core";
 import type { PlaylistCore } from "@slicex/canvas";
@@ -40,7 +43,7 @@ import {
   switchKind,
 } from "../src/finance/components/FinancialEditorModal";
 import { FinancialSummaryBar } from "../src/finance/components/FinancialSummaryBar";
-import { OnboardingDialog } from "../src/finance/components/Onboarding";
+import { OnboardingDialog, onboardingSchema } from "../src/finance/components/Onboarding";
 import { FinancialSidePanel } from "../src/finance/components/FinancialSidePanel";
 import { DebtStrategyPanel } from "../src/finance/components/DebtStrategyPanel";
 import { RecDialog } from "../src/finance/components/RecDialog";
@@ -152,11 +155,16 @@ function createFakeBridge(initial: FinancialDocument, options: FakeOptions = {})
     }),
     setInitialCash: (amount: number) => commit({ ...doc, initialCash: amount }),
     applyReality: (effect: MovementEffect) => commit(applyMovementEffect(doc, effect)),
+    setHistory: (history: CashHistoryEntry[] | undefined) => commit({ ...doc, history }),
     setMinimumCashReserve: (amount: number) =>
       commit({ ...doc, minimumCashReserve: amount }),
     dateAtBeat: (beat: number) => addDays(doc.startDate, Math.floor(beat)),
     beatAtDate: (date: string) => diffDays(doc.startDate, date),
     snapshotAt: (date: string) => snapshotAt(projection, date),
+    pastCashAt: (date: string) =>
+      date < doc.startDate && historyStart(doc) !== null && date >= historyStart(doc)!
+        ? openingCashAt(doc, addDays(date, 1))
+        : null,
     nextPaymentAfter: (date: string) => nextPayment(projection, date),
     getWarnings: () => findLiquidityWarnings(projection, doc.minimumCashReserve),
     getClipDetail: () => null,
@@ -1234,6 +1242,29 @@ describe("onboarding: Mantine Form (uncontrolled) + Zod, errors per field", () =
     expect(errorText()).toBe("Escribe cuánto dinero tienes hoy (puede ser 0)");
   });
 
+  it("past the money cap every amount says the limit, not the question's wording", () => {
+    const result = onboardingSchema().safeParse({
+      cash: "-5000000000",
+      pay: "99999999999",
+      reserve: "",
+      fixed: [{ name: "Renta", amount: "2000000000", day: "1" }],
+      debts: [
+        { kind: "loan", name: "Auto", balance: "5000000000", payment: "3000", day: "5" },
+        { kind: "card", name: "Nu", balance: "20000", payment: "7000000000", day: "10" },
+      ],
+      withSuggestions: false,
+    });
+    expect(result.success).toBe(false);
+    const byPath = Object.fromEntries(result.error!.issues.map((issue) => [issue.path.join("."), issue.message]));
+    expect(byPath).toEqual({
+      cash: "El mínimo es −$1,000,000,000",
+      pay: "El máximo es $1,000,000,000",
+      "fixed.0.amount": "El máximo es $1,000,000,000",
+      "debts.0.balance": "El máximo es $1,000,000,000",
+      "debts.1.payment": "El máximo es $1,000,000,000",
+    });
+  });
+
   it("valid answers lead to the review; 'Crear mi año' builds the year", () => {
     const onCreate = vi.fn();
     mount(h(OnboardingDialog, { today: TODAY, onCreate, onClose: () => {} }));
@@ -1795,6 +1826,21 @@ describe("OccurrenceCard", () => {
     expect(bridge.editOccurrence).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(document.querySelector(".fin-occ")).not.toBeNull();
+  });
+
+  it("an amount past the money cap says the limit and changes nothing (no −$10^31 payment)", () => {
+    const { bridge } = createFakeBridge(gasDoc());
+    const { card, onClose } = open(bridge);
+    const input = card.querySelector<HTMLInputElement>(".fin-occ__input")!;
+    typeInto(input, "10000000000000000000000000000000");
+    expect(card.querySelector(".fin-occ__error")!.textContent).toBe("El máximo es $1,000,000,000");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    pressKey(input, "Enter");
+    expect(bridge.editOccurrence).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    // The cap itself is a valid amount.
+    typeInto(input, "1,000,000,000");
+    expect(card.querySelector(".fin-occ__error")).toBeNull();
   });
 
   it("another cadence switches to 'Este y los siguientes' and changes the rule from there", () => {

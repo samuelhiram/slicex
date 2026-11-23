@@ -1,5 +1,6 @@
 // Cell labels (PlaylistClipContent.cells): each payment's amount written at
-// the top of its cell, right of its mark — only the cells inside the visible
+// the top of its cell (in the middle of a short labelled card's bar), right
+// of its mark — only the cells inside the visible
 // span, only where the label fits, emphasised ones bold and in the clip's
 // colour made readable on its card, their cell outlined with dashes; pooled
 // Text, nothing redone on a frame where nothing moved.
@@ -24,7 +25,13 @@ import {
 
 const M = DEFAULT_PLAYLIST_METRICS;
 
-function scene(content: PlaylistClipContent, pxPerBeat = 20, visibleRight = Number.POSITIVE_INFINITY) {
+function scene(
+  content: PlaylistClipContent,
+  pxPerBeat = 20,
+  visibleRight = Number.POSITIVE_INFINITY,
+  // A labelled card (its name above its bar, the host's lock button) in a row of `rowHeight`.
+  labelled: { rowHeight: number } | null = null,
+) {
   const base = createDemoPlaylistState();
   const state: PlaylistState = {
     ...base,
@@ -44,8 +51,11 @@ function scene(content: PlaylistClipContent, pxPerBeat = 20, visibleRight = Numb
   const core = createPlaylistCore(state, { metrics: M });
   core.setViewportSize(1200, 700);
   core.updateViewport({ pxPerBeat, scrollX: 0, scrollY: 0 });
-  core.setTrackHeight(0, 84);
-  const registry = createClipNodeRegistry(COLORS, { getClipContent: () => content });
+  core.setTrackHeight(0, labelled?.rowHeight ?? 84);
+  const registry = createClipNodeRegistry(COLORS, {
+    getClipContent: () => content,
+    ...(labelled ? { timeLock: true, getClipDetail: () => "−$550 /semana" } : {}),
+  });
   const parent = new Container();
   const hover = { time: null as number | null };
   const sync = () =>
@@ -103,6 +113,45 @@ const weekly = (strong?: boolean[]): PlaylistClipContent => ({
   beats: [7, 14, 21, 28],
   values: [-1, -1, -1, -1],
   cells: { beats: [7, 14, 21, 28], labels: ["−$550", "−$700", "−$550", "−$300"], ...(strong ? { strong } : {}) },
+});
+
+describe("cell labels on a labelled card", () => {
+  // Pixi puts the baseline halo/2 + 1.0 em under a Text's y; the digits'
+  // middle is 0.36 em above the baseline.
+  const digitsMiddle = (text: Text) => text.y + 2 + Number(text.style.fontSize) * 0.64;
+  // The compact label row is 16 px; the bar is the rest of the card.
+  const LABEL_ROW = 16;
+
+  it("a short card (its lock in the label): each amount in the middle of its bar, 12 px from a 20 px bar", () => {
+    // Default metrics pad a card 7 px above and below: cards of 32, 36 and 46 px.
+    for (const [rowHeight, size] of [
+      [46, 11],
+      [50, 12],
+      [60, 12],
+    ] as const) {
+      const { core, cells } = scene(weekly(), 20, Number.POSITIVE_INFINITY, { rowHeight });
+      const bar = core.getPresentation().visibleClipViews[0]!.rect.height - LABEL_ROW;
+      expect(cells().map((t) => t.text), `row ${rowHeight}`).toEqual(["−$550", "−$700", "−$550", "−$300"]);
+      for (const text of cells()) {
+        expect(Number(text.style.fontSize), `row ${rowHeight}`).toBe(size);
+        expect(Math.abs(digitsMiddle(text) - (LABEL_ROW + bar / 2)), `row ${rowHeight}`).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it("a bar under 16 px writes no amount", () => {
+    // A 30 px card: a 14 px bar.
+    expect(scene(weekly(), 20, Number.POSITIVE_INFINITY, { rowHeight: 44 }).cells()).toEqual([]);
+  });
+
+  it("a tall card keeps them at the top of its bar: its lock is in the bar's bottom-left corner", () => {
+    const { core, cells } = scene(weekly(), 20, Number.POSITIVE_INFINITY, { rowHeight: 84 });
+    const card = core.getPresentation().visibleClipViews[0]!.rect.height;
+    expect(cells()).toHaveLength(4);
+    // 26 px label, the bar's 4 px inset, 1 px: well above the bar's middle.
+    for (const text of cells()) expect(text.y).toBe(31);
+    expect(digitsMiddle(cells()[0]!)).toBeLessThan(26 + (card - 26) / 2);
+  });
 });
 
 describe("cell labels", () => {
@@ -236,9 +285,10 @@ describe("cell labels", () => {
     }
   });
 
-  it("a cell too narrow for its label writes nothing", () => {
-    // Daily cells of 20 px: "−$550" needs ~36 px at 12 px type; only the
-    // last cell (it runs to the clip's end) has room.
+  it("cells too narrow for their labels write none — not even the last one, which has room", () => {
+    // Daily cells of 20 px: "−$550" needs ~36 px at 12 px type. The last
+    // cell (it runs to the clip's end) would have room: one format for the
+    // whole card, so it stays empty like its neighbours.
     const daily: PlaylistClipContent = {
       kind: "events",
       beats: [7, 8, 9, 10],
@@ -246,7 +296,40 @@ describe("cell labels", () => {
       cells: { beats: [7, 8, 9, 10], labels: ["−$550", "−$550", "−$550", "−$300"] },
     };
     const { cells } = scene(daily);
-    expect(cells().map((t) => t.text)).toEqual(["−$300"]);
+    expect(cells()).toEqual([]);
+  });
+
+  it("cells of 14 and 16 days never take turns: whole when the narrowest fits, else all short, else none", () => {
+    // Cells of 5 and 8 days, alternating (then the last one, to the card's end).
+    const uneven: PlaylistClipContent = {
+      kind: "events",
+      beats: [2, 7, 15, 20, 28],
+      values: [1, 1, 1, 1, 1],
+      cells: {
+        beats: [2, 7, 15, 20, 28],
+        labels: Array(5).fill("+$11,000"),
+        shortLabels: Array(5).fill("+$11k"),
+      },
+    };
+    // "+$11,000" needs ~58 px at 12 px type, "+$11k" ~36, plus 8 px of pads.
+    // 14 px a day: the 5-day cells (70 px) hold it.
+    expect(scene(uneven, 14).cells().map((t) => t.text)).toEqual(Array(5).fill("+$11,000"));
+    // 10 px a day: the 8-day cells (80 px) would hold it, the 5-day ones
+    // (50 px) not — they used to take turns. Now every cell is short.
+    expect(scene(uneven, 10).cells().map((t) => t.text)).toEqual(Array(5).fill("+$11k"));
+    // 8 px a day: not even "+$11k" fits a 5-day cell (40 px): none.
+    expect(scene(uneven, 8).cells()).toEqual([]);
+  });
+
+  it("without short labels a card goes from whole straight to none", () => {
+    const uneven: PlaylistClipContent = {
+      kind: "events",
+      beats: [2, 7, 15, 20, 28],
+      values: [1, 1, 1, 1, 1],
+      cells: { beats: [2, 7, 15, 20, 28], labels: Array(5).fill("+$11,000") },
+    };
+    expect(scene(uneven, 14).cells()).toHaveLength(5);
+    expect(scene(uneven, 10).cells()).toEqual([]);
   });
 
   it("only the cells inside the visible span are laid out", () => {

@@ -8,6 +8,7 @@ import {
 } from "@slicex/core";
 import {
   FINANCE_PLAYLIST_METRICS,
+  canonicalItem,
   createFinancialPlaylistState,
   deriveRecurrence,
   itemToClip,
@@ -107,7 +108,7 @@ describe("mapping", () => {
     expect(clip.start + clip.duration).toBe(openEndBeat(doc));
   });
 
-  it("encodes a past window start as content offset", () => {
+  it("a window that began in the past starts at its next payment; the phase rides the content offset", () => {
     const doc = makeDoc();
     const item: FinancialItem = {
       id: "old",
@@ -117,9 +118,62 @@ describe("mapping", () => {
       recurrence: { frequency: "monthly", startDate: "2026-10-01" },
     };
     const clip = itemToClip(doc, item, "x");
-    expect(clip.start).toBe(0);
-    expect(clip.contentOffset).toBe(37);
+    // 1 dic (beat 24): nothing is paid between today (7 nov) and then.
+    expect(clip.start).toBe(24);
+    // The anchor (1 oct) is 37 days before today.
+    expect(clip.contentOffset).toBe(24 + 37);
     expect(deriveRecurrence(doc, item, clip, null, true)).toEqual(item.recurrence);
+  });
+
+  it("a recurring income starts where it has effect: a quincena 'desde hoy' at its 15th / month end", () => {
+    const doc = makeDoc();
+    const quincena: FinancialItem = {
+      id: "q",
+      kind: "income",
+      name: "Sueldo",
+      amount: 11000,
+      recurrence: { frequency: "semimonthly", startDate: START },
+    };
+    // 7 nov → the first payment is 15 nov (beat 8).
+    expect(itemToClip(doc, quincena, "x").start).toBe(8);
+    expect(canonicalItem(quincena, doc).recurrence.startDate).toBe("2026-11-15");
+    // A weekly one starting on its own day, a debt and a one-time event: as they are.
+    const weekly: FinancialItem = { ...quincena, id: "w", recurrence: { frequency: "weekly", startDate: START } };
+    expect(itemToClip(doc, weekly, "x").start).toBe(0);
+    expect(canonicalItem(weekly, doc)).toBe(weekly);
+  });
+});
+
+describe("FinancialBridge — a recurring item starts where it has effect", () => {
+  it("a left edge pulled before the first payment goes back to it once the gesture ends", async () => {
+    const { core, bridge, clip, datesOf } = setup();
+    // Every 14 days from Friday 13 nov (beat 6).
+    expect(clip("sal").start).toBe(6);
+    const paydays = datesOf("sal");
+    core.beginGesture();
+    core.resizeClip("sal", "left", 2);
+    // While the hand holds it, it follows the hand.
+    expect(clip("sal").start).toBe(2);
+    core.endGesture();
+    await flush();
+    expect(clip("sal").start).toBe(6);
+    expect(bridge.getItem("sal")!.recurrence.startDate).toBe("2026-11-13");
+    // The paydays never moved.
+    expect(datesOf("sal")).toEqual(paydays);
+  });
+
+  it("saved from the editor with a start that is not a payday: it starts at its first payment", () => {
+    const { bridge, clip } = setup();
+    const sal = bridge.getItem("sal")!;
+    bridge.replaceItem({ ...sal, recurrence: { frequency: "semimonthly", startDate: "2026-11-08" } } as FinancialItem);
+    expect(bridge.getItem("sal")!.recurrence.startDate).toBe("2026-11-15");
+    expect(clip("sal").start).toBe(8);
+  });
+
+  it("a debt keeps its start: its balance is there from the first day", () => {
+    const { clip, bridge } = setup();
+    expect(bridge.getItem("loan")!.recurrence.startDate).toBe("2026-11-10");
+    expect(clip("loan").start).toBe(3);
   });
 });
 
@@ -475,8 +529,11 @@ describe("FinancialBridge — review regressions", () => {
 
   it("SYNC-8: switching to once lands on the date shown, not a stale anchor", () => {
     const { core, bridge, datesOf } = setup();
-    core.resizeClip("sal", "left", 13); // window 2026-11-20…, anchor 2026-11-13
+    // Cropped to its 27 nov payment (a window starts on a payment): window
+    // 2026-11-27…, anchor 2026-11-13.
+    core.resizeClip("sal", "left", 20);
     const sal = bridge.getItem("sal")!;
+    expect(sal.recurrence.startDate).toBe("2026-11-27");
     bridge.replaceItem({
       ...sal,
       recurrence: {
@@ -485,7 +542,7 @@ describe("FinancialBridge — review regressions", () => {
         endDate: sal.recurrence.startDate,
       },
     });
-    expect(datesOf("sal")).toEqual(["2026-11-20"]);
+    expect(datesOf("sal")).toEqual(["2026-11-27"]);
   });
 
   it("SYNC-9: undo / redo of an editor save restores the item exactly", () => {

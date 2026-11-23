@@ -18,6 +18,7 @@ import {
   getHorizontalScrollbarHeight,
   getHorizontalScrollbarRect,
   getHorizontalScrollbarThumbRect,
+  getMinTime,
   getOverviewLaneHeight,
   getTrackByIndex,
   getTrackHeight,
@@ -919,11 +920,12 @@ function createRulerTicks(
   timeAxis: PlaylistTimeAxis | null = null,
 ): PlaylistRulerTickPresentation[] {
   const step = pickGridStep(state.viewport.pxPerBeat);
-  const startBeat = Math.max(
-    0,
-    Math.floor(screenXToTime(state, metrics.trackHeaderWidth, metrics) / step) *
-      step,
-  );
+  // From the first step at or after the earliest beat the view reaches (a
+  // multiple of the step, so the grid stays aligned).
+  const firstVisible =
+    Math.floor(screenXToTime(state, metrics.trackHeaderWidth, metrics) / step) * step;
+  const minTime = getMinTime(state);
+  const startBeat = firstVisible >= minTime ? firstVisible : Math.ceil(minTime / step) * step;
   const endBeat = screenXToTime(state, state.viewport.width, metrics) + step;
   const ticks: PlaylistRulerTickPresentation[] = [];
 
@@ -993,7 +995,7 @@ function createRulerBands(
 ): PlaylistRulerBandPresentation[] {
   if (!timeAxis || !timeAxis.bands) return NO_BANDS;
   const fromBeat = Math.max(
-    0,
+    getMinTime(state),
     screenXToTime(state, metrics.trackHeaderWidth, metrics),
   );
   const toBeat = screenXToTime(state, state.viewport.width, metrics);

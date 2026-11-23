@@ -92,8 +92,12 @@ describe("calendar time axis — lower tier (days)", () => {
     expect(axis.ticks(0, 365, 2.45).filter((t) => !t.emphasis).every((t) => t.label === null)).toBe(true);
   });
 
-  it("never emits negative beats", () => {
-    expect(axis.ticks(-20, 5, 12).every((t) => t.beat >= 0)).toBe(true);
+  it("emits the past it is asked for (the view bounds it: viewport.minBeat), 'Hoy' still on today", () => {
+    const ticks = axis.ticks(-20, 5, 12);
+    expect(ticks[0]!.beat).toBeGreaterThanOrEqual(-20);
+    expect(ticks.some((t) => t.beat < 0)).toBe(true);
+    expect(ticks.find((t) => t.beat === 0)?.emphasis).toBe(true);
+    expect(ticks.map((t) => t.beat)).toEqual([...ticks.map((t) => t.beat)].sort((a, b) => a - b));
   });
 });
 

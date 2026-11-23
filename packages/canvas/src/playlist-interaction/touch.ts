@@ -24,6 +24,7 @@
 // Canon §3.11: the inertia rAF is started/stopped on demand. No idle
 // tick runs when there's nothing to decay.
 import {
+  getMinScrollX,
   screenXToTime,
   type PlaylistCore,
   type PlaylistMetrics,
@@ -194,7 +195,7 @@ export function createTouchTracker(
     // Convert pixels-per-ms → pixels-per-frame at ~16.67ms.
     const dt = 16.67;
     core.updateViewport({
-      scrollX: Math.max(0, state.viewport.scrollX - inertiaVx * dt),
+      scrollX: Math.max(getMinScrollX(state), state.viewport.scrollX - inertiaVx * dt),
       scrollY: Math.max(0, state.viewport.scrollY - inertiaVy * dt),
     });
     inertiaVx *= INERTIA_DECAY;

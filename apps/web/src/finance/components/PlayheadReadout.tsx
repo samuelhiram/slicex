@@ -2,7 +2,9 @@
 // under the pointer: date, cash and total debt. It lives in the header,
 // right after the verdict, big (.fin-readout--header); its two figures
 // double as the money lane's legend: the thick line is the cash ("Caja"),
-// the thin grey one the debt ("Deuda").
+// the thin grey one the debt ("Deuda"). On a day already lived (left of
+// today, the plan's memory) it says what you had ("Tenías") and how it
+// changed until today ("Hasta hoy"): the memory keeps the cash, not debts.
 // Re-renders only when the integer day or the bridge revision changes
 // (never per frame).
 //
@@ -12,7 +14,7 @@
 // NavControls.
 import * as React from "react";
 import type { FinancialBridgeApi } from "../bridge-api";
-import { formatDateLong, formatDateWeekday, formatMoneyWhole } from "../format";
+import { formatDateLong, formatDateWeekday, formatMoneyWhole, formatSignedMoneyWhole } from "../format";
 import { useFinancialRevision, useHoverDay, usePlayheadDay } from "./FinancialUi";
 
 // How recent a key press must be for a day change to count as keyboard
@@ -39,18 +41,26 @@ export interface PlayheadReadoutProps {
 
 export function PlayheadReadout({ bridge, className, keyboardIntentRef, followHover }: PlayheadReadoutProps) {
   const revision = useFinancialRevision(bridge);
-  const day = usePlayheadDay(bridge);
+  const day = usePlayheadDay(bridge, { past: true });
   const hoverDay = useHoverDay(bridge);
   const hovering = followHover === true && hoverDay !== null;
   const shownDay = hovering ? hoverDay : day;
 
   const view = React.useMemo(() => {
     const date = bridge.dateAtBeat(shownDay);
+    const doc = bridge.getDocument();
+    const reserve = doc.minimumCashReserve;
+    const stateOf = (cash: number) => (cash < 0 ? "negative" : cash < reserve ? "low" : "ok");
+    // A day already lived: what the plan remembers it closed with (the memory
+    // keeps the cash, not the debts) and how much more — or less — there is
+    // today ("ese día tenías $1,000; hoy +$10,300").
+    if (date < doc.startDate) {
+      const cash = bridge.pastCashAt(date);
+      const since = cash === null ? null : doc.initialCash - cash;
+      return { date, snapshot: null, past: { cash, since }, state: cash === null ? "ok" : stateOf(cash) };
+    }
     const snapshot = bridge.snapshotAt(date);
-    const reserve = bridge.getDocument().minimumCashReserve;
-    const state =
-      snapshot.cash < 0 ? "negative" : snapshot.cash < reserve ? "low" : "ok";
-    return { date, snapshot, state };
+    return { date, snapshot, past: null, state: stateOf(snapshot.cash) };
     // `revision` is the cache key for document / projection changes.
   }, [bridge, revision, shownDay]);
 
@@ -66,6 +76,17 @@ export function PlayheadReadout({ bridge, className, keyboardIntentRef, followHo
     const id = setTimeout(() => {
       // The playhead's day (the shown one may be the hovered day).
       const date = bridge.dateAtBeat(day);
+      if (date < bridge.getDocument().startDate) {
+        const cash = bridge.pastCashAt(date);
+        setSpoken(
+          cash === null
+            ? `${formatDateLong(date)}: sin registro`
+            : `${formatDateLong(date)}: tenías ${formatMoneyWhole(cash)}; hasta hoy ${formatSignedMoneyWhole(
+                bridge.getDocument().initialCash - cash,
+              )}`,
+        );
+        return;
+      }
       const snapshot = bridge.snapshotAt(date);
       setSpoken(
         `${formatDateLong(date)}: caja ${formatMoneyWhole(snapshot.cash)}, deuda ${formatMoneyWhole(
@@ -100,7 +121,7 @@ export function PlayheadReadout({ bridge, className, keyboardIntentRef, followHo
       <span className="fin-readout__cell">
         <span className="fin-readout__swatch fin-readout__swatch--cash" aria-hidden="true" />
         <span className="fin-readout__label">
-          Caja
+          {view.past ? "Tenías" : "Caja"}
           {/* Where the date block gives way (narrow headers), the label
               names the day the figures are for. */}
           <span className="fin-readout__label-day">
@@ -108,17 +129,38 @@ export function PlayheadReadout({ bridge, className, keyboardIntentRef, followHo
             {dayNumber} {month}
           </span>
         </span>
-        <span className="fin-readout__cash">
-          {formatMoneyWhole(view.snapshot.cash)}
+        <span
+          className="fin-readout__cash"
+          title={view.past && view.past.cash === null ? "Ese día no quedó registrado" : undefined}
+        >
+          {view.past
+            ? view.past.cash === null
+              ? "—"
+              : formatMoneyWhole(view.past.cash)
+            : formatMoneyWhole(view.snapshot!.cash)}
         </span>
       </span>
-      <span className="fin-readout__cell">
-        <span className="fin-readout__swatch fin-readout__swatch--debt" aria-hidden="true" />
-        <span className="fin-readout__label">Deuda</span>
-        <span className="fin-readout__debt">
-          {formatMoneyWhole(view.snapshot.debt)}
+      {view.past ? (
+        // The past keeps the cash, not the debts: this cell says how it
+        // changed since that day.
+        <span className="fin-readout__cell fin-readout__cell--since">
+          <span className="fin-readout__label">Hasta hoy</span>
+          <span
+            className="fin-readout__debt fin-readout__since"
+            data-trend={view.past.since === null ? undefined : view.past.since >= 0 ? "up" : "down"}
+          >
+            {view.past.since === null ? "—" : formatSignedMoneyWhole(view.past.since)}
+          </span>
         </span>
-      </span>
+      ) : (
+        <span className="fin-readout__cell">
+          <span className="fin-readout__swatch fin-readout__swatch--debt" aria-hidden="true" />
+          <span className="fin-readout__label">Deuda</span>
+          <span className="fin-readout__debt">
+            {formatMoneyWhole(view.snapshot!.debt)}
+          </span>
+        </span>
+      )}
       <span className="fin-sr-only" role="status" aria-live="polite" aria-atomic="true">
         {spoken}
       </span>

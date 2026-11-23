@@ -6,6 +6,9 @@ import {
   FinancialItemSchemaStrict,
   FinancialRecurrenceSchema,
   ISODateSchema,
+  MAX_MONEY,
+  MAX_MONEY_MESSAGE,
+  MIN_MONEY_MESSAGE,
   MoneySchema,
   SignedMoneySchema,
 } from "../src/index";
@@ -34,6 +37,30 @@ describe("MoneySchema / SignedMoneySchema", () => {
     expect(SignedMoneySchema.safeParse(-1500).success).toBe(true);
     expect(SignedMoneySchema.safeParse(Number.NaN).error?.issues[0]!.message).toBe("Escribe un número");
     expect(SignedMoneySchema.safeParse(Number.POSITIVE_INFINITY).success).toBe(false);
+  });
+
+  it("nothing past MAX_MONEY ($1,000,000,000), either way, with the cap in its words", () => {
+    expect(MAX_MONEY).toBe(1_000_000_000);
+    expect(MoneySchema.safeParse(MAX_MONEY).success).toBe(true);
+    expect(MoneySchema.safeParse(MAX_MONEY + 0.01).error?.issues[0]!.message).toBe(MAX_MONEY_MESSAGE);
+    expect(MoneySchema.safeParse(1e31).error?.issues[0]!.message).toBe("El máximo es $1,000,000,000");
+    expect(SignedMoneySchema.safeParse(-MAX_MONEY).success).toBe(true);
+    expect(SignedMoneySchema.safeParse(-1e31).error?.issues[0]!.message).toBe(MIN_MONEY_MESSAGE);
+    expect(SignedMoneySchema.safeParse(1e31).error?.issues[0]!.message).toBe(MAX_MONEY_MESSAGE);
+    // Infinity is still "not a number" first.
+    expect(MoneySchema.safeParse(Number.POSITIVE_INFINITY).error?.issues[0]!.message).toBe("Escribe un número");
+  });
+
+  it("an item's one-payment edit past the cap is an error of that payment", () => {
+    const streaming = {
+      id: "s",
+      kind: "expense",
+      name: "Streaming",
+      amount: 329,
+      recurrence: monthly,
+      occurrenceEdits: [{ date: "2027-01-15", amount: 1e31 }],
+    };
+    expect(issues(streaming)).toEqual({ "occurrenceEdits.0.amount": MAX_MONEY_MESSAGE });
   });
 });
 

@@ -15,7 +15,7 @@
 // Every frame is ONE core.updateViewport (idempotent; the renderer
 // coalesces). Without requestAnimationFrame (tests, SSR) or with reduced
 // motion, targets apply at once and momentum is skipped.
-import type { PlaylistCore } from "../playlist-core";
+import { getMinTime, type PlaylistCore } from "../playlist-core";
 
 // The user asked the system for less motion. Shared by the controller's
 // navigator and hosts that animate on their own (e.g. a morphing curve).
@@ -101,6 +101,8 @@ export function createViewportNavigator(
   options: ViewportNavigatorOptions = {},
 ): ViewportNavigator {
   const metrics = core.metrics;
+  // The earliest scroll at `px` px a beat (≤ 0 with a past: PlaylistViewport.minBeat).
+  const minX = (px: number): number => getMinTime(core.getState()) * px;
   const scheduler =
     options.scheduler === undefined ? defaultScheduler() : options.scheduler;
   const reducedMotion = options.reducedMotion ?? (() => false);
@@ -176,13 +178,13 @@ export function createViewportNavigator(
   function toPlainPan(): void {
     const px = clampPx(targetPx);
     if (anchorActive) targetX = targetScrollXForAnchor(px);
-    else if (rangeActive) targetX = Math.max(0, rangeBeat * px);
+    else if (rangeActive) targetX = Math.max(minX(px), rangeBeat * px);
     anchorActive = false;
     rangeActive = false;
   }
 
   function targetScrollXForAnchor(px: number): number {
-    return Math.max(0, anchorBeat * px - anchorTimelineX);
+    return Math.max(minX(px), anchorBeat * px - anchorTimelineX);
   }
 
   function applyTargetNow(): void {
@@ -192,8 +194,8 @@ export function createViewportNavigator(
       scrollX: anchorActive
         ? targetScrollXForAnchor(px)
         : rangeActive
-          ? Math.max(0, rangeBeat * px)
-          : Math.max(0, targetX),
+          ? Math.max(minX(px), rangeBeat * px)
+          : Math.max(minX(px), targetX),
       scrollY: Math.max(0, targetY),
     });
     mode = "idle";
@@ -228,16 +230,16 @@ export function createViewportNavigator(
       const goalX = anchorActive
         ? targetScrollXForAnchor(goalPx)
         : rangeActive
-          ? Math.max(0, rangeBeat * goalPx)
-          : Math.max(0, targetX);
+          ? Math.max(minX(goalPx), rangeBeat * goalPx)
+          : Math.max(minX(goalPx), targetX);
       const goalY = Math.max(0, targetY);
       let scrollX: number;
       if (anchorActive) {
         scrollX = targetScrollXForAnchor(px);
       } else if (rangeActive) {
         const beatNow = viewport.scrollX / viewport.pxPerBeat;
-        const beat = beatNow + (Math.max(0, rangeBeat) - beatNow) * kPan;
-        scrollX = Math.abs(rangeBeat - beat) * px < SETTLE_PX ? Math.max(0, rangeBeat * px) : beat * px;
+        const beat = beatNow + (Math.max(getMinTime(core.getState()), rangeBeat) - beatNow) * kPan;
+        scrollX = Math.abs(rangeBeat - beat) * px < SETTLE_PX ? Math.max(minX(px), rangeBeat * px) : beat * px;
       } else {
         scrollX = viewport.scrollX + (goalX - viewport.scrollX) * kPan;
       }
@@ -267,12 +269,12 @@ export function createViewportNavigator(
 
     if (mode === "fling") {
       const decay = Math.exp(-dt / FLING_TAU);
-      const nextX = Math.max(0, viewport.scrollX - vx * dt);
+      const nextX = Math.max(minX(viewport.pxPerBeat), viewport.scrollX - vx * dt);
       const nextY = Math.max(0, viewport.scrollY - vy * dt);
       core.updateViewport({ scrollX: nextX, scrollY: nextY });
       const after = core.getState().viewport;
       // Hitting a bound kills that axis' momentum.
-      if (Math.abs(after.scrollX - nextX) > SETTLE_PX || after.scrollX <= 0) vx = 0;
+      if (Math.abs(after.scrollX - nextX) > SETTLE_PX || after.scrollX <= minX(after.pxPerBeat)) vx = 0;
       if (Math.abs(after.scrollY - nextY) > SETTLE_PX || after.scrollY <= 0) vy = 0;
       vx *= decay;
       vy *= decay;
@@ -294,7 +296,7 @@ export function createViewportNavigator(
         return;
       }
       core.updateViewport({
-        scrollX: Math.max(0, viewport.scrollX + vx * dt),
+        scrollX: Math.max(minX(viewport.pxPerBeat), viewport.scrollX + vx * dt),
         scrollY: Math.max(0, viewport.scrollY + vy * dt),
       });
       edgeStep?.();
@@ -305,7 +307,7 @@ export function createViewportNavigator(
   function scrollTo(target: { scrollX?: number; scrollY?: number }): void {
     ensureTarget();
     toPlainPan();
-    if (target.scrollX !== undefined) targetX = Math.max(0, target.scrollX);
+    if (target.scrollX !== undefined) targetX = Math.max(minX(core.getState().viewport.pxPerBeat), target.scrollX);
     if (target.scrollY !== undefined) targetY = Math.max(0, target.scrollY);
     startTarget();
   }
@@ -331,7 +333,7 @@ export function createViewportNavigator(
       ensureTarget();
       // Panning during a zoom / range move: freeze its scroll goal, then pan.
       toPlainPan();
-      targetX = Math.max(0, targetX + dx);
+      targetX = Math.max(minX(targetPx), targetX + dx);
       targetY = Math.max(0, targetY + dy);
       startTarget();
     },
@@ -351,7 +353,7 @@ export function createViewportNavigator(
       ensureTarget();
       anchorActive = false;
       targetPx = clampPx(timelineWidth() / span);
-      rangeBeat = Math.max(0, fromBeat);
+      rangeBeat = Math.max(getMinTime(core.getState()), fromBeat);
       rangeActive = true;
       startTarget();
     },
@@ -377,7 +379,7 @@ export function createViewportNavigator(
       else if (x < from + margin) next = x - margin;
       else if (x > from + width - margin) next = x - width + margin;
       if (Math.abs(next - from) < SETTLE_PX && mode !== "target") return;
-      scrollTo({ scrollX: Math.max(0, next) });
+      scrollTo({ scrollX: next });
     },
 
     fling(flingVx, flingVy) {

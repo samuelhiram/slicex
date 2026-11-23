@@ -36,18 +36,26 @@ function dayOf(time: number): number {
  * change (hover, play tick…); `setDay` receives a primitive, so React bails
  * out unless the day actually changed.
  */
-export function usePlayheadDay(bridge: FinancialBridgeApi): number {
+export function usePlayheadDay(
+  bridge: FinancialBridgeApi,
+  // The playhead may stand on a remembered day (left of today): only a
+  // reader of the past asks for it; the plan's tools (fork here, debts,
+  // valleys) get today then.
+  { past = false }: { past?: boolean } = {},
+): number {
   const core = bridge.core;
-  const [day, setDay] = React.useState(() =>
-    dayOf(core.getState().playPosition.time),
+  const read = React.useCallback(
+    (time: number) => (past ? dayOf(time) : Math.max(0, dayOf(time))),
+    [past],
   );
+  const [day, setDay] = React.useState(() => read(core.getState().playPosition.time));
   React.useEffect(() => {
-    setDay(dayOf(core.getState().playPosition.time));
+    setDay(read(core.getState().playPosition.time));
     const sub = core.subscribe((state) => {
-      setDay(dayOf(state.playPosition.time));
+      setDay(read(state.playPosition.time));
     });
     return () => sub.unsubscribe();
-  }, [core]);
+  }, [core, read]);
   return day;
 }
 
@@ -77,7 +85,8 @@ export function jumpPlayheadToDate(
   date: ISODate,
 ): void {
   const core = bridge.core;
-  const beat = Math.max(0, bridge.beatAtDate(date));
+  // A remembered day too (the core keeps the playhead inside the past it has).
+  const beat = bridge.beatAtDate(date);
   core.setPlayPosition(beat);
   const { viewport } = core.getState();
   // The core's own metrics (the finance shell widens the header column).
@@ -85,9 +94,11 @@ export function jumpPlayheadToDate(
   const laneWidth =
     viewport.width - metrics.trackHeaderWidth - metrics.scrollbarSize;
   if (laneWidth <= 0 || viewport.pxPerBeat <= 0) return;
-  const x = beat * viewport.pxPerBeat;
+  // Where the core actually put it (clamped to the remembered past).
+  const x = core.getState().playPosition.time * viewport.pxPerBeat;
   if (x < viewport.scrollX || x > viewport.scrollX + laneWidth) {
-    core.updateViewport({ scrollX: Math.max(0, x - laneWidth * 0.25) });
+    // The core clamps the scroll to the past it has (viewport.minBeat).
+    core.updateViewport({ scrollX: x - laneWidth * 0.25 });
   }
 }
 

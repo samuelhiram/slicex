@@ -7959,6 +7959,16 @@ input[type="number"]::-webkit-outer-spin-button {
   color: var(--fin-negative-text);
 }
 
+/* A day already lived (the plan's memory): "Hasta hoy" says how the cash
+   changed since — more today in the positive tone, less in the negative. */
+.fin-readout .fin-readout__since[data-trend="up"] {
+  color: var(--fin-positive);
+}
+
+.fin-readout .fin-readout__since[data-trend="down"] {
+  color: var(--fin-negative-text);
+}
+
 /* "Pagar deudas" (the debts rail's toggle) as a header button, beside
    "Registrar gasto"; open, it says so in the accent. */
 .playlist-shell--finance .fin-summary .fin-side__tab.fin-side__tab--header {

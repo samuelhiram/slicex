@@ -2,6 +2,8 @@ import {
   clamp,
   getMaxScrollX,
   getMaxScrollY,
+  getMinScrollX,
+  getMinTime,
   isAutomationClip,
 } from "./geometry";
 import type {
@@ -294,7 +296,7 @@ export function normalizeState(
   );
   state.viewport.scrollX = clamp(
     state.viewport.scrollX,
-    0,
+    getMinScrollX(state),
     getMaxScrollX(state, metrics),
   );
   state.viewport.scrollY = clamp(
@@ -302,7 +304,7 @@ export function normalizeState(
     0,
     getMaxScrollY(state, metrics),
   );
-  state.playPosition.time = Math.max(0, state.playPosition.time);
+  state.playPosition.time = Math.max(getMinTime(state), state.playPosition.time);
   if (reuseClips) {
     state.clips = previous!.clips;
     return state;

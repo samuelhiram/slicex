@@ -79,8 +79,10 @@ export type ActiveGesture =
       edge: "start" | "end";
       // Beat of the edge that stays put.
       fixedBeat: number;
-      // Track x of beat 0 and beats per track px, frozen at gesture start.
+      // The track's left x, the beat there (the earliest one the view
+      // reaches: 0, or a past) and beats per track px, frozen at gesture start.
       trackX: number;
+      originBeat: number;
       beatsPerPx: number;
     }
   | {

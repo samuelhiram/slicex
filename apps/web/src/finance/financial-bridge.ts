@@ -53,7 +53,12 @@ import {
   diffDays,
   editItemOccurrence,
   canEditOccurrences,
+  addDays,
+  historyStart,
   isISODate,
+  MAX_MONEY,
+  openingCashAt,
+  type CashHistoryEntry,
   type FinancialRecurrence,
   estimateDebtPayoffs,
   shiftItemRules,
@@ -109,6 +114,9 @@ import {
   itemClipGeometry,
   itemColor,
   openEndBeat,
+  firstPaymentBeat,
+  pastStartBeat,
+  startsAtFirstPayment,
   arrangementByKind,
   trackLayoutOf,
   type FinancialTrackLayout,
@@ -233,9 +241,9 @@ export function withLevel<T extends FinancialItem>(item: T, value: number): T {
   return item;
 }
 
-/** Friendly rounding while dragging an amount: fewer digits as it grows. */
+/** Friendly rounding while dragging an amount: fewer digits as it grows, never past MAX_MONEY. */
 export function niceAmount(raw: number): number {
-  const value = Math.max(1, raw);
+  const value = Math.min(MAX_MONEY, Math.max(1, raw));
   const step = value < 100 ? 1 : value < 1000 ? 10 : value < 10_000 ? 50 : value < 100_000 ? 100 : 1000;
   return Math.max(step, Math.round(value / step) * step);
 }
@@ -431,6 +439,9 @@ export class FinancialBridge implements FinancialBridgeApi {
   private readonly pendingTimeLock = new Set<string>();
   private readonly pendingOffset = new Set<string>();
   private readonly pendingRepin = new Set<string>();
+  // Recurring incomes / expenses / purchases whose clip opens before their
+  // first payment: trimmed to it (startsAtFirstPayment).
+  private readonly pendingStart = new Set<string>();
   private correctionQueued = false;
   private destroyed = false;
   private idCounter = 0;
@@ -484,7 +495,8 @@ export class FinancialBridge implements FinancialBridgeApi {
 
   constructor(core: PlaylistCore, doc: FinancialDocument) {
     this.core = core;
-    this.doc = { ...doc, items: doc.items.map(canonicalItem) };
+    // Recurring incomes / expenses / purchases start at their first payment.
+    this.doc = { ...doc, items: doc.items.map((item) => canonicalItem(item, doc)) };
     this.projection = projectFinancialDocument(this.doc);
     this.warnings = findLiquidityWarnings(
       this.projection,
@@ -547,6 +559,14 @@ export class FinancialBridge implements FinancialBridgeApi {
 
   snapshotAt(date: ISODate): FinancialSnapshot {
     return snapshotAt(this.projection, date);
+  }
+
+  pastCashAt(date: ISODate): number | null {
+    if (!isISODate(date) || date >= this.doc.startDate) return null;
+    const start = historyStart(this.doc);
+    if (start === null || date < start) return null;
+    // A day closed with what the next one opened with.
+    return openingCashAt(this.doc, addDays(date, 1));
   }
 
   nextPaymentAfter(date: ISODate): UpcomingPayment | null {
@@ -870,7 +890,7 @@ export class FinancialBridge implements FinancialBridgeApi {
     const current = this.itemIndex.get(level.itemId);
     if (!current) return null;
     const value = fine
-      ? Math.max(1, Math.round(level.value * Math.exp(deltaY / (LEVEL_PX_PER_E * LEVEL_FINE_FACTOR))))
+      ? Math.min(MAX_MONEY, Math.max(1, Math.round(level.value * Math.exp(deltaY / (LEVEL_PX_PER_E * LEVEL_FINE_FACTOR)))))
       : niceAmount(level.value * Math.exp(deltaY / LEVEL_PX_PER_E));
     if (levelValue(current) !== value) {
       const next = withLevel(current, value);
@@ -1271,7 +1291,7 @@ export class FinancialBridge implements FinancialBridgeApi {
   loadDocument(doc: FinancialDocument, layout: FinancialTrackLayout | null = null): void {
     this.resetTransient();
     const viewport = this.core.getState().viewport;
-    const canonical: FinancialDocument = { ...doc, items: doc.items.map(canonicalItem) };
+    const canonical: FinancialDocument = { ...doc, items: doc.items.map((item) => canonicalItem(item, doc)) };
     const base = createFinancialPlaylistState(canonical, layout);
     const state: PlaylistState = {
       ...base,
@@ -1326,7 +1346,7 @@ export class FinancialBridge implements FinancialBridgeApi {
     const taken = (id: string) =>
       !id || this.itemIndex.has(id) || state.clips.some((clip) => clip.id === id);
     const id = taken(draft.id) ? this.makeItemId(draft.kind) : draft.id;
-    const item = canonicalItem({ ...draft, id } as FinancialItem);
+    const item = canonicalItem({ ...draft, id } as FinancialItem, this.doc);
     delete item.enabled;
     const geometry = itemClipGeometry(this.doc, item);
     const excluded = this.excludedTracks(state);
@@ -1407,7 +1427,7 @@ export class FinancialBridge implements FinancialBridgeApi {
     const clip = this.findClip(draft.id);
     if (!current || !clip || this.isClipLocked(clip)) return false;
 
-    const next = canonicalItem(draft);
+    const next = canonicalItem(draft, this.doc);
     const geometry = itemClipGeometry(this.doc, next);
     // A one-time event keeps the visual width the user gave it.
     const duration =
@@ -1518,6 +1538,15 @@ export class FinancialBridge implements FinancialBridgeApi {
     this.snapshots.set(state, this.snap);
     // A card's payoff-pinned end follows its debt.
     if (effect.debts.length > 0) this.sweepInvariants(state);
+  }
+
+  setHistory(history: CashHistoryEntry[] | undefined): void {
+    if (this.destroyed) return;
+    const { history: _previous, ...rest } = this.doc;
+    this.doc = history && history.length > 0 ? { ...rest, history } : rest;
+    // How far back the timeline goes follows the memory (a view bound).
+    this.core.setMinBeat(pastStartBeat(this.doc));
+    this.recompute();
   }
 
   // `snapshot` plus the reality booked since it was taken (the same object
@@ -1662,6 +1691,13 @@ export class FinancialBridge implements FinancialBridgeApi {
     excludedTracks: Set<string>,
   ): FinancialItem {
     let recurrence = deriveRecurrence(this.doc, item, clip, previous, wasIndefinite);
+    // Outside a gesture a recurring income / expense / purchase is stored
+    // from its first payment, like its clip is drawn (mid-gesture the clip
+    // follows the hand; the start lands once it is let go).
+    if (this.core.getGestureBase() === null && startsAtFirstPayment(item)) {
+      const normalized = canonicalItem({ ...item, recurrence } as FinancialItem, this.doc).recurrence;
+      if (normalized.startDate !== recurrence.startDate) recurrence = normalized;
+    }
     const sought = this.goalSeek(item, clip, previous);
     if (sought && sought.endDate !== undefined && recurrence.endDate !== sought.endDate) {
       recurrence = { ...recurrence, endDate: sought.endDate };
@@ -2038,6 +2074,8 @@ export class FinancialBridge implements FinancialBridgeApi {
   //    parked past it, where a resize could only collapse it).
   private sweepInvariants(state: PlaylistState): void {
     const openEnd = openEndBeat(this.doc);
+    // Mid-gesture the clip follows the hand; its start is trimmed once it lands.
+    const gestureOpen = this.core.getGestureBase() !== null;
     const owners = new Map<string, string>();
     for (const clip of state.clips) {
       const item = this.itemIndex.get(clip.id);
@@ -2069,6 +2107,10 @@ export class FinancialBridge implements FinancialBridgeApi {
         ) {
           this.pendingRepin.add(clip.id);
         }
+        if (!gestureOpen) {
+          const first = firstPaymentBeat(this.doc, item, clip.start, clip.start + clip.duration);
+          if (first !== null && first - clip.start > EPS) this.pendingStart.add(clip.id);
+        }
       }
     }
     this.queueCorrections();
@@ -2081,6 +2123,7 @@ export class FinancialBridge implements FinancialBridgeApi {
     this.pendingTimeLock.clear();
     this.pendingOffset.clear();
     this.pendingRepin.clear();
+    this.pendingStart.clear();
   }
 
   // Follow-up corrections: label / colour of clips materialised from a
@@ -2096,7 +2139,8 @@ export class FinancialBridge implements FinancialBridgeApi {
       this.pendingNoSlice.size === 0 &&
       this.pendingTimeLock.size === 0 &&
       this.pendingOffset.size === 0 &&
-      this.pendingRepin.size === 0
+      this.pendingRepin.size === 0 &&
+      this.pendingStart.size === 0
     ) {
       return;
     }
@@ -2110,6 +2154,7 @@ export class FinancialBridge implements FinancialBridgeApi {
       const timeLocks = Array.from(this.pendingTimeLock);
       const offsets = Array.from(this.pendingOffset);
       const repin = Array.from(this.pendingRepin);
+      const starts = Array.from(this.pendingStart);
       this.clearPending();
 
       const state = this.core.getState();
@@ -2163,6 +2208,14 @@ export class FinancialBridge implements FinancialBridgeApi {
               this.core.resizeClip(id, "right", want);
             }
           }
+          // Where it starts having effect: the first payment (the content
+          // stays in place: a left crop keeps the paydays).
+          for (const id of starts) {
+            const hit = target(id);
+            if (!hit) continue;
+            const want = firstPaymentBeat(this.doc, hit.item, hit.clip.start, hit.clip.start + hit.clip.duration);
+            if (want !== null && want - hit.clip.start > EPS) this.core.resizeClip(id, "left", want);
+          }
           const uniqueIds = unique.filter((id) => target(id) !== null);
           if (uniqueIds.length > 0) {
             this.core.dispatch({ type: "MAKE_CLIPS_UNIQUE", clipIds: uniqueIds });
@@ -2172,6 +2225,12 @@ export class FinancialBridge implements FinancialBridgeApi {
         this.applying -= 1;
       }
       const after = this.core.getState();
+      if (starts.length > 0 && after.clips !== this.lastClips) {
+        // A trimmed start is a date of the item: derive it (its start is
+        // now its first payment, the phase kept).
+        this.syncFromPlaylist(after);
+        return;
+      }
       if (after.clips !== this.lastClips || after.tracks !== this.lastTracks) {
         this.observe(after);
       }

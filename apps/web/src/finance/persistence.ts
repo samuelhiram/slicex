@@ -5,6 +5,7 @@
 //
 // Never throws: a blocked / full / corrupted storage just means "no save".
 import { FinancialDocumentSchema, FinancialItemSchemaStrict, ItemIconSchema, MovementSchema } from "@slicex/contracts";
+import { MAX_MONEY } from "@slicex/core";
 import type { FinancialDocument, FinancialItem, ISODate, LedgerEntry, Movement } from "@slicex/core";
 import { parseTrackLayout, type FinancialTrackLayout } from "./mapping";
 
@@ -54,7 +55,7 @@ function storage(): Storage | null {
  * (the rest of the plan survives), never fed to the projection as is.
  */
 function parseDocument(value: unknown): FinancialDocument | null {
-  const doc = FinancialDocumentSchema.safeParse(value);
+  const doc = FinancialDocumentSchema.safeParse(capAmounts(value));
   if (!doc.success) return null;
   const items: FinancialItem[] = [];
   for (const raw of doc.data.items) {
@@ -62,6 +63,26 @@ function parseDocument(value: unknown): FinancialDocument | null {
     if (item.success) items.push(item.data as FinancialItem);
   }
   return { ...doc.data, items };
+}
+
+/**
+ * Amounts past the money cap, saved before it existed (a −$10^31 payment
+ * typed in Nov 2026), are read AS the cap: the schema would drop the item —
+ * or the whole future, for today's cash — while capped it stays in sight
+ * and the person fixes it. In a stored plan every number past the cap can
+ * only be an amount: days, counts, intervals and months are far below it.
+ */
+function capAmounts(value: unknown): unknown {
+  if (typeof value === "number") {
+    return value > MAX_MONEY ? MAX_MONEY : value < -MAX_MONEY ? -MAX_MONEY : value;
+  }
+  if (Array.isArray(value)) return value.map(capAmounts);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) out[key] = capAmounts(entry);
+    return out;
+  }
+  return value;
 }
 
 /** A malformed icon name is dropped, never the item that carries it. */
@@ -80,7 +101,7 @@ function parseMovements(value: unknown): Movement[] {
   if (!Array.isArray(value)) return [];
   const movements: Movement[] = [];
   for (const raw of value) {
-    const movement = MovementSchema.safeParse(raw);
+    const movement = MovementSchema.safeParse(capAmounts(raw));
     if (movement.success) movements.push(movement.data as Movement);
   }
   return movements;

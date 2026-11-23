@@ -19,6 +19,9 @@ import {
   addDays,
   diffDays,
   getProjectionRange,
+  historyStart,
+  isScheduledOn,
+  ruleOccurrenceDates,
   type FinancialDocument,
   type FinancialItem,
   type FinancialItemKind,
@@ -171,6 +174,15 @@ export function openEndBeat(doc: FinancialDocument): number {
   return horizonBeat(doc) + 1;
 }
 
+/**
+ * How far back the timeline goes: the beat (< 0) of the plan's first
+ * remembered day (FinancialDocument.history), or 0 when it has no past.
+ */
+export function pastStartBeat(doc: FinancialDocument): number {
+  const start = historyStart(doc);
+  return start === null ? 0 : Math.min(0, beatOf(doc, start));
+}
+
 export function itemColor(item: FinancialItem): string {
   return item.color ?? KIND_COLORS[item.kind];
 }
@@ -178,16 +190,87 @@ export function itemColor(item: FinancialItem): string {
 /**
  * Canonical stored form. One-time events are `{ once, startDate, endDate:
  * startDate }` with no anchor (the date the editor shows is the date that
- * happens); everything else is kept as is.
+ * happens). With the plan (`doc`), a recurring income / expense / card
+ * purchase starts at its first payment (startsAtFirstPayment). Everything
+ * else is kept as is.
  */
-export function canonicalItem<T extends FinancialItem>(item: T): T {
-  if (!isPointItem(item)) return item;
+export function canonicalItem<T extends FinancialItem>(item: T, doc?: FinancialDocument): T {
+  if (!isPointItem(item)) return doc ? startingAtFirstPayment(doc, item) : item;
   const rule = item.recurrence;
   if (rule.anchorDate === undefined && rule.endDate === rule.startDate) return item;
   return {
     ...item,
     recurrence: { frequency: "once", startDate: rule.startDate, endDate: rule.startDate },
   };
+}
+
+/**
+ * Recurring incomes, expenses and card purchases start where they start
+ * having effect: their first payment (2026-11-23 — a quincena "desde hoy",
+ * 23 nov, used to open with a week of nothing before its 30 nov). A debt
+ * has effect from its start (its balance; its line shows it), a one-time
+ * event is its own day.
+ */
+export function startsAtFirstPayment(item: FinancialItem): boolean {
+  return (
+    !isPointItem(item) &&
+    (item.kind === "income" || item.kind === "expense" || item.kind === "card-purchase")
+  );
+}
+
+// Every cadence but "cada N días / meses" pays within two months: looked at first.
+const FIRST_PAYMENT_LOOKAHEAD_DAYS = 62;
+
+/**
+ * The beat of the first payment of `item` drawn from `fromBeat` to `toBeat`
+ * (exclusive) — where it starts having effect — when that is after
+ * `fromBeat`; null when it starts on a payment already, for the kinds that
+ * have effect from their start, or with no payment in there.
+ */
+export function firstPaymentBeat(
+  doc: FinancialDocument,
+  item: FinancialItem,
+  fromBeat: number,
+  toBeat: number,
+): number | null {
+  if (!startsAtFirstPayment(item)) return null;
+  const first = Math.ceil(fromBeat - EPS);
+  const last = Math.ceil(toBeat - EPS) - 1;
+  if (last < first) return null;
+  const from = dateOf(doc, first);
+  // The common case — it starts on a payday — costs one day's check.
+  if (isScheduledOn(item, from)) return null;
+  const to = dateOf(doc, last);
+  const near = addDays(from, FIRST_PAYMENT_LOOKAHEAD_DAYS);
+  let dates = ruleOccurrenceDates(item, { from, to: near < to ? near : to });
+  if (dates.length === 0 && near < to) dates = ruleOccurrenceDates(item, { from: addDays(near, 1), to });
+  if (dates.length === 0) return null;
+  const date = dates[0]!;
+  // A rule change ("a partir de aquí") at or before it: its segments start
+  // where they were set; the window is left as is.
+  if (item.ruleChanges?.some((change) => change.from <= date)) return null;
+  const beat = beatOf(doc, date);
+  return beat > first ? beat : null;
+}
+
+/**
+ * `item` starting at its first payment (startsAtFirstPayment), the phase
+ * kept (its anchor stays where it was): the same object when it does
+ * already. The form `deriveRecurrence` gives a clip trimmed to it.
+ */
+function startingAtFirstPayment<T extends FinancialItem>(doc: FinancialDocument, item: T): T {
+  if (!startsAtFirstPayment(item)) return item;
+  const rule = item.recurrence;
+  const start = Math.max(0, beatOf(doc, rule.startDate));
+  const end = rule.endDate !== undefined ? beatOf(doc, rule.endDate) + 1 : openEndBeat(doc);
+  const first = firstPaymentBeat(doc, item, start, end);
+  if (first === null) return item;
+  const startDate = dateOf(doc, first);
+  const anchor = rule.anchorDate ?? rule.startDate;
+  const recurrence: FinancialRecurrence = { ...rule, startDate };
+  if (anchor !== startDate) recurrence.anchorDate = anchor;
+  else delete recurrence.anchorDate;
+  return { ...item, recurrence };
 }
 
 export function itemClipGeometry(
@@ -204,7 +287,10 @@ export function itemClipGeometry(
   const startBeat = beatOf(doc, rule.startDate);
   const endExclusive =
     rule.endDate !== undefined ? beatOf(doc, rule.endDate) + 1 : openEndBeat(doc);
-  const start = Math.max(0, startBeat);
+  // Where it starts having effect: today at the earliest, a recurring
+  // income / expense / purchase at its first payment.
+  const from = Math.max(0, startBeat);
+  const start = firstPaymentBeat(doc, item, from, endExclusive) ?? from;
   const end = Math.max(start + 1, endExclusive);
   return { start, duration: end - start, contentOffset: start - anchorBeat };
 }
@@ -498,7 +584,14 @@ export function createFinancialPlaylistState(
     clips,
     // "Today" is drawn by the calendar axis (a pill on the ruler).
     markers: [],
-    viewport: { ...base.viewport, scrollX: 0, scrollY: 0, pxPerBeat: FINANCE_DEFAULT_PX_PER_DAY },
+    // It opens on today; the remembered past is to the left of it.
+    viewport: {
+      ...base.viewport,
+      scrollX: 0,
+      scrollY: 0,
+      pxPerBeat: FINANCE_DEFAULT_PX_PER_DAY,
+      ...(pastStartBeat(doc) < 0 ? { minBeat: pastStartBeat(doc) } : {}),
+    },
     snap: { mode: "beat", lastActiveMode: "beat" },
     selection: { clipIds: [], automationPointIds: [] },
     playPosition: { time: 0, isRunning: false },

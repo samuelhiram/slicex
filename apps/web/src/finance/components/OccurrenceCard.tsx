@@ -25,6 +25,7 @@
 //   click outside close; ‹ › (Alt+← / Alt+→) walk to the previous / next
 //   payment without closing.
 import * as React from "react";
+import { MoneySchema } from "@slicex/contracts";
 import {
   editItemOccurrence,
   ruleSegmentAt,
@@ -139,13 +140,14 @@ function OccurrenceCardBody({
   const [parts, setParts] = React.useState<{ unit: FrequencyUnit; every: number }>(initialParts);
 
   const parsed = parseNumberInput(amountText);
-  // parseNumberInput gives NaN for text that is not a number ("abc").
+  // parseNumberInput gives NaN for text that is not a number ("abc"). Past
+  // the money cap, the shared schema's own words ("El máximo es …").
   const amountError =
     amountText.trim() === ""
       ? "Escribe un monto"
       : parsed === null || !Number.isFinite(parsed) || parsed < 0
         ? "Escribe un monto válido"
-        : null;
+        : (MoneySchema.safeParse(parsed).error?.issues[0]?.message ?? null);
   const cadenceChanged = parts.unit !== initialParts.unit || parts.every !== initialParts.every;
   // One payment has no cadence: changing it means "from here on".
   const effectiveScope: OccurrenceScope = info.once || cadenceChanged ? "following" : scope;

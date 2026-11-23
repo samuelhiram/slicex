@@ -56,7 +56,11 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
 - **`FinancialBridge`** (`apps/web/src/finance/financial-bridge.ts`): `item.id === clip.id`. La
   geometría del clip es la verdad de las fechas (estirar borde derecho = `endDate`, recortar el
   izquierdo no mueve los días de pago, slice parte la recurrencia); lo no temporal (montos,
-  tarjetas) vive en el documento. **Candado de fechas por objeto** (2026-11-18): un botón
+  tarjetas) vive en el documento. **Un ingreso, gasto o compra recurrente empieza en su primer
+  pago** (2026-11-23, `startsAtFirstPayment` en `mapping.ts`): antes no tiene efecto, así que su
+  barra no lo dibuja, `canonicalItem` guarda ese inicio (la fase queda en `anchorDate`) y un
+  recorte o arrastre que lo deje antes regresa a él al soltar (`sweepInvariants`). Las deudas sí
+  empiezan en su inicio: su saldo ya existe y su línea lo muestra. **Candado de fechas por objeto** (2026-11-18): un botón
   metido en la **esquina inferior izquierda** de la tarjeta (pestaña sólida al ras de los
   bordes, con el radio de la tarjeta en su esquina), antes de la
   etiqueta de fechas (cosa aparte), pegajoso como el texto (en una tarjeta baja, por carriles apilados, la fila va AL
@@ -210,6 +214,20 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     (`persistence.ts`). Al volver otro día, `rollForward` lo pone al día suponiendo que todo pasó
     como se planeó; `RecDialog` corrige ("no pasó", "otro monto", saldo real). Pegar un estado de
     cuenta sobre una tarjeta (`statement.ts`) actualiza su saldo o agrega compras futuras.
+  - *Memoria de saldo (2026-11-23):* el plan no olvida su pasado. `FinancialDocument.history`
+    (`@slicex/core/finance/history.ts`) guarda con cuánta caja abrió cada día pasado: `rollForward`
+    anota el día que deja atrás (el saldo que la persona fijó, p. ej. "17 nov: $1,000") y cada día
+    que la bitácora cambió; Rec corregido la corrige (`bridge.setHistory`, no es paso del
+    deshacer). Un plan guardado antes la recupera hacia atrás desde la bitácora y los movimientos
+    (`rebuildHistory`, aproximada: un saldo tecleado sin Rec no dejó rastro). El timeline va hacia
+    atrás hasta el primer día recordado (`viewport.minBeat` < 0 del canvas, `core.setMinBeat`):
+    solo lectura (ningún clip empieza antes del día 0), la franja de caja dibuja el pasado
+    (`PlaylistOverviewData.startBeat`; la deuda no tiene memoria: `PlaylistStepSeries.from`) y el
+    encabezado lee el día pasado ("Tenías $1,000 · Hasta hoy +$9,800"). Solo guarda caja, no
+    deudas; un movimiento registrado con fecha pasada no reescribe la memoria. Para probarla:
+    abrir la app con `?reset=memoria` (`finance/test-plans.ts` → `createRememberedPlanDocument`:
+    saldo fijado hace 22 días, 45 días de memoria); `?reset` solo sigue abriendo el año de
+    ejemplo. Ambos reemplazan el plan guardado.
   - *Tu año en 60 segundos:* primera visita = ejemplo + banner; el onboarding arma el año del
     usuario con tres preguntas. La persistencia en servidor (`@slicex/db`) sigue dormida.
   - *Lo que pasó (registro de movimientos reales, 2026-11-18):* **plan ≠ realidad**. El plan
@@ -248,8 +266,8 @@ SliceX es un monorepo con `pnpm` + workspaces + `turbo` para una app web (SPA Vi
     detrás (inerte) de los formularios que abre. **"Registrar" vive en el panel** (su acción
     primaria); con el panel oculto, el header muestra "Registrar gasto · este mes $X"
     (`RecordMonthButton`). El "/" registra lo que ya pasó ("gasté 500 en tacos ayer")
-    en el mismo registro. Pendiente: dibujar el pasado en el canvas (hoy el scroll X se topa en
-    el día 0).
+    en el mismo registro. El pasado del canvas es la memoria de saldo (abajo, en Rec y
+    persistencia): la caja de cada día; los pagos pasados no se dibujan en sus filas.
 - **Lenguaje visual (2026-11-07):** UI calmada y de alto contraste, tema **claro y oscuro**
   (toggle en el header; primera visita sigue al sistema; elección en `localStorage`
   `slicex.theme`, `apps/web/src/theme.ts`). Tokens CSS en `globals.css`

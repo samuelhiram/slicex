@@ -9,6 +9,7 @@
 // - Everything non-temporal (amounts, kind, card params) lives in the
 //   FinancialDocument held by the bridge. item.id === clip.id.
 import type {
+  CashHistoryEntry,
   FinancialDocument,
   FinancialItem,
   FinancialItemKind,
@@ -135,6 +136,12 @@ export interface FinancialBridgeApi {
    * reality booked since). Its undo is booking the opposite effect.
    */
   applyReality(effect: MovementEffect): void;
+  /**
+   * Replaces the plan's memory of its past (FinancialDocument.history; Rec
+   * corrected a day that already happened) and how far back the timeline
+   * goes. NOT a plan undo step: the past is what happened.
+   */
+  setHistory(history: CashHistoryEntry[] | undefined): void;
 
   /** beat → ISO date (floors to the day). */
   dateAtBeat(beat: number): ISODate;
@@ -142,6 +149,12 @@ export interface FinancialBridgeApi {
   beatAtDate(date: ISODate): number;
 
   snapshotAt(date: ISODate): FinancialSnapshot;
+  /**
+   * The cash at the END of a past day, as the plan remembers it (the next
+   * day's opening; the day before today: today's cash). null for today or a
+   * later day (snapshotAt), or a day before the memory starts.
+   */
+  pastCashAt(date: ISODate): number | null;
   nextPaymentAfter(date: ISODate): UpcomingPayment | null;
   /** Episodes below `minimumCashReserve` in the current projection. */
   getWarnings(): LiquidityWarning[];

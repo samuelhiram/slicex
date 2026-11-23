@@ -91,16 +91,18 @@ export function createCalendarTimeAxis(startDate: ISODate): PlaylistTimeAxis {
   const origin = toDayNumber(startDate);
 
   return {
+    // The range comes already bounded by the view (beat 0, or the first
+    // remembered day of the plan's past: negative beats).
     ticks(fromBeat, toBeat, pxPerBeat): PlaylistTimeAxisTick[] {
-      const first = Math.max(0, Math.floor(fromBeat));
+      const first = Math.floor(fromBeat);
       const last = Math.ceil(toBeat);
       const ticks = buildTicks(first, last, pxPerBeat);
-      if (first === 0 && last >= 0) markToday(ticks);
+      if (first <= 0 && last >= 0) markToday(ticks);
       return ticks;
     },
 
     bands(fromBeat, toBeat, pxPerBeat): PlaylistTimeAxisBand[] {
-      const first = Math.max(0, Math.floor(fromBeat));
+      const first = Math.floor(fromBeat);
       const last = Math.ceil(toBeat);
       const bands: PlaylistTimeAxisBand[] = [];
       if (last < first) return bands;
@@ -184,16 +186,20 @@ export function createCalendarTimeAxis(startDate: ISODate): PlaylistTimeAxis {
   // Today (beat 0) as an emphasised, centred label: its own day label when
   // every day is labelled, "Hoy" otherwise. Centred so the canvas keeps it
   // while any part of today's cell is on screen.
+  // Today's tick (beat 0) becomes the "Hoy" pill: the tick already there,
+  // or one inserted in order (remembered days may come before it).
   function markToday(ticks: PlaylistTimeAxisTick[]): void {
-    const head = ticks[0];
-    if (head && head.beat === 0) {
-      if (!head.centered) head.label = "Hoy";
-      head.centered = true;
-      head.emphasis = true;
-      head.dim = false;
+    let at = 0;
+    while (at < ticks.length && ticks[at]!.beat < 0) at += 1;
+    const tick = ticks[at];
+    if (tick && tick.beat === 0) {
+      if (!tick.centered) tick.label = "Hoy";
+      tick.centered = true;
+      tick.emphasis = true;
+      tick.dim = false;
       return;
     }
-    ticks.unshift({
+    ticks.splice(at, 0, {
       beat: 0,
       major: false,
       label: "Hoy",

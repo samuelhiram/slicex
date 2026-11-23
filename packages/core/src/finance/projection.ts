@@ -7,7 +7,7 @@ import {
   isSortedByDateAndType,
 } from "./events";
 import { isFutureInstallmentPlan, remainingInstallmentDebt } from "./items";
-import { positiveMoney, roundMoney } from "./money";
+import { boundedMoney, positiveMoney, roundMoney } from "./money";
 import { countRecurrence, sanitizeDayOfMonth } from "./recurrence";
 import { DayCursor } from "./schedule";
 import type {
@@ -172,7 +172,8 @@ interface TimelineInput {
 function projectSortedTimeline(input: TimelineInput, events: readonly FinancialEvent[]): FinancialProjection {
   const { startDate, endDate } = input;
   const startDay = toDayNumber(startDate);
-  const initialCash = roundMoney(input.initialCash);
+  // Every amount comes in within ±MAX_MONEY (positiveMoney / boundedMoney).
+  const initialCash = boundedMoney(input.initialCash);
 
   const accounts = new Map<string, AccountState>();
   const outAccounts: ProjectionAccount[] = [];

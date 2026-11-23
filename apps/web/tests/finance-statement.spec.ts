@@ -200,6 +200,14 @@ describe("parseStatement — what is ignored", () => {
     ]);
   });
 
+  it("amounts past the money cap ($1,000,000,000)", () => {
+    const text = ["15/11/2026 OXXO 123.45", "16/11/2026 TYPO 99,999,999,999.00", "17/11/2026 TOPE 1,000,000,000.00"].join("\n");
+    expect(parseStatement(text, ctx).map((row) => [row.description, row.amount])).toEqual([
+      ["OXXO", 123.45],
+      ["TOPE", 1_000_000_000],
+    ]);
+  });
+
   it("never throws", () => {
     const junk = [
       "",

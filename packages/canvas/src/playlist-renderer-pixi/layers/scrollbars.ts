@@ -15,6 +15,7 @@ import type { Graphics } from "pixi.js";
 import {
   SCROLLBAR_EDGE_MIN_THUMB,
   getHorizontalContentExtent,
+  getMinTime,
   sortedUpperBound,
   type PlaylistOverviewData,
   type PlaylistPresentation,
@@ -90,13 +91,17 @@ export function createNavigatorLayer(graphics: Graphics): NavigatorLayer {
         .lineTo(track.x + track.width, track.y + 0.5)
         .stroke({ color: COLORS.rowLine, width: 1 });
 
-      // Miniature of the overview curve across the whole extent.
+      // Miniature of the overview curve across the whole extent, which
+      // starts at the earliest beat the view reaches (a past: < 0); the
+      // curve itself from its own start (data.startBeat).
       const series = data?.primary;
       if (!series || extent <= 0) return;
       const px = state.viewport.pxPerBeat;
+      const originBeat = getMinTime(state);
       const beatsTotal = extent / px;
-      const endBeat = Math.min(beatsTotal, data.endBeat ?? beatsTotal);
-      const xOf = (beat: number): number => track.x + (beat / beatsTotal) * track.width;
+      const endBeat = Math.min(originBeat + beatsTotal, data.endBeat ?? originBeat + beatsTotal);
+      const startBeat = Math.max(originBeat, data.startBeat ?? originBeat);
+      const xOf = (beat: number): number => track.x + ((beat - originBeat) / beatsTotal) * track.width;
       let min = series.initial;
       let max = series.initial;
       const values = series.values;
@@ -116,8 +121,12 @@ export function createNavigatorLayer(graphics: Graphics): NavigatorLayer {
       // Sample at most ~2 points per track pixel: never the whole series.
       const step = Math.max(1, Math.floor(last / Math.max(1, track.width * 2)));
       let y = yOf(series.initial);
-      graphics.moveTo(xOf(0), y);
+      graphics.moveTo(xOf(startBeat), y);
       for (let i = 0; i < last; i += step) {
+        if (beats[i]! <= startBeat) {
+          y = yOf(values[i]!);
+          continue;
+        }
         const x = xOf(beats[i]!);
         graphics.lineTo(x, y);
         y = yOf(values[i]!);
@@ -169,7 +178,7 @@ export function drawScrollbars(
   const extent = getHorizontalContentExtent(state, presentation.metrics);
   if (extent > 0 && h.width > 0) {
     const playX =
-      h.x + ((state.playPosition.time * state.viewport.pxPerBeat) / extent) * h.width;
+      h.x + (((state.playPosition.time - getMinTime(state)) * state.viewport.pxPerBeat) / extent) * h.width;
     if (playX >= h.x && playX <= h.x + h.width) {
       graphics
         .rect(Math.round(playX), h.y + 2, 1.5, Math.max(0, h.height - 4))

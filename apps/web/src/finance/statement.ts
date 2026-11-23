@@ -16,12 +16,12 @@
 // Tipo "abono", or a description with ABONO / PAGO / DEVOLUCIÓN / … (not
 // "MERCADO PAGO", a merchant).
 // Skipped: lines without a date or an amount, header rows, totals rows
-// (SALDO / TOTAL / PAGO MÍNIMO / …), zero amounts.
+// (SALDO / TOTAL / PAGO MÍNIMO / …), zero amounts, amounts past MAX_MONEY.
 // Dates without a year take the most recent one ≤ today; 2-digit years are 20xx.
 // Judgement calls: with two trailing amounts and no header ("… 123.45
 // 5,000.00"), the first is the movement and the second a running balance;
 // pure-digit fields of ≥ 5 digits are references, never amounts.
-import { daysInMonth, isISODate, type ISODate } from "@slicex/core";
+import { daysInMonth, isISODate, MAX_MONEY, type ISODate } from "@slicex/core";
 
 export interface StatementRow {
   date: ISODate;
@@ -580,7 +580,9 @@ export function parseStatement(text: string, ctx: { today: ISODate }): Statement
         }
       }
       row ??= parsePlain(line, today);
-      if (row !== null && !isTotalsDescription(row.description)) rows.push({ ...row, raw });
+      if (row !== null && !isTotalsDescription(row.description) && Math.abs(row.amount) <= MAX_MONEY) {
+        rows.push({ ...row, raw });
+      }
     }
     return rows;
   } catch {

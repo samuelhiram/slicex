@@ -127,6 +127,13 @@ export interface PlaylistViewport {
   pxPerBeat: number;
   width: number;
   height: number;
+  /**
+   * The earliest beat the view reaches (≤ 0; absent = 0): a host with a
+   * past to show (e.g. a plan's remembered balances) lets the scroll and the
+   * playhead go back to it. The past is read-only — clips never start
+   * before beat 0 (normalizeState) — and set with `PlaylistCore.setMinBeat`.
+   */
+  minBeat?: number;
 }
 
 export interface PlaylistPlayPosition {
@@ -523,6 +530,11 @@ export interface PlaylistStepSeries {
   initial: number;
   beats: readonly number[];
   values: readonly number[];
+  /**
+   * The series starts here: nothing drawn before it (e.g. a curve with no
+   * past where another has one). Absent: from the data's start.
+   */
+  from?: number;
 }
 
 export interface PlaylistOverviewThreshold {
@@ -562,6 +574,11 @@ export interface PlaylistOverviewData {
   scale?: { kind: "linear" } | { kind: "symlog"; constant: number };
   /** Data ends here (e.g. a projection horizon): no curve past it. */
   endBeat?: number;
+  /**
+   * Data starts here (e.g. the first remembered day, < 0; absent = 0): no
+   * curve before it. A series' `initial` is its value from here on.
+   */
+  startBeat?: number;
   /**
    * Faint labelled guide lines on the primary scale (e.g. round amounts),
    * drawn with the frame — once per data reference, never per frame. A
@@ -609,15 +626,19 @@ export type PlaylistClipAccent = "solid" | "dashed" | "dotted";
 /**
  * Text written in the cells of a clip — e.g. each payment's amount. Cell i
  * starts at `beats[i]` (ascending) and runs to the next one (or the clip's
- * end). The renderer writes `labels[i]` at the top of the cell, right of its
- * start, only where it fits (and sticks it to the visible left edge while the
- * cell's start is scrolled out); `strong[i]` emphasises it (e.g. a payment
- * that differs from its rule): bold, in the clip's colour, the cell outlined
- * with dashes.
+ * end). The renderer writes `labels[i]` in the cell, right of its start (and
+ * sticks it to the visible left edge while the cell's start is scrolled
+ * out). ONE format for the whole clip: `labels` when the longest fits the
+ * narrowest cell, else `shortLabels` (e.g. "+$11k") when those fit, else
+ * none — never some cells written and their neighbours not. `strong[i]`
+ * emphasises it (e.g. a payment that differs from its rule): bold, in the
+ * clip's colour, the cell outlined with dashes.
  */
 export interface PlaylistClipCells {
   beats: readonly number[];
   labels: readonly string[];
+  /** Shorter forms of `labels`, same indices (optional: without them, whole or none). */
+  shortLabels?: readonly string[];
   strong?: readonly boolean[];
 }
 

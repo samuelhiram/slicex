@@ -7,6 +7,7 @@ import {
   clamp,
   formatBarBeat,
   getContentEndBeat,
+  getMinTime,
   getRealTracksScrollLimit,
   getTrackIdByIndex,
   getTrackIndexById,
@@ -639,12 +640,24 @@ export class PlaylistCore {
 
   /** Beat cell under the pointer (hover-time indicator); null hides it. */
   setHoverTime(time: number | null): void {
-    const cell = time === null || !Number.isFinite(time) ? null : Math.max(0, Math.floor(time));
+    const cell =
+      time === null || !Number.isFinite(time)
+        ? null
+        : Math.max(getMinTime(this.history.present), Math.floor(time));
     this.dispatch({ type: "SET_HOVER_TIME", time: cell });
   }
 
   setPlayPosition(time: number): void {
     this.dispatch({ type: "SET_PLAY_POSITION", time });
+  }
+
+  /**
+   * How far back the view reaches: `beat` ≤ 0 (0 = nothing before beat 0,
+   * the default). The scroll and the playhead may go back to it; clips never
+   * start before beat 0. Not an undo step; no notify when unchanged.
+   */
+  setMinBeat(beat: number): void {
+    this.dispatch({ type: "SET_MIN_BEAT", beat });
   }
 
   setPlayPositionRunning(isRunning: boolean): void {

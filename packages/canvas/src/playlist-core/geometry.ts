@@ -212,10 +212,13 @@ export function getHorizontalContentExtent(
     0,
     state.viewport.width - metrics.trackHeaderWidth,
   );
-  return Math.max(
-    contentEndPx + viewportWidth,
-    state.viewport.scrollX + viewportWidth,
-    viewportWidth,
+  // From the earliest beat the view reaches (a past: minBeat < 0).
+  return (
+    Math.max(
+      contentEndPx + viewportWidth,
+      state.viewport.scrollX + viewportWidth,
+      viewportWidth,
+    ) - getMinScrollX(state)
   );
 }
 
@@ -324,7 +327,7 @@ export function getHorizontalScrollbarThumbRect(
   );
   const travel = Math.max(1, track.width - width);
   const scrollable = Math.max(1, extent - viewportWidth);
-  const positionRatio = clamp(state.viewport.scrollX / scrollable, 0, 1);
+  const positionRatio = clamp((state.viewport.scrollX - getMinScrollX(state)) / scrollable, 0, 1);
 
   return {
     x: track.x + positionRatio * travel,
@@ -434,6 +437,17 @@ export function getTrackByIndex(
 ): PlaylistTrack {
   const index = Math.max(0, Math.floor(trackIndex));
   return state.tracks[index] ?? createVirtualTrack(index);
+}
+
+/** The earliest beat the view reaches (viewport.minBeat, never above 0). */
+export function getMinTime(state: PlaylistState): number {
+  const min = state.viewport.minBeat;
+  return min !== undefined && min < 0 ? min : 0;
+}
+
+/** The smallest scrollX: the earliest beat at the timeline's left edge (≤ 0). */
+export function getMinScrollX(state: PlaylistState): number {
+  return getMinTime(state) * state.viewport.pxPerBeat;
 }
 
 export function timeToScreenX(
@@ -634,11 +648,14 @@ export function snapTime(
   metrics: PlaylistMetrics = DEFAULT_PLAYLIST_METRICS,
   timeAxis: PlaylistTimeAxis | null = null,
 ): number {
+  // Never before the earliest beat the view reaches (0, or a host's past:
+  // the playhead may go there; clips are kept at 0 or later on their own).
+  const floor = getMinTime(state);
   if (ignoreSnap) {
-    return Math.max(0, value);
+    return Math.max(floor, value);
   }
   if (state.snap.mode === "none") {
-    return Math.max(0, value);
+    return Math.max(floor, value);
   }
   if (state.snap.mode === "events") {
     return snapTimeToEvents(value, state);
@@ -646,17 +663,17 @@ export function snapTime(
   if (state.snap.mode === "axis") {
     const target = snapTimeToAxis(value, timeAxis);
     if (target !== null) {
-      return Math.max(0, Number(target.toFixed(4)));
+      return Math.max(floor, Number(target.toFixed(4)));
     }
     const snappedBeat = Math.round(value);
-    return Math.max(0, snappedBeat);
+    return Math.max(floor, snappedBeat);
   }
   const step = snapStepBeats(state.snap.mode, metrics);
   if (step <= 0) {
-    return Math.max(0, value);
+    return Math.max(floor, value);
   }
   const snapped = Math.round(value / step) * step;
-  return Math.max(0, Number(snapped.toFixed(4)));
+  return Math.max(floor, Number(snapped.toFixed(4)));
 }
 
 // One-entry cache per axis: consecutive pointermoves of a drag ask for the

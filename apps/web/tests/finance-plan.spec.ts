@@ -6,9 +6,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   addDays,
   createDemoFinancialDocument,
+  MAX_MONEY as CORE_MAX_MONEY,
   rollForward,
   type FinancialDocument,
 } from "@slicex/core";
+import { MAX_MONEY as CONTRACTS_MAX_MONEY } from "@slicex/contracts";
 import { createPlaylistCore } from "@slicex/canvas";
 import { FinancialBridge } from "../src/finance/financial-bridge";
 import { FINANCE_PLAYLIST_METRICS, createFinancialPlaylistState } from "../src/finance/mapping";
@@ -589,5 +591,34 @@ describe("storage is validated with the shared schema (@slicex/contracts)", () =
     const plan = savedPlan(createDemoFinancialDocument(SAVED_ON));
     const raw = { ...plan, branches: [{ ...plan.branches[0]!, doc: { ...plan.branches[0]!.doc, startDate: "ayer" } }] };
     expect(parsePlan(JSON.stringify(raw))).toBeNull();
+  });
+
+  it("the money cap is one number in the engine and in the schemas", () => {
+    expect(CORE_MAX_MONEY).toBe(CONTRACTS_MAX_MONEY);
+  });
+
+  it("amounts saved past the money cap load AS the cap: the item and the future stay", () => {
+    const plan = savedPlan(createDemoFinancialDocument(SAVED_ON));
+    const branch = plan.branches[0]!;
+    const streaming = {
+      id: "streaming",
+      kind: "expense",
+      name: "Streaming",
+      amount: 329,
+      recurrence: { frequency: "monthly", startDate: "2026-12-15" },
+      occurrenceEdits: [{ date: "2027-01-15", amount: 1e31 }],
+    };
+    const raw = {
+      ...plan,
+      branches: [{ ...branch, doc: { ...branch.doc, initialCash: -1e31, items: [...branch.doc.items, streaming] } }],
+      movements: [{ id: "m1", kind: "expense", amount: 5e15, date: SAVED_ON, concept: "Typo" }],
+    };
+    const parsed = parsePlan(JSON.stringify(raw))!;
+    const doc = parsed.branches[0]!.doc;
+    expect(doc.initialCash).toBe(-CORE_MAX_MONEY);
+    const kept = doc.items.find((item) => item.id === "streaming")!;
+    expect(kept.occurrenceEdits).toEqual([{ date: "2027-01-15", amount: CORE_MAX_MONEY }]);
+    expect(kept.kind === "expense" && kept.amount).toBe(329);
+    expect(parsed.movements?.map((movement) => movement.amount)).toEqual([CORE_MAX_MONEY]);
   });
 });

@@ -8,6 +8,7 @@
 // input document.
 import { addDays, addMonths, isISODate, parseISODate, toDayNumber } from "./dates";
 import { getProjectionRange } from "./events";
+import { extendHistory } from "./history";
 import { installmentsPaidOf, remainingInstallmentCount } from "./items";
 import { roundMoney } from "./money";
 import { projectFinancialDocument } from "./projection";
@@ -262,7 +263,8 @@ function addTo(map: Map<string, number>, key: string, value: number): void {
  *   card), plus one "adjustment" entry when `cashOverride` differs from the
  *   computed cash.
  * - `doc`: startDate = newStartDate; initialCash = projected cash at the end
- *   of the day before + Σ(actual − planned), or `cashOverride`; card and loan
+ *   of the day before + Σ(actual − planned), or `cashOverride`; `history`
+ *   extended through the day before newStart (`extendHistory`); card and loan
  *   balances / MSI counters carried over (see below); items whose schedule is
  *   over removed (their past lives in the ledger). Item order, ids, unknown
  *   fields and `horizonMonths` are preserved; every kept item is a shallow
@@ -513,7 +515,9 @@ export function rollForward(
   }
 
   return {
-    doc: { ...doc, startDate: newStartDate, initialCash, items },
+    // The days left behind go to the plan's memory (history.ts): the day it
+    // started on, then each one whose opening cash the ledger changed.
+    doc: { ...doc, startDate: newStartDate, initialCash, items, history: extendHistory(doc, ledger, newStartDate) },
     ledger,
     pending,
   };

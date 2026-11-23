@@ -23,6 +23,7 @@
 // field like any other: switching it keeps what was typed (UX-31).
 import * as React from "react";
 import { useForm } from "@mantine/form";
+import { MAX_MONEY, MAX_MONEY_MESSAGE } from "@slicex/contracts";
 import {
   addMonths,
   compareISODate,
@@ -692,6 +693,8 @@ function NewCardForm({
   if (dueDay === undefined) errors.due = "Elige el día de pago";
   if (mode === "fixed" && !(paymentValue !== null && Number.isFinite(paymentValue) && paymentValue > 0)) {
     errors.pay = "Escribe cuánto pagas al mes";
+  } else if (mode === "fixed" && paymentValue !== null && paymentValue > MAX_MONEY) {
+    errors.pay = MAX_MONEY_MESSAGE;
   }
   const show = (key: string) => (tried ? errors[key] : undefined);
 

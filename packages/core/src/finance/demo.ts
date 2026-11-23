@@ -3,8 +3,10 @@
 //   visit and with "Reiniciar con el ejemplo…".
 // - createDemoFinancialDocument: the engine's stable fixture (tests across
 //   the repo read its names and numbers) — change it only with them.
+// - createRememberedPlanDocument: a plan with a past to remember (the
+//   balance memory, FinancialDocument.history), opened days after it was set.
 import { addDays, addMonths } from "./dates";
-import type { FinancialDocument, ISODate } from "./types";
+import type { FinancialDocument, FinancialRecurrence, ISODate } from "./types";
 
 /**
  * "Mi año": a designer with a part-time studio salary (quincena), freelance
@@ -308,6 +310,46 @@ export function createDemoFinancialDocument(startDate: ISODate): FinancialDocume
         installmentsPaid: 3,
         recurrence: { frequency: "monthly", startDate },
       },
+    ],
+  };
+}
+
+/**
+ * "Plan con memoria": the balance was set 22 days before `today` ("tengo
+ * $15,000") and the plan saved that day, remembering what each of the six
+ * weeks before it opened with. Opened on `today` it rolls forward and
+ * remembers every day it leaves behind: the timeline reaches back 45 days.
+ * Salary every quincena, rent, groceries and petrol every week, streaming,
+ * a car repair 10 days ago (the past's low, under the 2 000 reserve) and an
+ * aguinaldo in 20 days. Today it opens with $10,421.
+ */
+export function createRememberedPlanDocument(today: ISODate): FinancialDocument {
+  const day = (offset: number): ISODate => addDays(today, offset);
+  const once = (date: ISODate): FinancialRecurrence => ({ frequency: "once", startDate: date, endDate: date });
+  const start = day(-22);
+  return {
+    id: "plan-memoria",
+    name: "Plan con memoria",
+    startDate: start,
+    initialCash: 15000,
+    minimumCashReserve: 2000,
+    horizonMonths: 12,
+    history: [
+      { date: day(-45), cash: 9800 },
+      { date: day(-40), cash: 8600 },
+      { date: day(-37), cash: 19600 },
+      { date: day(-33), cash: 13100 },
+      { date: day(-30), cash: 11900 },
+      { date: day(-26), cash: 10300 },
+    ],
+    items: [
+      { id: "m-sueldo", kind: "income", name: "Sueldo", icon: "briefcase", amount: 11000, recurrence: { frequency: "semimonthly", startDate: start } },
+      { id: "m-renta", kind: "expense", name: "Renta", icon: "house", amount: 6500, recurrence: { frequency: "monthly", startDate: day(-19) } },
+      { id: "m-super", kind: "expense", name: "Súper", icon: "shopping-cart", amount: 1200, recurrence: { frequency: "weekly", startDate: day(-20) } },
+      { id: "m-gasolina", kind: "expense", name: "Gasolina", icon: "fuel", amount: 550, recurrence: { frequency: "weekly", startDate: day(-18) } },
+      { id: "m-streaming", kind: "expense", name: "Streaming", icon: "tv", amount: 329, recurrence: { frequency: "monthly", startDate: day(-8) } },
+      { id: "m-coche", kind: "expense", name: "Reparación del coche", icon: "car", amount: 3500, recurrence: once(day(-10)) },
+      { id: "m-aguinaldo", kind: "income", name: "Aguinaldo", icon: "gift", amount: 16000, recurrence: once(day(20)) },
     ],
   };
 }

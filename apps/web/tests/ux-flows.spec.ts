@@ -298,6 +298,17 @@ describe("UX-45: the bar teaches its syntax and says why nothing happens", () =>
     expect(explainNoAmount("ayuda")).toContain("renta 8000 el 1");
     expect(explainNoAmount("renta")).toContain("Falta el monto");
   });
+
+  it("an amount past the money cap reads nothing, and says the limit", () => {
+    const ctx = { today: TODAY, doc: createDemoFinancialDocument(TODAY) };
+    for (const text of ["netflix 99999999999", "tengo 5000000000 en el banco", "renta 8000 99999999999", "luz 2000 millones"]) {
+      expect(interpretCommand(text, ctx), text).toBeNull();
+      expect(parseCommand(text, ctx), text).toBeNull();
+      expect(explainNoAmount(text), text).toBe("El monto máximo es $1,000,000,000.");
+    }
+    // The cap itself is still an amount.
+    expect(interpretCommand("tengo 1000000000", ctx)).toEqual({ type: "balance", amount: 1_000_000_000 });
+  });
 });
 
 describe("UX-33: '/' and the editor give the same first installment for the same MSI", () => {

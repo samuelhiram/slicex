@@ -15,6 +15,8 @@ import {
   getVerticalScrollableRange,
   getVerticalScrollbarRect,
   getVerticalScrollbarThumbRect,
+  getMinScrollX,
+  getMinTime,
   normalizeRect,
   rectsIntersect,
   screenXToTime,
@@ -1533,14 +1535,16 @@ export function createPlaylistInteractionController(
       let thumb = getHorizontalScrollbarThumbRect(state, metrics);
       const scrollableRange = getHorizontalScrollableRange(state, metrics);
       const px = state.viewport.pxPerBeat;
-      // The track maps the whole addressable extent (frozen for this press).
+      // The track maps the whole addressable extent, from the earliest beat
+      // the view reaches (frozen for this press).
+      const originBeat = getMinTime(state);
       const beatsPerPx =
         getHorizontalContentExtent(state, metrics) / px / Math.max(1, track.width);
       const width = timelineWidthOf(state);
       // Double-click on the thumb: see everything.
       if (hit.onThumb && clickCount === 2) {
         const end = Math.max(core.getContentEndTime(), width / px);
-        navigator.showRange(0, end * 1.02);
+        navigator.showRange(getMinTime(state), end * 1.02);
         event.preventDefault();
         return;
       }
@@ -1554,6 +1558,7 @@ export function createPlaylistInteractionController(
           edge: hit.edge,
           fixedBeat: hit.edge === "start" ? endBeat : startBeat,
           trackX: track.x,
+          originBeat,
           beatsPerPx,
         };
         host.setPointerCapture?.(event.pointerId);
@@ -1563,7 +1568,7 @@ export function createPlaylistInteractionController(
       }
       // Track outside the thumb: glide there (centred), no jump.
       if (!hit.onThumb) {
-        navigator.reveal((point.x - track.x) * beatsPerPx, { align: "center" });
+        navigator.reveal(originBeat + (point.x - track.x) * beatsPerPx, { align: "center" });
         event.preventDefault();
         return;
       }
@@ -1579,7 +1584,7 @@ export function createPlaylistInteractionController(
           0,
           1,
         );
-        startScrollX = Math.max(0, ratio * scrollableRange);
+        startScrollX = getMinScrollX(state) + Math.max(0, ratio * scrollableRange);
         core.updateViewport({ scrollX: startScrollX });
         thumb = getHorizontalScrollbarThumbRect(core.getState(), metrics);
         anchorPoint = { x: thumb.x + thumb.width / 2, y: point.y };
@@ -2172,7 +2177,7 @@ export function createPlaylistInteractionController(
       const width = timelineWidthOf(state);
       const minSpan = width / metrics.maxPxPerBeat;
       const maxSpan = width / metrics.minPxPerBeat;
-      const beat = Math.max(0, (point.x - gesture.trackX) * gesture.beatsPerPx);
+      const beat = gesture.originBeat + Math.max(0, (point.x - gesture.trackX) * gesture.beatsPerPx);
       let start: number;
       let end: number;
       if (gesture.edge === "end") {
@@ -2180,7 +2185,7 @@ export function createPlaylistInteractionController(
         end = Math.min(start + maxSpan, Math.max(start + minSpan, beat));
       } else {
         end = gesture.fixedBeat;
-        start = Math.max(0, Math.max(end - maxSpan, Math.min(end - minSpan, beat)));
+        start = Math.max(gesture.originBeat, Math.max(end - maxSpan, Math.min(end - minSpan, beat)));
       }
       const pxPerBeat = width / Math.max(minSpan, end - start);
       core.updateViewport({ pxPerBeat, scrollX: start * pxPerBeat });
@@ -2501,7 +2506,7 @@ export function createPlaylistInteractionController(
         ((point.x - gesture.startPoint.x) / gesture.travel) *
         gesture.scrollableRange;
       core.updateViewport({
-        scrollX: Math.max(0, gesture.startScrollX + delta),
+        scrollX: Math.max(getMinScrollX(core.getState()), gesture.startScrollX + delta),
       });
       event.preventDefault();
       return;
@@ -2896,7 +2901,7 @@ export function createPlaylistInteractionController(
     );
     core.updateViewport({
       pxPerBeat,
-      scrollX: Math.max(0, anchorTime * pxPerBeat - (screenX - metrics.trackHeaderWidth)),
+      scrollX: Math.max(getMinTime(state) * pxPerBeat, anchorTime * pxPerBeat - (screenX - metrics.trackHeaderWidth)),
     });
   };
 
@@ -2935,7 +2940,7 @@ export function createPlaylistInteractionController(
         sy = 0;
       }
       core.updateViewport({
-        scrollX: Math.max(0, state.viewport.scrollX + sx),
+        scrollX: Math.max(getMinScrollX(state), state.viewport.scrollX + sx),
         scrollY: Math.max(0, state.viewport.scrollY + sy),
       });
       followViewport();
@@ -3263,7 +3268,7 @@ export function createPlaylistInteractionController(
       }
       if (!event.shiftKey && event.key === "0") {
         const end = Math.max(core.getContentEndTime(), width / state.viewport.pxPerBeat);
-        navigator.showRange(0, end * 1.02);
+        navigator.showRange(getMinTime(state), end * 1.02);
         event.preventDefault();
         return;
       }

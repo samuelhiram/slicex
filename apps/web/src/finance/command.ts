@@ -52,6 +52,7 @@ import {
   daysInMonth,
   expandRecurrence,
   isISODate,
+  MAX_MONEY,
   monthlyInstallment,
   toDayNumber,
   type FinancialDocument,
@@ -65,6 +66,7 @@ import {
   formatDateLong,
   formatDateShort,
   formatMoney,
+  formatMoneyWhole,
   formatPercent,
   parseDateInput,
 } from "./format";
@@ -664,6 +666,22 @@ function readAmount(w: Words, i: number): AmountHit | null {
   return { value: roundCents(value), start: i, end };
 }
 
+/**
+ * The sentence says an amount past the money cap ("renta 99999999999"):
+ * nothing is read from it — neither a smaller amount next to it nor a name
+ * holding the number — and explainNoAmount says the limit.
+ */
+function hasAmountPastCap(text: string): boolean {
+  const w = new Words(tokenize(text));
+  for (let i = 0; i < w.length; i += 1) {
+    const hit = readAmount(w, i);
+    if (!hit) continue;
+    if (hit.value > MAX_MONEY) return true;
+    i = hit.end - 1;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Cards
 
@@ -807,7 +825,7 @@ function parseCommandUnsafe(text: string, ctx: CommandContext): ParsedCommand | 
   const today = ctx.today;
   const doc = ctx.doc;
   const w = new Words(tokenize(text));
-  if (w.length === 0) return null;
+  if (w.length === 0 || hasAmountPastCap(text)) return null;
   const cards = cardsOf(doc);
   const intent = detectKind(w, cards);
   const kind = intent.kind;
@@ -1492,7 +1510,7 @@ export function interpretCommand(text: string, ctx: CommandContext): CommandInte
     if (w.length === 0) return null;
     const cards = cardsOf(ctx.doc);
     const amounts = amountsOf(w);
-    if (amounts.length === 0) return null;
+    if (amounts.length === 0 || amounts.some((value) => value > MAX_MONEY)) return null;
     const amount = Math.max(...amounts);
 
     if (isBalanceSentence(w, cards)) return { type: "balance", amount };
@@ -1526,6 +1544,9 @@ export function explainNoAmount(text: string): string {
     .split(/[^a-z0-9?]+/)
     .filter(Boolean);
   const has = (...candidates: string[]) => candidates.some((word) => words.includes(word));
+  if (typeof text === "string" && hasAmountPastCap(text)) {
+    return `El monto máximo es ${formatMoneyWhole(MAX_MONEY)}.`;
+  }
   if (has("deshacer", "deshaz", "undo", "regresa", "revertir")) {
     return "Para deshacer usa Ctrl+Z. Aquí solo se agregan movimientos.";
   }

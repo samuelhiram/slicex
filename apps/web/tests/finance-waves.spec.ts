@@ -168,6 +168,8 @@ describe("amount by hand", () => {
     expect(niceAmount(9124)).toBe(9100);
     expect(niceAmount(12_340)).toBe(12_300);
     expect(niceAmount(0)).toBe(1);
+    // A long drag stops at the money cap.
+    expect(niceAmount(4e12)).toBe(1_000_000_000);
   });
 
   it("drag up raises the amount live; the whole drag is ONE undo entry", () => {

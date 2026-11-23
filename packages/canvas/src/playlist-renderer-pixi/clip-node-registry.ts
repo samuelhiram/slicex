@@ -272,6 +272,13 @@ interface ClipNode {
   cellsLeft: number;
   cellsRight: number;
   cellsMuted: boolean;
+  // What decides the card's ONE label format (cellFormatOf), measured once
+  // per cells reference: the narrowest cell (beats between two marks) and
+  // the longest whole / short label (characters).
+  cellStatsOf: PlaylistClipCells | null;
+  cellMinGap: number;
+  cellMaxChars: number;
+  cellMaxShortChars: number;
   // The cell under the pointer (-1: none) and its glow: its own Graphics,
   // created the first time a cell of this clip is hovered, just above the
   // body (under the outline and the labels).
@@ -1302,6 +1309,16 @@ const CELL_MIN_BAND = 12;
 const CELL_CHAR_RATIO = 0.6;
 const CELL_PAD_X = 4;
 const CELL_PAD_Y = 1;
+// A short labelled card (its lock rides in the label, 2026-11-23): its bar
+// holds nothing but the payments, so each amount sits in the MIDDLE of the
+// marks — written from the top, the 11 px label ran past the bar's bottom
+// edge. Pixi puts the baseline HALO/2 + 1.0 em under the Text's y (the
+// ascent of "|ÉqÅM" in Inter); the digits' middle is 0.36 em above it. The
+// bar shows its amounts from this height (8 px digits, 4 px around), at the
+// full 12 px from the compact row's 20 px bar up.
+const CELL_DIGIT_MIDDLE_EM = 0.64;
+const CELL_CENTRED_MIN_BAR = 16;
+const CELL_CENTRED_FULL_SIZE_BAR = 20;
 // A plain cell's label is quieter than an emphasised one.
 const CELL_TEXT_ALPHA = 0.78;
 // Halo of a cell label (the card's fill, 2 px out): wide enough to bridge
@@ -1380,6 +1397,56 @@ function dashBox(
 }
 
 /** Hides the cell labels from `from` on (the ones shown last frame). */
+const CELL_FORMAT_WHOLE = 0;
+const CELL_FORMAT_SHORT = 1;
+const CELL_FORMAT_NONE = 2;
+
+/**
+ * The ONE label format of a card's cells at `pxPerBeat`: whole when the
+ * longest label fits its narrowest cell (and the first cell, which loses
+ * the accent bar's room: `firstRoom`; an emphasised label's shift counted),
+ * else short (cells.shortLabels) when those fit, else none. The narrowest
+ * cell and the longest labels are measured once per cells reference (O(n)
+ * on a data change, O(1) a frame).
+ */
+function cellFormatOf(
+  node: ClipNode,
+  cells: PlaylistClipCells,
+  pxPerBeat: number,
+  charPx: number,
+  firstRoom: number,
+  emphasis: boolean,
+): number {
+  if (node.cellStatsOf !== cells) {
+    const { beats, labels, shortLabels } = cells;
+    const count = Math.min(beats.length, labels.length);
+    let minGap = Number.POSITIVE_INFINITY;
+    let maxChars = 0;
+    let maxShortChars = 0;
+    for (let i = 0; i < count; i += 1) {
+      if (i + 1 < count) {
+        const gap = beats[i + 1]! - beats[i]!;
+        if (gap > 0 && gap < minGap) minGap = gap;
+      }
+      const label = labels[i]!;
+      if (label.length > maxChars) maxChars = label.length;
+      const short = shortLabels?.[i] ?? label;
+      if (short.length > maxShortChars) maxShortChars = short.length;
+    }
+    node.cellStatsOf = cells;
+    node.cellMinGap = minGap;
+    node.cellMaxChars = maxChars;
+    node.cellMaxShortChars = maxShortChars;
+  }
+  // A single cell (no gap): its own room decides, cell by cell.
+  if (!Number.isFinite(node.cellMinGap)) return CELL_FORMAT_WHOLE;
+  const room =
+    Math.min(node.cellMinGap * pxPerBeat - 2 * CELL_PAD_X, firstRoom) - (emphasis ? CELL_BOX_TEXT_SHIFT : 0);
+  if (node.cellMaxChars * charPx <= room) return CELL_FORMAT_WHOLE;
+  if (cells.shortLabels !== undefined && node.cellMaxShortChars * charPx <= room) return CELL_FORMAT_SHORT;
+  return CELL_FORMAT_NONE;
+}
+
 function hideCells(node: ClipNode, from: number): void {
   for (let i = from; i < node.cellsUsed; i += 1) node.cellTexts[i]!.visible = false;
   node.cellsUsed = from;
@@ -2186,6 +2253,10 @@ export function createClipNodeRegistry(
       cellsLeft: Number.NaN,
       cellsRight: Number.NaN,
       cellsMuted: false,
+      cellStatsOf: null,
+      cellMinGap: Number.POSITIVE_INFINITY,
+      cellMaxChars: 0,
+      cellMaxShortChars: 0,
       cellsHover: -1,
       cellGlow: null,
       cellBoxes: null,
@@ -2203,8 +2274,9 @@ export function createClipNodeRegistry(
     };
   }
 
-  // Cell labels (content.cells): the amount of each payment written at the
-  // top of its cell, right of its mark. Only the cells inside the visible
+  // Cell labels (content.cells): the amount of each payment written right of
+  // its mark — at the top of its cell, or in the middle of a short labelled
+  // card's bar (CELL_DIGIT_MIDDLE_EM). Only the cells inside the visible
   // span are laid out (binary search to the first one), each only when its
   // label fits before the next mark; the label of a cell whose start is
   // scrolled out sticks to the visible left edge. Pooled Text, no
@@ -2302,7 +2374,11 @@ export function createClipNodeRegistry(
     } else {
       hideCellGlow(node);
     }
-    if (band < CELL_MIN_BAND) {
+    // A short labelled card: the amounts in the middle of the bar (its lock
+    // is in the label). A tall one: at the top, clear of the lock tab in the
+    // bar's bottom-left corner. A card without a label: under its title.
+    const centred = bodyTop > 0 && !isFolder(height);
+    if (centred ? bandHeight < CELL_CENTRED_MIN_BAR : band < CELL_MIN_BAND) {
       hideCells(node, 0);
       hideCellBoxes(node);
       return;
@@ -2315,9 +2391,29 @@ export function createClipNodeRegistry(
     } else {
       hideCellBoxes(node);
     }
-    const size = band >= CELL_TALL_BAND ? CELL_FONT_SIZE : CELL_FONT_SIZE_SMALL;
+    const size = (centred ? bandHeight >= CELL_CENTRED_FULL_SIZE_BAR : band >= CELL_TALL_BAND)
+      ? CELL_FONT_SIZE
+      : CELL_FONT_SIZE_SMALL;
     const charPx = size * CELL_CHAR_RATIO;
-    const y = bandTop + CELL_PAD_Y;
+    const y = centred
+      ? Math.round(bandTop + band / 2 - CELL_HALO_WIDTH / 2 - size * CELL_DIGIT_MIDDLE_EM)
+      : bandTop + CELL_PAD_Y;
+    // ONE format for the whole card (2026-11-23): each cell used to decide by
+    // its own room, so the 14- and 16-day cells of a quincena took turns
+    // showing their amount. Its narrowest cell decides for all of them:
+    // every amount whole, else every one short ("+$11k"), else none (the
+    // hover card still says it). Only a cell cut by an edge (the clip's end,
+    // the visible left edge) may still drop its own.
+    // The first cell's room: from right of the accent bar to the next mark.
+    const firstCellX = (beats[0]! - start) * pxPerBeat;
+    const firstNextX = count > 1 ? Math.min(width, (beats[1]! - start) * pxPerBeat) : width;
+    const firstRoom = firstNextX - CELL_PAD_X - (Math.max(firstCellX, contentLeft) + CELL_PAD_X);
+    const format = cellFormatOf(node, cells, pxPerBeat, charPx, firstRoom, strong !== undefined);
+    if (format === CELL_FORMAT_NONE) {
+      hideCells(node, 0);
+      return;
+    }
+    const shown = format === CELL_FORMAT_SHORT ? cells.shortLabels! : labels;
     const alpha = muted ? 0.45 : 1;
     const halo = node.cardFill;
     // The cell holding the visible left edge (or the first one).
@@ -2328,7 +2424,7 @@ export function createClipNodeRegistry(
       if (cellX >= localRight) break;
       const nextX = index + 1 < count ? Math.min(width, (beats[index + 1]! - start) * pxPerBeat) : width;
       if (nextX <= localLeft) continue;
-      const label = labels[index]!;
+      const label = shown[index] ?? labels[index]!;
       if (label.length === 0) continue;
       const emphasised = strong !== undefined && strong[index] === true;
       const textX =

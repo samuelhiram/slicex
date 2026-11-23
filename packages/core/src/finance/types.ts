@@ -272,6 +272,16 @@ export type FinancialItem =
   | CardPurchaseItem
   | InstallmentPlanItem;
 
+/**
+ * One remembered day: the cash the plan OPENED `date` with, as it was known
+ * that day (its "liquidez de hoy" — the balance the person typed, or what
+ * the plan carried in from the day before).
+ */
+export interface CashHistoryEntry {
+  date: ISODate;
+  cash: number;
+}
+
 export interface FinancialDocument {
   id: string;
   name: string;
@@ -282,6 +292,15 @@ export interface FinancialDocument {
   /** Projection length; range is [startDate, addMonths(startDate, horizonMonths)]. */
   horizonMonths: number;
   items: FinancialItem[];
+  /**
+   * The plan's memory of its past (2026-11-23): the cash it opened each past
+   * day with, ascending by date, every date before `startDate`. A day with
+   * no entry opened with the last entry before it; before the first entry
+   * nothing is remembered. Written by `rollForward` (the day it leaves
+   * behind, then each day its events changed the cash); the projection never
+   * reads it. Absent: no past.
+   */
+  history?: CashHistoryEntry[];
 }
 
 export type FinancialEventType =
