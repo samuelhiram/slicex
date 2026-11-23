@@ -148,6 +148,10 @@ export interface PlaylistInteractionOptions {
   // even when that end is off-screen (see getClipExtendHandle). The
   // predicate is the host's veto per clip. One gesture = one undo entry.
   clipExtend?: (clipId: string) => boolean;
+  // Px from a clip's top to its card's body, as the renderer drew it
+  // (renderer.getClipBodyTop): the grabber is grabbed where it is drawn,
+  // centred on the body under the label tab. Absent: the whole clip.
+  clipBodyTop?: (clipId: string) => number;
   // The least the grabber moves the end per px of drag, in beats. Zoomed out
   // the end follows the pointer 1:1; zoomed in (fewer beats per px) the
   // grabber never gets slower than this, so a far end stays within reach.
@@ -1117,6 +1121,7 @@ export function createPlaylistInteractionController(
   const hitOptions = {
     clipLevel: onClipLevelDrag !== undefined,
     clipExtend: options.clipExtend,
+    clipBodyTop: options.clipBodyTop,
     clipLevelGrip: levelGrip
       ? { height: coarsePointer ? 24 : CLIP_LEVEL_GRIP_FINE_PX }
       : undefined,

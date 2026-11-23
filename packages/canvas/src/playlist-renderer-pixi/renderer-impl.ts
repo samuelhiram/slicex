@@ -166,6 +166,10 @@ export interface PlaylistRenderer {
   // px, fills `out`), or null (none shown). O(1). Hand it to the
   // controller's clipTimeLock.rectOf so a click lands where it is drawn.
   getClipLockRect: (clipId: string, out: PlaylistRect) => PlaylistRect | null;
+  // Px from the top of `clipId` to its card's body (under the label tab) in
+  // the last frame, 0 for none. O(1). Hand it to the controller's
+  // clipBodyTop so the extend grabber is grabbed where it is drawn.
+  getClipBodyTop: (clipId: string) => number;
 }
 
 export function createPlaylistRenderer(
@@ -465,7 +469,13 @@ export function createPlaylistRenderer(
     drawTimelineOverlay(overlayGraphics, presentation);
     if (levelGrip) drawLevelGrips(presentation);
     if (clipExtend) {
-      const handle = getClipExtendHandle(presentation, clipExtend, extendHandle);
+      // Centred on the card's body, under its label tab.
+      const handle = getClipExtendHandle(
+        presentation,
+        clipExtend,
+        extendHandle,
+        clipNodeRegistry.bodyTopOf,
+      );
       if (handle) drawClipExtendHandle(overlayGraphics, handle);
     }
     // F3 overlays: ghost outline at the snapped destination + vertical
@@ -707,6 +717,9 @@ export function createPlaylistRenderer(
     },
     getClipLockRect(clipId, out) {
       return destroyed ? null : clipNodeRegistry.lockRectOf(clipId, out);
+    },
+    getClipBodyTop(clipId) {
+      return destroyed ? 0 : clipNodeRegistry.bodyTopOf(clipId);
     },
     refreshFonts() {
       if (destroyed) return;

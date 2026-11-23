@@ -340,6 +340,8 @@ function drawn(
     periodText: period && period.visible ? period.text : null,
     rect: views[0]!.rect,
     lock,
+    // Where the body starts under the tab (the extend grabber's centre).
+    bodyTop: registry.bodyTopOf("c0"),
     titleX: title ? node.x + title.x : Number.NaN,
     // A short card shows the title only: 11 px pad + "Préstamo" at 7.8 px.
     textEnd: views[0]!.rect.x + 11 + "Préstamo".length * 7.8,
@@ -395,6 +397,8 @@ describe("the label above the bar", () => {
       const d = drawn(5, 50, 0, true, row);
       expect(d.rect.height).toBe(card);
       const tabBottom = d.rect.y + tabHeightOf(card);
+      // What the extend grabber is centred under (bodyTopOf): the same tab.
+      expect(d.bodyTop).toBe(tabHeightOf(card));
       // The name and the amount within the tab's band.
       expect(d.titleY).toBeGreaterThanOrEqual(d.rect.y - 1);
       expect(d.titleY + 17).toBeLessThanOrEqual(tabBottom + 1);

@@ -1663,6 +1663,8 @@ export function PlaylistShell() {
         // Length by hand: the selected item's grabber, at the centre of the
         // screen, moves its end (goal-seek for debts that end at payoff).
         clipExtend: (clipId) => bridgeInstance.canExtend(clipId),
+        // Grabbed where it is drawn: centred on the card, under its label.
+        clipBodyTop: (clipId) => rendererRef.current?.getClipBodyTop(clipId) ?? 0,
         // Zoomed in it never gets slower than ~a day per 3 px (a month per 100 px).
         clipExtendMinBeatsPerPx: 1 / 3,
         // Valleys explain themselves under the pointer.

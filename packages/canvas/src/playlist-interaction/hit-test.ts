@@ -120,6 +120,9 @@ export interface PlaylistHitOptions {
   // The selected clip exposes the extend grabber; the predicate is the
   // host's veto per clip (see getClipExtendHandle).
   clipExtend?: (clipId: string) => boolean;
+  // Px from a clip's top to its card's body (the renderer draws a label tab
+  // above it): the extend grabber is centred on the body, where it is drawn.
+  clipBodyTop?: (clipId: string) => number;
   // false: the thin track chrome (the full-width resize divisor, the
   // mute / solo / lock buttons, the reorder grip) is not hit; the point
   // resolves to the row header / clip / background under it. The right
@@ -288,7 +291,12 @@ export function hitTestPlaylist(
   }
 
   if (options.clipExtend) {
-    const handle = getClipExtendHandle(presentation, options.clipExtend, extendScratch);
+    const handle = getClipExtendHandle(
+      presentation,
+      options.clipExtend,
+      extendScratch,
+      options.clipBodyTop,
+    );
     if (handle && pointInRect(point, handle.hitRect)) {
       const view = presentation.clipViewsById.get(handle.clipId);
       if (view) {

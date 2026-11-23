@@ -237,6 +237,9 @@ interface ClipNode {
   // The lock's size as last placed (its hit area: lockRectOf).
   lockW: number;
   lockH: number;
+  // Local y where the card's body starts under its label tab, as last
+  // placed (0 = no tab). Read by bodyTopOf.
+  bodyTop: number;
   // The dates next to the lock (providers.getClipPeriod); display string
   // cached per (source, width, height) — never rebuilt per frame.
   period: Text | null;
@@ -1439,6 +1442,10 @@ export interface ClipNodeRegistry {
   // (fills `out`), or null when it shows none (off-screen, too narrow, no
   // providers.timeLock). O(1). The controller's clipTimeLock.rectOf.
   lockRectOf(clipId: string, out: PlaylistRect): PlaylistRect | null;
+  // Px from the top of `clipId` to its card's body (under the label tab) in
+  // the last frame; 0 when it has no tab or is not shown. O(1). The
+  // extend grabber is centred on the body (getClipExtendHandle's bodyTopOf).
+  bodyTopOf(clipId: string): number;
   // Re-rasterises every node's labels with the fonts available now (a web
   // font that finished loading after the nodes were created). Once, never
   // per frame.
@@ -2157,6 +2164,7 @@ export function createClipNodeRegistry(
       lockKey: -1,
       lockW: 0,
       lockH: 0,
+      bodyTop: 0,
       period: null,
       periodSource: null,
       periodWidth: -1,
@@ -2452,6 +2460,8 @@ export function createClipNodeRegistry(
       node.container.visible = true;
       node.container.x = Math.round(view.rect.x);
       node.container.y = Math.round(view.rect.y);
+      const bodyTop = folderTop(view);
+      node.bodyTop = bodyTop;
       const detail = getClipDetail ? getClipDetail(view.clip.id) : null;
       // In the pill the amount sits beside the name: it needs no body room.
       const detailVisible = detailBesideTitle(view)
@@ -2496,7 +2506,7 @@ export function createClipNodeRegistry(
           bars,
           detailVisible,
           content,
-          folderTop(view),
+          bodyTop,
         );
         node.bars = bars;
         node.content = content;
@@ -2511,7 +2521,7 @@ export function createClipNodeRegistry(
           levelHandles,
           highlighted,
           contentExtentPx(view, content),
-          folderTop(view),
+          bodyTop,
         );
         node.highlighted = highlighted;
         node.hash = hash;
@@ -2558,7 +2568,7 @@ export function createClipNodeRegistry(
         node,
         view,
         content,
-        folderTop(view),
+        bodyTop,
         stickyLeft,
         visibleRight,
         hoverClipId !== null && view.clip.id === hoverClipId ? hoverTime : null,
@@ -2653,5 +2663,10 @@ export function createClipNodeRegistry(
     return out;
   }
 
-  return { syncFrame, refreshText, invalidate, destroy, lockRectOf };
+  function bodyTopOf(clipId: string): number {
+    const node = cache.get(clipId);
+    return node && node.container.visible ? node.bodyTop : 0;
+  }
+
+  return { syncFrame, refreshText, invalidate, destroy, lockRectOf, bodyTopOf };
 }

@@ -18,7 +18,7 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 - UI con tema **claro y oscuro** (tokens en `globals.css` ↔ paleta del canvas en `palette.ts`, se cambian juntos; ver [docs/project-canon.md](docs/project-canon.md) §2 "Lenguaje visual"). Lenguaje calmado y de alto contraste: nada de estética DAW.
 - La UI principal monta el playlist con el documento financiero demo ([PlaylistShell.tsx](apps/web/src/components/PlaylistShell.tsx) → `createDemoFinancialDocument(hoy)` → `createFinancialPlaylistState`) más [PlaylistInspector.tsx](apps/web/src/components/PlaylistInspector.tsx) y los paneles de [apps/web/src/finance/components/](apps/web/src/finance/components/).
 - Scaffolding de persistencia (`@slicex/contracts`, `@slicex/db`, ruta `/api/timelines/[timelineId]`, `editorStore.ts`, y el legado `calculateBalanceAt`/`TimelineDocument` de `@slicex/core`) sigue **dormido pero vivo**. **No proponer borrarlo sin confirmación explícita.**
-- Suite actual: **1680 tests unitarios en 115 archivos**, todos verdes (2026-11-22). Playwright tiene **1 spec** ([reload-stress.pw.ts](apps/web/tests/reload-stress.pw.ts)), no cero.
+- Suite actual: **1682 tests unitarios en 115 archivos**, todos verdes (2026-11-22). Playwright tiene **1 spec** ([reload-stress.pw.ts](apps/web/tests/reload-stress.pw.ts)), no cero.
 - `master` es la **única branch** del repo (local y remota) desde 2026-08-13.
 
 ## Stack
@@ -34,7 +34,7 @@ Target multi-plataforma: web → Android → iOS. Por eso la **separación motor
 | Validación | Zod en `@slicex/contracts` |
 | Formularios | Mantine Form 9.7.3 (solo estado/validación, sin componentes de Mantine) + esquemas Zod de `@slicex/contracts` (`finance.ts`); selectores con `Select` (`apps/web/src/ui/select.tsx`, Radix Select 2.4.1 con los tokens): nunca `<select>` ni pickers nativos; ver [docs/forms-audit.md](docs/forms-audit.md) §5 |
 | Observabilidad | `@sentry/cloudflare` (Worker) + `@sentry/react` (browser) + JSON `console` → Workers Logpush |
-| Tests | Vitest (1680 unit) + Playwright (1 spec: `apps/web/tests/*.pw.ts`) |
+| Tests | Vitest (1682 unit) + Playwright (1 spec: `apps/web/tests/*.pw.ts`) |
 | Deploy | `wrangler deploy` o Workers Builds (push a `master` → build+deploy) |
 
 ## Mapa rápido

@@ -1236,13 +1236,6 @@ export function createClipExtendHandle(): PlaylistClipExtendHandle {
   };
 }
 
-/**
- * The selected clip's extend grabber, or null when there is none: not
- * exactly one clip selected, a tool other than Select / Draw, an automation
- * or locked clip, too little of it on screen, or `canExtend` says no (the
- * host's veto, e.g. a one-time event whose width means nothing). O(1).
- * Fills and returns `out` when given (otherwise a new object).
- */
 /** Px from the visible left edge of a long clip to its level grip. */
 export const CLIP_LEVEL_GRIP_INSET = 40;
 
@@ -1264,10 +1257,21 @@ export function getClipLevelGripX(
   return left + Math.min(width / 2, CLIP_LEVEL_GRIP_INSET);
 }
 
+/**
+ * The selected clip's extend grabber, or null when there is none: not
+ * exactly one clip selected, a tool other than Select / Draw, an automation
+ * or locked clip, too little of it on screen, or `canExtend` says no (the
+ * host's veto, e.g. a one-time event whose width means nothing). O(1).
+ * Fills and returns `out` when given (otherwise a new object).
+ * `bodyTopOf`: px from the clip's top to where its card's body starts (the
+ * renderer's label tab sits above it); the grabber is centred on the body.
+ * Absent: on the whole clip.
+ */
 export function getClipExtendHandle(
   presentation: PlaylistPresentation,
   canExtend?: (clipId: string) => boolean,
   out: PlaylistClipExtendHandle = createClipExtendHandle(),
+  bodyTopOf?: (clipId: string) => number,
 ): PlaylistClipExtendHandle | null {
   const { state, metrics } = presentation;
   if (state.tool !== "select" && state.tool !== "draw") return null;
@@ -1284,9 +1288,10 @@ export function getClipExtendHandle(
   const viewTop = getTracksTop(metrics);
   const viewBottom = state.viewport.height - getHorizontalScrollbarHeight(metrics);
   const rect = view.rect;
+  const bodyTop = bodyTopOf ? Math.min(Math.max(0, bodyTopOf(clipId)), rect.height) : 0;
   const left = Math.max(rect.x, viewLeft);
   const right = Math.min(rect.x + rect.width, viewRight);
-  const top = Math.max(rect.y, viewTop);
+  const top = Math.max(rect.y + bodyTop, viewTop);
   const bottom = Math.min(rect.y + rect.height, viewBottom);
   if (bottom - top < 16) return null;
 

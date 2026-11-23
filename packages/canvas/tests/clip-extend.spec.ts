@@ -169,6 +169,25 @@ describe("getClipExtendHandle — where the grabber is", () => {
     expect(handleOf(locked)).toBeNull();
   });
 
+  it("is centred on the card's body under its label tab (bodyTopOf), not on the whole clip", () => {
+    const core = setup({ start: 2, duration: 500 });
+    const view = core.getPresentation().clipViewsById.get("c0")!;
+    const TAB = 26;
+    const out = createClipExtendHandle();
+    const handle = getClipExtendHandle(core.getPresentation(), undefined, out, () => TAB)!;
+    const bodyTop = view.rect.y + TAB;
+    const bodyBottom = view.rect.y + view.rect.height;
+    const pillMid = handle.pillRect.y + handle.pillRect.height / 2;
+    expect(Math.abs(pillMid - (bodyTop + bodyBottom) / 2)).toBeLessThanOrEqual(0.5);
+    // The grab area stays on the body: the tab above is the clip's.
+    expect(handle.hitRect.y).toBeGreaterThanOrEqual(bodyTop);
+    expect(handle.hitRect.y + handle.hitRect.height).toBeLessThanOrEqual(bodyBottom);
+    // Without a tab: centred on the whole clip, as before.
+    const whole = getClipExtendHandle(core.getPresentation(), undefined, createClipExtendHandle())!;
+    const wholeMid = whole.pillRect.y + whole.pillRect.height / 2;
+    expect(Math.abs(wholeMid - (view.rect.y + bodyBottom) / 2)).toBeLessThanOrEqual(0.5);
+  });
+
   it("fills a reusable `out` (no allocation per frame)", () => {
     const core = setup({ start: 2, duration: 500 });
     const out = createClipExtendHandle();
@@ -194,6 +213,18 @@ describe("hit-test", () => {
     expect(
       hitTestPlaylist(presentation, { x: CENTRE + 40, y }, M, { clipExtend: () => true }).kind,
     ).toBe("clip");
+  });
+
+  it("grabs it where it is drawn with clipBodyTop: on the body, not on the label tab", () => {
+    const core = setup({ start: 2, duration: 500 });
+    const presentation = core.getPresentation();
+    const view = presentation.clipViewsById.get("c0")!;
+    const TAB = 26;
+    const options = { clipExtend: () => true, clipBodyTop: () => TAB };
+    const bodyMid = view.rect.y + (TAB + view.rect.height) / 2;
+    expect(hitTestPlaylist(presentation, { x: CENTRE, y: bodyMid }, M, options).kind).toBe("clip-extend");
+    // On the tab, above the body: the clip itself.
+    expect(hitTestPlaylist(presentation, { x: CENTRE, y: view.rect.y + 6 }, M, options).kind).toBe("clip");
   });
 });
 
